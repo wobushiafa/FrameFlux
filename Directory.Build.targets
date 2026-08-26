@@ -1,0 +1,19 @@
+<Project>
+  <PropertyGroup Condition="'$(FrameFluxCopyNativeAssets)' == 'true'">
+    <FrameFluxNativeRuntimeIdentifier Condition="'$(FrameFluxNativeRuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</FrameFluxNativeRuntimeIdentifier>
+    <FrameFluxNativeAssetsDirectory>$(MSBuildThisFileDirectory)native\artifacts\runtimes\$(FrameFluxNativeRuntimeIdentifier)\native</FrameFluxNativeAssetsDirectory>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(FrameFluxCopyNativeAssets)' == 'true' and Exists('$(FrameFluxNativeAssetsDirectory)')">
+    <Content Include="$(FrameFluxNativeAssetsDirectory)\*"
+             Link="runtimes\$(FrameFluxNativeRuntimeIdentifier)\native\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="WarnWhenFrameFluxNativeAssetsAreMissing"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(FrameFluxCopyNativeAssets)' == 'true' and !Exists('$(FrameFluxNativeAssetsDirectory)')">
+    <Warning Text="FrameFlux native assets were not found for '$(FrameFluxNativeRuntimeIdentifier)' at '$(FrameFluxNativeAssetsDirectory)'." />
+  </Target>
+</Project>

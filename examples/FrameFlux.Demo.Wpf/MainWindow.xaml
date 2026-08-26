@@ -1,0 +1,64 @@
+<Window x:Class="FrameFlux.Demo.Wpf.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:frameFlux="clr-namespace:FrameFlux.Wpf;assembly=FrameFlux.Wpf"
+        Title="FrameFlux WPF Demo"
+        Width="960"
+        Height="600"
+        MinWidth="640"
+        MinHeight="420">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <DockPanel LastChildFill="True">
+            <Button x:Name="StopButton"
+                    Margin="8,0,0,0"
+                    Padding="16,6"
+                    Click="StopButton_Click"
+                    DockPanel.Dock="Right">
+                Stop
+            </Button>
+            <Button x:Name="StartButton"
+                    Padding="16,6"
+                    Click="StartButton_Click"
+                    DockPanel.Dock="Right">
+                Start
+            </Button>
+            <CheckBox x:Name="MuteCheckBox"
+                      Margin="12,0"
+                      VerticalAlignment="Center"
+                      Content="Mute"
+                      DockPanel.Dock="Right"
+                      IsChecked="{Binding IsMuted, ElementName=Player, Mode=TwoWay}" />
+            <Slider x:Name="VolumeSlider"
+                    Width="120"
+                    VerticalAlignment="Center"
+                    DockPanel.Dock="Right"
+                    Maximum="1"
+                    Minimum="0"
+                    Value="{Binding Volume, ElementName=Player, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <TextBlock Margin="12,0,6,0"
+                       VerticalAlignment="Center"
+                       DockPanel.Dock="Right"
+                       Text="Volume" />
+            <TextBox x:Name="SourceTextBox"
+                     VerticalContentAlignment="Center"
+                     Text="rtsp://username:password@camera-host:554/stream" />
+        </DockPanel>
+        <Border Grid.Row="1"
+                Margin="0,12"
+                Background="#111827">
+            <frameFlux:D3D11MediaView x:Name="Player"
+                                 AutoPlay="False"
+                                 PlaybackError="Player_PlaybackError"
+                                 PlaybackStateChanged="Player_PlaybackStateChanged"
+                                 Stretch="Uniform" />
+        </Border>
+        <TextBlock x:Name="StatusTextBlock"
+                   Grid.Row="2"
+                   Text="Enter an RTSP URL, then start playback." />
+    </Grid>
+</Window>

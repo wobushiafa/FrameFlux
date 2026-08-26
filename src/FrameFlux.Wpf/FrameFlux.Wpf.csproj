@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+    <PackageId>FrameFlux.Wpf</PackageId>
+    <Description>Reusable WPF media playback controls for FrameFlux.</Description>
+    <PackageTags>media;video;audio;playback;rtsp;streaming;wpf</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
+    <ProjectReference Include="..\FrameFlux.FFmpeg\FrameFlux.FFmpeg.csproj" />
+    <PackageReference Include="Vortice.Direct3D11" />
+  </ItemGroup>
+</Project>

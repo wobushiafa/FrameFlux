@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0-android</TargetFrameworks>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsTrimmable>true</IsTrimmable>
+    <IsPackable>true</IsPackable>
+    <PackageId>FrameFlux.Avalonia</PackageId>
+    <Description>Avalonia media playback controls for FrameFlux, including RTSP rendering and snapshots.</Description>
+    <PackageTags>media;video;playback;rtsp;streaming;avalonia;cross-platform</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
+    <ProjectReference Include="..\FrameFlux.FFmpeg\FrameFlux.FFmpeg.csproj" />
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Vortice.Direct3D11"
+                      Condition="'$(TargetFramework)' == 'net8.0'" />
+  </ItemGroup>
+
+</Project>

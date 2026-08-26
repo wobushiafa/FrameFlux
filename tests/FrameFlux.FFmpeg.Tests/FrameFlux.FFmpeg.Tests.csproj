@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\FrameFlux.FFmpeg\FrameFlux.FFmpeg.csproj" />
+    <ProjectReference Include="..\..\src\FrameFlux.Avalonia\FrameFlux.Avalonia.csproj" />
+  </ItemGroup>
+</Project>

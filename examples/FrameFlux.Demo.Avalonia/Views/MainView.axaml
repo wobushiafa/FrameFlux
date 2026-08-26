@@ -1,0 +1,77 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:frameFlux="using:FrameFlux.Avalonia"
+             x:Class="FrameFlux.Demo.Avalonia.Views.MainView"
+             Background="#111315">
+  <Grid Margin="16"
+        RowDefinitions="Auto,*,Auto,Auto"
+        RowSpacing="12">
+    <Grid ColumnDefinitions="*,Auto,Auto"
+          ColumnSpacing="8">
+      <TextBox x:Name="SourceTextBox"
+               PlaceholderText="RTSP address"
+               Text="rtsp://username:password@camera-host:554/stream"
+               AutomationProperties.Name="Stream address" />
+      <Button x:Name="StartButton"
+              Grid.Column="1"
+              Classes="primary"
+              Content="Play"
+              Click="StartButton_OnClick"
+              AutomationProperties.Name="Start playback" />
+      <Button x:Name="StopButton"
+              Grid.Column="2"
+              Content="Stop"
+              Click="StopButton_OnClick"
+              AutomationProperties.Name="Stop playback" />
+    </Grid>
+
+    <Border Grid.Row="1"
+            Background="#050607"
+            BorderBrush="#34383D"
+            BorderThickness="1"
+            CornerRadius="4"
+            ClipToBounds="True"
+            MinHeight="120">
+      <frameFlux:MediaView x:Name="Player"
+                           IsPlaybackEnabled="False"
+                           PlaybackError="Player_OnPlaybackError"
+                           PlaybackStateChanged="Player_OnPlaybackStateChanged"
+                           Stretch="Uniform" />
+    </Border>
+
+    <Grid Grid.Row="2"
+          ColumnDefinitions="Auto,*,Auto"
+          ColumnSpacing="12">
+      <TextBlock VerticalAlignment="Center"
+                 Text="Volume" />
+      <Slider Grid.Column="1"
+              MinWidth="120"
+              Minimum="0"
+              Maximum="1"
+              Value="{Binding Volume, ElementName=Player, Mode=TwoWay}"
+              AutomationProperties.Name="Playback volume" />
+      <CheckBox Grid.Column="2"
+                MinHeight="44"
+                VerticalContentAlignment="Center"
+                Content="Mute"
+                IsChecked="{Binding IsMuted, ElementName=Player, Mode=TwoWay}"
+                AutomationProperties.Name="Mute audio" />
+    </Grid>
+
+    <Grid Grid.Row="3"
+          ColumnDefinitions="Auto,*"
+          ColumnSpacing="10">
+      <Border x:Name="StateIndicator"
+              Width="8"
+              Height="8"
+              VerticalAlignment="Center"
+              Background="#6B7280"
+              CornerRadius="4" />
+      <TextBlock x:Name="StatusTextBlock"
+                 Grid.Column="1"
+                 VerticalAlignment="Center"
+                 Foreground="#D1D5DB"
+                 Text="Ready" />
+    </Grid>
+  </Grid>
+</UserControl>

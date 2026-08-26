@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/examples/">
+    <Project Path="examples/FrameFlux.Demo.Avalonia/FrameFlux.Demo.Avalonia.csproj" />
+    <Project Path="examples/FrameFlux.Demo.Avalonia.Android/FrameFlux.Demo.Avalonia.Android.csproj" />
+    <Project Path="examples/FrameFlux.Demo.Avalonia.Desktop/FrameFlux.Demo.Avalonia.Desktop.csproj" />
+    <Project Path="examples/FrameFlux.Demo.Wpf/FrameFlux.Demo.Wpf.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/FrameFlux.Abstractions/FrameFlux.Abstractions.csproj" />
+    <Project Path="src/FrameFlux.Avalonia/FrameFlux.Avalonia.csproj" />
+    <Project Path="src/FrameFlux.FFmpeg/FrameFlux.FFmpeg.csproj" />
+    <Project Path="src/FrameFlux.Wpf/FrameFlux.Wpf.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FrameFlux.FFmpeg.Tests/FrameFlux.FFmpeg.Tests.csproj" />
+  </Folder>
+</Solution>

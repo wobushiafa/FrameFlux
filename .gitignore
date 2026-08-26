@@ -1,0 +1,22 @@
+# Build outputs
+**/bin/
+**/obj/
+/artifacts/
+TestResults/
+
+# IDE and user-specific files
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Local verification artifacts
+.verify/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+Desktop.ini

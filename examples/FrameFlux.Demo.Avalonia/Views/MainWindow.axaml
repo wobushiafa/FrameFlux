@@ -1,0 +1,12 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="using:FrameFlux.Demo.Avalonia.Views"
+        x:Class="FrameFlux.Demo.Avalonia.Views.MainWindow"
+        Title="FrameFlux Avalonia Demo"
+        Width="1040"
+        Height="680"
+        MinWidth="680"
+        MinHeight="480"
+        Background="#111315">
+  <views:MainView />
+</Window>

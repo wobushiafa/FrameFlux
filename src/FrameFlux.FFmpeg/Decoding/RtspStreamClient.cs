@@ -1,0 +1,777 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace FrameFlux.FFmpeg;
+
+public class RtspStreamClient : IDisposable
+{
+    private static readonly object OpenSemaphoreLock = new();
+    private static readonly Random ReconnectJitter = new();
+    private readonly string _url;
+    private RtspStreamOptions _options;
+    private Thread? _decodeThread;
+    private volatile bool _isRunning;
+    private CancellationTokenSource? _cancellationTokenSource;
+    private TaskCompletionSource<object?> _completionSource = CreateCompletedCompletionSource();
+    private volatile bool _isFrameDeliveryEnabled = true;
+    private RtspConnectionState _connectionState = RtspConnectionState.Idle;
+    private readonly object _leasePoolLock = new();
+    private readonly List<RtspFrameLease> _leasePool = [];
+    private bool _disposeReturnedLeases;
+    private int _disposeSignaled;
+#if !ANDROID
+    private bool _vaapiDmaBufAvailable;
+#endif
+    private string _hardwareDiagnostics = "N/A";
+    private double _volume;
+    private bool _muted;
+    private AudioPlaybackController? _audioPlayback;
+    public string HardwareDiagnostics => _hardwareDiagnostics;
+
+    public delegate void FrameReceivedHandler(IntPtr buffer, int width, int height, int stride);
+    public delegate void FrameLeaseReceivedHandler(RtspFrameLease lease);
+    public event FrameReceivedHandler? OnFrameReceived;
+    public event FrameLeaseReceivedHandler? OnFrameLeaseReceived;
+    public event EventHandler<RtspStreamErrorEventArgs>? StreamError;
+    public event EventHandler<RtspConnectionStateChangedEventArgs>? ConnectionStateChanged;
+    public event EventHandler<bool>? HardwareAccelerationChanged;
+    public event EventHandler<RtspPerformanceSnapshot>? PerformanceUpdated;
+
+    internal Task Completion => Volatile.Read(ref _completionSource).Task;
+
+    internal void SetFrameDeliveryEnabled(bool enabled) => _isFrameDeliveryEnabled = enabled;
+
+    internal void SetVolume(double volume)
+    {
+        Volatile.Write(ref _volume, volume);
+        Volatile.Read(ref _audioPlayback)?.SetVolume(volume);
+    }
+
+    internal void SetMuted(bool muted)
+    {
+        Volatile.Write(ref _muted, muted);
+        Volatile.Read(ref _audioPlayback)?.SetMuted(muted);
+    }
+
+    public RtspStreamClient(string url, bool useHardwareAcceleration = true)
+        : this(url, new RtspStreamOptions
+        {
+            UseHardwareAcceleration = useHardwareAcceleration,
+            HardwareAccelerationMode = useHardwareAcceleration
+                ? RtspHardwareAccelerationMode.Enabled
+                : RtspHardwareAccelerationMode.Disabled
+        })
+    {
+    }
+
+    public RtspStreamClient(string url, RtspStreamOptions options)
+    {
+        _url = url;
+        _options = options;
+        _volume = options.Volume;
+        _muted = options.IsMuted;
+        RtspRuntimeDiagnostics.OnStreamClientCreated();
+#if !ANDROID
+        _vaapiDmaBufAvailable = options.EnableLinuxVaapiDmaBufInterop;
+#endif
+    }
+
+    public void Start()
+    {
+        if (_isRunning) return;
+        _isRunning = true;
+        var cancellationTokenSource = new CancellationTokenSource();
+        var completionSource = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _cancellationTokenSource = cancellationTokenSource;
+        _completionSource = completionSource;
+        _decodeThread = new Thread(() => DecodeLoop(cancellationTokenSource, completionSource))
+        {
+            IsBackground = true,
+            Priority = ThreadPriority.BelowNormal
+        };
+        _decodeThread.Start();
+    }
+
+    public void Stop(bool waitForExit = false)
+    {
+        _isRunning = false;
+        var cancellationTokenSource = _cancellationTokenSource;
+        cancellationTokenSource?.Cancel();
+
+        var decodeThread = _decodeThread;
+        if (waitForExit && decodeThread?.IsAlive == true && Thread.CurrentThread != decodeThread)
+        {
+            decodeThread.Join(GetStopWaitTimeoutMilliseconds());
+        }
+
+        if (waitForExit && decodeThread?.IsAlive != true)
+        {
+            _decodeThread = null;
+            if (ReferenceEquals(_cancellationTokenSource, cancellationTokenSource))
+            {
+                _cancellationTokenSource = null;
+            }
+
+            cancellationTokenSource?.Dispose();
+        }
+
+        if (!_isRunning)
+        {
+            _disposeReturnedLeases = true;
+        }
+    }
+
+    private void DecodeLoop(
+        CancellationTokenSource threadCancellationTokenSource,
+        TaskCompletionSource<object?> completionSource)
+    {
+        var consecutiveFailureCount = 0;
+
+        try
+        {
+            while (_isRunning && !threadCancellationTokenSource.IsCancellationRequested)
+            {
+                RtspDecoder? decoder = null;
+                AudioPlaybackController? audioPlayback = null;
+                var hasOpened = false;
+                IntPtr bgraBuffer = IntPtr.Zero;
+                var bufferSize = 0;
+                var frameInterval = _options.MaxFramesPerSecond > 0
+                    ? TimeSpan.FromSeconds(1 / _options.MaxFramesPerSecond)
+                    : TimeSpan.Zero;
+                var lastFrameAt = 0L;
+                var openSemaphoreEntered = false;
+                SemaphoreSlim? openSemaphore = null;
+                long totalDecodeTicks = 0;
+                long totalReadTicks = 0;
+                long totalCodecTicks = 0;
+                long totalHardwareTransferTicks = 0;
+                long totalConvertTicks = 0;
+                long totalDispatchTicks = 0;
+                int performanceSamples = 0;
+
+                lock (_leasePoolLock)
+                {
+                    _disposeReturnedLeases = false;
+                }
+
+                try
+                {
+                    RaiseConnectionStateChanged(RtspConnectionState.Connecting);
+                    var cancellationToken = threadCancellationTokenSource.Token;
+                    if (!RtspEndpointProbe.IsReachable(
+                            _url,
+                            _options.EndpointProbeTimeoutMilliseconds,
+                            cancellationToken,
+                            out var probeFailureMessage))
+                    {
+                        RaiseStreamError(new RtspStreamError(
+                            RtspStreamErrorKind.OpenFailed,
+                            probeFailureMessage ?? "RTSP endpoint is unavailable.",
+                            WillRetry: true));
+                        RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
+                        consecutiveFailureCount++;
+                        SleepBeforeReconnect(threadCancellationTokenSource, consecutiveFailureCount);
+                        continue;
+                    }
+
+                    openSemaphore = RtspOpenStreamLimiter.GetSemaphore(_options.MaxConcurrentOpenStreams);
+                    if (openSemaphore != null)
+                    {
+                        openSemaphore.Wait(cancellationToken);
+                        openSemaphoreEntered = true;
+                    }
+
+                    decoder = new RtspDecoder(_url, _options, cancellationToken);
+                    if (decoder.HasAudio && _options.EnableAudio)
+                    {
+                        audioPlayback = new AudioPlaybackController(
+                            Volatile.Read(ref _volume),
+                            Volatile.Read(ref _muted));
+                        Volatile.Write(ref _audioPlayback, audioPlayback);
+                    }
+                    if (openSemaphoreEntered)
+                    {
+                        openSemaphore!.Release();
+                        openSemaphoreEntered = false;
+                    }
+
+                    hasOpened = true;
+                    consecutiveFailureCount = 0;
+                    _hardwareDiagnostics = decoder.HardwareDiagnostics;
+                    HardwareAccelerationChanged?.Invoke(this, decoder.IsHardwareAccelerationActive);
+                    RaiseConnectionStateChanged(RtspConnectionState.Connected);
+                    while (_isRunning && !threadCancellationTokenSource.IsCancellationRequested)
+                    {
+                        var decodeStart = Stopwatch.GetTimestamp();
+                        var hasFrame = decoder.TryDecodeNextFrame(out var frame);
+                        DrainAudio(decoder, audioPlayback);
+                        var decodeElapsedTicks = Stopwatch.GetTimestamp() - decodeStart;
+                        if (hasFrame && frame != null)
+                        {
+                            RtspFrameLease? frameLease = null;
+                            try
+                            {
+                                if (!SynchronizeVideo(frame, audioPlayback, cancellationToken))
+                                {
+                                    continue;
+                                }
+
+                                if (!_isFrameDeliveryEnabled)
+                                {
+                                    continue;
+                                }
+
+                                if (!ShouldRenderFrame(frameInterval, ref lastFrameAt))
+                                {
+                                    continue;
+                                }
+
+                                consecutiveFailureCount = 0;
+
+                                var outputSize = CalculateOutputSize(
+                                    frame.Info.Width,
+                                    frame.Info.Height,
+                                    _options.MaxVideoWidth,
+                                    _options.MaxVideoHeight);
+                                var useLeasedFrameDelivery = OnFrameLeaseReceived != null;
+                                IntPtr targetBuffer;
+                                var dispatchedNativeFrame = false;
+
+#if !ANDROID
+                                // VAAPI zero-copy path: export DMA-BUF fd directly, no GPU->CPU transfer.
+                                if (_vaapiDmaBufAvailable &&
+                                    useLeasedFrameDelivery &&
+                                    decoder.CanCreateVaapiDmaBufLease(frame))
+                                {
+                                    try
+                                    {
+                                        var nativeConvertStart = Stopwatch.GetTimestamp();
+                                        frameLease = decoder.CreateVaapiDmaBufFrameLease(frame);
+                                        var nativeConvertElapsedTicks = Stopwatch.GetTimestamp() - nativeConvertStart;
+                                        var nativeDispatchStart = Stopwatch.GetTimestamp();
+                                        OnFrameLeaseReceived?.Invoke(frameLease);
+                                        frameLease = null;
+                                        var nativeDispatchElapsedTicks = Stopwatch.GetTimestamp() - nativeDispatchStart;
+                                        PublishPerformanceSnapshot(
+                                            ref totalReadTicks,
+                                            ref totalCodecTicks,
+                                            ref totalHardwareTransferTicks,
+                                            ref totalDecodeTicks,
+                                            ref totalConvertTicks,
+                                            ref totalDispatchTicks,
+                                            ref performanceSamples,
+                                            decoder.LastReadTicks,
+                                            decoder.LastCodecTicks,
+                                            decoder.LastHardwareTransferTicks,
+                                            decodeElapsedTicks,
+                                            nativeConvertElapsedTicks,
+                                            nativeDispatchElapsedTicks);
+                                        dispatchedNativeFrame = true;
+                                    }
+                                    catch
+                                    {
+                                        // DMA-BUF export failed (e.g., missing VAAPI driver, unsupported surface).
+                                        // Disable the zero-copy path for this session and fall through to
+                                        // av_hwframe_transfer_data or software conversion.
+                                        _vaapiDmaBufAvailable = false;
+                                    }
+                                }
+#endif
+
+
+                                if (!dispatchedNativeFrame &&
+                                    useLeasedFrameDelivery &&
+                                    _options.RenderMode == RtspRenderMode.NativeSurface &&
+                                    decoder.TryGetNativePixelFormat(frame, out var nativePixelFormat))
+                                {
+                                    var nativeConvertStart = Stopwatch.GetTimestamp();
+                                    frameLease = decoder.CreateNativeFrameLease(frame, nativePixelFormat);
+                                    var nativeConvertElapsedTicks = Stopwatch.GetTimestamp() - nativeConvertStart;
+                                    var nativeDispatchStart = Stopwatch.GetTimestamp();
+                                    OnFrameLeaseReceived?.Invoke(frameLease);
+                                    frameLease = null;
+                                    var nativeDispatchElapsedTicks = Stopwatch.GetTimestamp() - nativeDispatchStart;
+                                    PublishPerformanceSnapshot(
+                                        ref totalReadTicks,
+                                        ref totalCodecTicks,
+                                        ref totalHardwareTransferTicks,
+                                        ref totalDecodeTicks,
+                                        ref totalConvertTicks,
+                                        ref totalDispatchTicks,
+                                        ref performanceSamples,
+                                        decoder.LastReadTicks,
+                                        decoder.LastCodecTicks,
+                                        decoder.LastHardwareTransferTicks,
+                                        decodeElapsedTicks,
+                                        nativeConvertElapsedTicks,
+                                        nativeDispatchElapsedTicks);
+                                    dispatchedNativeFrame = true;
+                                }
+
+                                if (dispatchedNativeFrame)
+                                {
+                                    continue;
+                                }
+
+                                int dstStride = outputSize.Width * 4;
+                                int requiredBufferSize = dstStride * outputSize.Height;
+                                if (useLeasedFrameDelivery)
+                                {
+                                    frameLease = RentFrameLease(requiredBufferSize);
+                                    targetBuffer = frameLease.Buffer;
+                                }
+                                else
+                                {
+                                    if (bgraBuffer == IntPtr.Zero || bufferSize != requiredBufferSize)
+                                    {
+                                        if (bgraBuffer != IntPtr.Zero)
+                                        {
+                                            Marshal.FreeHGlobal(bgraBuffer);
+                                        }
+
+                                        bgraBuffer = Marshal.AllocHGlobal(requiredBufferSize);
+                                        bufferSize = requiredBufferSize;
+                                    }
+
+                                    targetBuffer = bgraBuffer;
+                                }
+
+                                var convertStart = Stopwatch.GetTimestamp();
+                                decoder.ConvertFrameToBgra(frame, targetBuffer, outputSize.Width, outputSize.Height, dstStride);
+                                var convertElapsedTicks = Stopwatch.GetTimestamp() - convertStart;
+                                var dispatchStart = Stopwatch.GetTimestamp();
+                                if (frameLease != null)
+                                {
+                                    frameLease.ResetBgra(outputSize.Width, outputSize.Height, dstStride);
+                                    OnFrameLeaseReceived?.Invoke(frameLease);
+                                    frameLease = null;
+                                }
+                                else
+                                {
+                                    OnFrameReceived?.Invoke(targetBuffer, outputSize.Width, outputSize.Height, dstStride);
+                                }
+                                var dispatchElapsedTicks = Stopwatch.GetTimestamp() - dispatchStart;
+                                PublishPerformanceSnapshot(
+                                    ref totalReadTicks,
+                                    ref totalCodecTicks,
+                                    ref totalHardwareTransferTicks,
+                                    ref totalDecodeTicks,
+                                    ref totalConvertTicks,
+                                    ref totalDispatchTicks,
+                                    ref performanceSamples,
+                                    decoder.LastReadTicks,
+                                    decoder.LastCodecTicks,
+                                    decoder.LastHardwareTransferTicks,
+                                    decodeElapsedTicks,
+                                    convertElapsedTicks,
+                                    dispatchElapsedTicks);
+                            }
+                            finally
+                            {
+                                frameLease?.Dispose();
+                                frame.Dispose();
+                            }
+                        }
+                        else
+                        {
+                            if (!_isRunning || threadCancellationTokenSource.IsCancellationRequested)
+                            {
+                                break;
+                            }
+
+                            RaiseStreamError(new RtspStreamError(
+                                RtspStreamErrorKind.EndOfStream,
+                                "Stream ended or no frame was received.",
+                                WillRetry: true));
+                            RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
+                            consecutiveFailureCount++;
+                            SleepBeforeReconnect(threadCancellationTokenSource, consecutiveFailureCount);
+                            break;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    if (!_isRunning || threadCancellationTokenSource.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    var kind = hasOpened ? RtspStreamErrorKind.DecodeFailed : RtspStreamErrorKind.OpenFailed;
+                    var willFallbackToSoftware = ShouldFallbackToSoftware(ex);
+                    var errorMessage = FormatExceptionMessage(ex);
+                    RaiseStreamError(new RtspStreamError(
+                        kind,
+                        willFallbackToSoftware ? $"{errorMessage} Falling back to software decoding." : errorMessage,
+                        ex,
+                        WillRetry: true));
+
+                    if (willFallbackToSoftware)
+                    {
+                        _options = CreateSoftwareFallbackOptions(_options);
+                        HardwareAccelerationChanged?.Invoke(this, false);
+                    }
+
+                    RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
+                    consecutiveFailureCount++;
+                    SleepBeforeReconnect(threadCancellationTokenSource, consecutiveFailureCount);
+                }
+                finally
+                {
+                    if (ReferenceEquals(Volatile.Read(ref _audioPlayback), audioPlayback))
+                    {
+                        Volatile.Write(ref _audioPlayback, null);
+                    }
+                    audioPlayback?.Dispose();
+                    if (openSemaphoreEntered)
+                    {
+                        openSemaphore?.Release();
+                    }
+
+                    decoder?.Dispose();
+                    if (bgraBuffer != IntPtr.Zero)
+                    {
+                        Marshal.FreeHGlobal(bgraBuffer);
+                    }
+                    DisposeLeasePool();
+                }
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_cancellationTokenSource, threadCancellationTokenSource))
+            {
+                _cancellationTokenSource = null;
+            }
+
+            if (ReferenceEquals(_decodeThread, Thread.CurrentThread))
+            {
+                _decodeThread = null;
+            }
+
+            threadCancellationTokenSource.Dispose();
+            completionSource.TrySetResult(null);
+        }
+    }
+
+    private static TaskCompletionSource<object?> CreateCompletedCompletionSource()
+    {
+        var completionSource = new TaskCompletionSource<object?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        completionSource.SetResult(null);
+        return completionSource;
+    }
+
+    private RtspFrameLease RentFrameLease(int requiredSize)
+    {
+        lock (_leasePoolLock)
+        {
+            for (var i = 0; i < _leasePool.Count; i++)
+            {
+                var lease = _leasePool[i];
+                if (lease.Size != requiredSize)
+                {
+                    continue;
+                }
+
+                _leasePool.RemoveAt(i);
+                return lease;
+            }
+        }
+
+        var buffer = Marshal.AllocHGlobal(requiredSize);
+        var createdLease = new RtspFrameLease(buffer, requiredSize, ReturnFrameLease);
+        return createdLease;
+    }
+
+    private void ReturnFrameLease(RtspFrameLease lease)
+    {
+        if (lease.Buffer == IntPtr.Zero)
+        {
+            return;
+        }
+
+        lock (_leasePoolLock)
+        {
+            if (_disposeReturnedLeases)
+            {
+                Marshal.FreeHGlobal(lease.Buffer);
+                return;
+            }
+
+            _leasePool.Add(lease);
+        }
+    }
+
+    private void DisposeLeasePool()
+    {
+        lock (_leasePoolLock)
+        {
+            _disposeReturnedLeases = true;
+            foreach (var lease in _leasePool)
+            {
+                if (lease.Buffer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(lease.Buffer);
+                }
+            }
+
+            _leasePool.Clear();
+        }
+    }
+
+    private void RaiseConnectionStateChanged(RtspConnectionState state)
+    {
+        var oldState = _connectionState;
+        if (oldState == state)
+        {
+            return;
+        }
+
+        _connectionState = state;
+        ConnectionStateChanged?.Invoke(this, new RtspConnectionStateChangedEventArgs(oldState, state));
+    }
+
+    private void RaiseStreamError(RtspStreamError error)
+    {
+        StreamError?.Invoke(this, new RtspStreamErrorEventArgs(error));
+    }
+
+    private bool ShouldFallbackToSoftware(Exception exception)
+    {
+        return _options.UseHardwareAcceleration &&
+               _options.FallbackToSoftwareDecoding &&
+               exception is RtspDecoderRuntimeException { HardwareAccelerationActive: true };
+    }
+
+    private static string FormatExceptionMessage(Exception exception)
+    {
+        var message = exception.Message;
+        var inner = exception.InnerException;
+        while (inner != null)
+        {
+            message = $"{message} Inner: {inner.Message}";
+            inner = inner.InnerException;
+        }
+
+        return message;
+    }
+
+    private static RtspStreamOptions CreateSoftwareFallbackOptions(RtspStreamOptions options)
+    {
+        return new RtspStreamOptions
+        {
+            UseHardwareAcceleration = false,
+            HardwareAccelerationMode = RtspHardwareAccelerationMode.Disabled,
+            RenderMode = options.RenderMode,
+            FallbackToSoftwareDecoding = options.FallbackToSoftwareDecoding,
+            Transport = options.Transport,
+            OpenTimeoutMilliseconds = options.OpenTimeoutMilliseconds,
+            EndpointProbeTimeoutMilliseconds = options.EndpointProbeTimeoutMilliseconds,
+            ReadTimeoutMilliseconds = options.ReadTimeoutMilliseconds,
+            ReconnectDelayMilliseconds = options.ReconnectDelayMilliseconds,
+            MaxConcurrentOpenStreams = options.MaxConcurrentOpenStreams,
+            MaxFramesPerSecond = options.MaxFramesPerSecond,
+            MaxVideoWidth = options.MaxVideoWidth,
+            MaxVideoHeight = options.MaxVideoHeight,
+            LowLatency = options.LowLatency,
+            EnableAudio = options.EnableAudio,
+            Volume = options.Volume,
+            IsMuted = options.IsMuted,
+            ForceOpaqueAlpha = options.ForceOpaqueAlpha,
+            EnableLinuxVaapiDmaBufInterop = options.EnableLinuxVaapiDmaBufInterop,
+            ScaleQuality = options.ScaleQuality
+        };
+    }
+
+    private static bool ShouldRenderFrame(TimeSpan frameInterval, ref long lastFrameAt)
+    {
+        if (frameInterval <= TimeSpan.Zero)
+        {
+            return true;
+        }
+
+        var now = Stopwatch.GetTimestamp();
+        if (lastFrameAt == 0)
+        {
+            lastFrameAt = now;
+            return true;
+        }
+
+        var elapsed = Stopwatch.GetElapsedTime(lastFrameAt, now);
+        if (elapsed < frameInterval)
+        {
+            return false;
+        }
+
+        lastFrameAt = now;
+        return true;
+    }
+
+    private static void DrainAudio(
+        RtspDecoder decoder,
+        AudioPlaybackController? audioPlayback)
+    {
+        if (audioPlayback is null)
+        {
+            while (decoder.TryDequeueAudioFrame(out _)) { }
+            return;
+        }
+
+        while (decoder.TryDequeueAudioFrame(out var audioFrame) && audioFrame is not null)
+        {
+            audioPlayback.Write(audioFrame);
+        }
+    }
+
+    private static bool SynchronizeVideo(
+        NativeDecodedFrame frame,
+        AudioPlaybackController? audioPlayback,
+        CancellationToken cancellationToken)
+    {
+        if (audioPlayback?.PositionSeconds is not { } audioPosition ||
+            frame.Info.PresentationTimestamp == long.MinValue ||
+            frame.Info.TimeBaseDenominator <= 0)
+        {
+            return true;
+        }
+
+        var videoPosition = frame.Info.PresentationTimestamp *
+            (double)frame.Info.TimeBaseNumerator / frame.Info.TimeBaseDenominator;
+        var difference = videoPosition - audioPosition;
+        if (difference < -0.100d)
+        {
+            return false;
+        }
+
+        if (difference > 0.005d)
+        {
+            var delay = TimeSpan.FromSeconds(Math.Min(difference, 0.5d));
+            if (cancellationToken.WaitHandle.WaitOne(delay))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static (int Width, int Height) CalculateOutputSize(int sourceWidth, int sourceHeight, int maxWidth, int maxHeight)
+    {
+        if (sourceWidth <= 0 || sourceHeight <= 0)
+        {
+            return (Math.Max(1, sourceWidth), Math.Max(1, sourceHeight));
+        }
+
+        if (maxWidth <= 0 && maxHeight <= 0)
+        {
+            return (sourceWidth, sourceHeight);
+        }
+
+        var widthScale = maxWidth > 0 ? (double)maxWidth / sourceWidth : double.PositiveInfinity;
+        var heightScale = maxHeight > 0 ? (double)maxHeight / sourceHeight : double.PositiveInfinity;
+        var scale = Math.Min(1d, Math.Min(widthScale, heightScale));
+
+        var width = Math.Max(1, (int)Math.Round(sourceWidth * scale));
+        var height = Math.Max(1, (int)Math.Round(sourceHeight * scale));
+        return (width, height);
+    }
+
+    private int GetStopWaitTimeoutMilliseconds()
+    {
+        var baseTimeout = Math.Max(_options.ReadTimeoutMilliseconds, _options.OpenTimeoutMilliseconds);
+        return Math.Clamp(baseTimeout + 1000, 2000, 15000);
+    }
+
+    private void SleepBeforeReconnect(CancellationTokenSource threadCancellationTokenSource, int consecutiveFailureCount)
+    {
+        var delay = CalculateReconnectDelayMilliseconds(consecutiveFailureCount);
+        if (delay == 0)
+        {
+            return;
+        }
+
+        threadCancellationTokenSource.Token.WaitHandle.WaitOne(delay);
+    }
+
+    private int CalculateReconnectDelayMilliseconds(int consecutiveFailureCount)
+    {
+        var baseDelay = Math.Max(0, _options.ReconnectDelayMilliseconds);
+        if (baseDelay == 0)
+        {
+            return 0;
+        }
+
+        var exponent = Math.Clamp(Math.Max(consecutiveFailureCount, 1) - 1, 0, 5);
+        var multiplier = 1 << exponent;
+        var cappedDelay = (int)Math.Min((long)baseDelay * multiplier, 60000L);
+        var jitterRange = Math.Max(250, cappedDelay / 5);
+        lock (OpenSemaphoreLock)
+        {
+            return cappedDelay + ReconnectJitter.Next(jitterRange);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposeSignaled, 1) == 0)
+        {
+            RtspRuntimeDiagnostics.OnStreamClientDisposed();
+        }
+
+        Stop(waitForExit: true);
+    }
+
+    private void PublishPerformanceSnapshot(
+        ref long totalReadTicks,
+        ref long totalCodecTicks,
+        ref long totalHardwareTransferTicks,
+        ref long totalDecodeTicks,
+        ref long totalConvertTicks,
+        ref long totalDispatchTicks,
+        ref int performanceSamples,
+        long readTicks,
+        long codecTicks,
+        long hardwareTransferTicks,
+        long decodeTicks,
+        long convertTicks,
+        long dispatchTicks)
+    {
+        totalReadTicks += readTicks;
+        totalCodecTicks += codecTicks;
+        totalHardwareTransferTicks += hardwareTransferTicks;
+        totalDecodeTicks += decodeTicks;
+        totalConvertTicks += convertTicks;
+        totalDispatchTicks += dispatchTicks;
+        performanceSamples++;
+
+        if (performanceSamples < 30)
+        {
+            return;
+        }
+
+        var snapshot = new RtspPerformanceSnapshot(
+            ReadMilliseconds: totalReadTicks * 1000d / Stopwatch.Frequency / performanceSamples,
+            CodecMilliseconds: totalCodecTicks * 1000d / Stopwatch.Frequency / performanceSamples,
+            HardwareTransferMilliseconds: totalHardwareTransferTicks * 1000d / Stopwatch.Frequency / performanceSamples,
+            DecodeMilliseconds: totalDecodeTicks * 1000d / Stopwatch.Frequency / performanceSamples,
+            ConvertMilliseconds: totalConvertTicks * 1000d / Stopwatch.Frequency / performanceSamples,
+            DispatchMilliseconds: totalDispatchTicks * 1000d / Stopwatch.Frequency / performanceSamples,
+            SampleCount: performanceSamples);
+
+        totalReadTicks = 0;
+        totalCodecTicks = 0;
+        totalHardwareTransferTicks = 0;
+        totalDecodeTicks = 0;
+        totalConvertTicks = 0;
+        totalDispatchTicks = 0;
+        performanceSamples = 0;
+        PerformanceUpdated?.Invoke(this, snapshot);
+    }
+}
