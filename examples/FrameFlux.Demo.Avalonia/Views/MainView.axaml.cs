@@ -73,6 +73,28 @@ public sealed partial class MainView : UserControl
             return;
         }
 
+        var requiresGpuFrames = renderPreference is
+            MediaRenderPreference.NativeSurface or
+            MediaRenderPreference.CompositedGpu;
+        if (sender == HardwareModeComboBox &&
+            hardwareAcceleration == MediaHardwareAcceleration.Disabled &&
+            requiresGpuFrames)
+        {
+            renderPreference = MediaRenderPreference.Software;
+            _configuringPlaybackModes = true;
+            RenderModeComboBox.SelectedItem = renderPreference;
+            _configuringPlaybackModes = false;
+        }
+        else if (sender == RenderModeComboBox &&
+                 hardwareAcceleration == MediaHardwareAcceleration.Disabled &&
+                 requiresGpuFrames)
+        {
+            hardwareAcceleration = MediaHardwareAcceleration.Enabled;
+            _configuringPlaybackModes = true;
+            HardwareModeComboBox.SelectedItem = hardwareAcceleration;
+            _configuringPlaybackModes = false;
+        }
+
         Player.Overlay = renderPreference == MediaRenderPreference.NativeSurface
             ? null
             : VideoOverlay;

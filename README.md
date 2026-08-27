@@ -54,7 +54,9 @@ Player.OpenOptions = Player.OpenOptions with
 `HardwareAcceleration` accepts `Auto`, `Enabled`, or `Disabled`.
 `RenderPreference` accepts `Auto`, `Software`, `NativeSurface`, or
 `CompositedGpu`. Assigning new open options while an Avalonia or WPF player is
-active performs a controlled restart with the new pipeline.
+active performs a controlled restart with the new pipeline. `NativeSurface`
+and `CompositedGpu` require D3D11 hardware frames; the demos resolve a
+`Disabled` decoding selection to `Software` rendering.
 
 The current Android FFmpeg binaries are not aligned for Android 16's required
 16 KB memory page size. They work for current test targets, but must be rebuilt

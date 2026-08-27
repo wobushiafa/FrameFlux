@@ -59,6 +59,28 @@ public partial class MainWindow : Window
             return;
         }
 
+        var requiresGpuFrames = renderPreference is
+            MediaRenderPreference.NativeSurface or
+            MediaRenderPreference.CompositedGpu;
+        if (sender == HardwareModeComboBox &&
+            hardwareAcceleration == MediaHardwareAcceleration.Disabled &&
+            requiresGpuFrames)
+        {
+            renderPreference = MediaRenderPreference.Software;
+            _configuringPlaybackModes = true;
+            RenderModeComboBox.SelectedItem = renderPreference;
+            _configuringPlaybackModes = false;
+        }
+        else if (sender == RenderModeComboBox &&
+                 hardwareAcceleration == MediaHardwareAcceleration.Disabled &&
+                 requiresGpuFrames)
+        {
+            hardwareAcceleration = MediaHardwareAcceleration.Enabled;
+            _configuringPlaybackModes = true;
+            HardwareModeComboBox.SelectedItem = hardwareAcceleration;
+            _configuringPlaybackModes = false;
+        }
+
         var overlayAttached = Player.Children.Contains(VideoOverlay);
         if (renderPreference == MediaRenderPreference.NativeSurface)
         {
