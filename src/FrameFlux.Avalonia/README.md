@@ -1,7 +1,18 @@
 # FrameFlux.Avalonia
 
-This package owns the Avalonia controls and renderers for FrameFlux. New
-applications should use the protocol-neutral `MediaView`; `RtspPlayerView`
-remains available as a compatibility control. Software rendering supports
-snapshots and frame subscriptions, while the existing native-surface paths are
-preserved.
+This package provides the protocol-neutral Avalonia `MediaView`. It creates an
+`IMediaPlayer`, forwards the common playback lifecycle, and consumes software
+and native frames through `IMediaVideoOutput`.
+
+The control does not select a playback backend. Applications must reference a
+backend package and set `PlayerFactory` before playback starts:
+
+```csharp
+Player.PlayerFactory = new FfmpegMediaPlayerFactory();
+```
+
+Software rendering supports snapshots and frame subscriptions on every
+target. On Windows, dedicated playback can select
+`MediaRenderPreference.NativeSurface` for D3D11 output. Linux and Android
+currently use software output. Explicit native-surface playback does not
+advertise snapshot support because D3D11 textures are not read back to the CPU.

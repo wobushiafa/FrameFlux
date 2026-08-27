@@ -2,7 +2,7 @@ using System;
 
 namespace FrameFlux.FFmpeg;
 
-public sealed class RtspDecoderRuntimeException : Exception
+internal sealed class RtspDecoderRuntimeException : Exception
 {
     public RtspDecoderRuntimeException(string message, Exception? innerException, bool hardwareAccelerationActive)
         : base(message, innerException)

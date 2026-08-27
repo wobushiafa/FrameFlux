@@ -2,11 +2,11 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using FrameFlux.FFmpeg;
+using FrameFlux.Presentation;
 
 namespace FrameFlux.Wpf;
 
-public sealed class MediaView : FrameworkElement, IAsyncDisposable
+public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable, IMediaVideoOutput
 {
     private static readonly DependencyPropertyKey StatePropertyKey =
         DependencyProperty.RegisterReadOnly(
@@ -22,6 +22,20 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
             typeof(MediaView),
             new FrameworkPropertyMetadata(null));
 
+    private static readonly DependencyPropertyKey IsHardwareAccelerationActivePropertyKey =
+        DependencyProperty.RegisterReadOnly(
+            nameof(IsHardwareAccelerationActive),
+            typeof(bool),
+            typeof(MediaView),
+            new FrameworkPropertyMetadata(false));
+
+    private static readonly DependencyPropertyKey HardwareDiagnosticsPropertyKey =
+        DependencyProperty.RegisterReadOnly(
+            nameof(HardwareDiagnostics),
+            typeof(string),
+            typeof(MediaView),
+            new FrameworkPropertyMetadata("Not started"));
+
     public static readonly DependencyProperty SourceProperty =
         DependencyProperty.Register(
             nameof(Source),
@@ -36,6 +50,13 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
             typeof(MediaView),
             new FrameworkPropertyMetadata(new MediaOpenOptions(), OnRestartPropertyChanged),
             value => value is MediaOpenOptions);
+
+    public static readonly DependencyProperty PlayerFactoryProperty =
+        DependencyProperty.Register(
+            nameof(PlayerFactory),
+            typeof(IMediaPlayerFactory),
+            typeof(MediaView),
+            new FrameworkPropertyMetadata(null));
 
     public static readonly DependencyProperty AutoPlayProperty =
         DependencyProperty.Register(
@@ -86,42 +107,38 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
             typeof(MediaView),
             new FrameworkPropertyMetadata(
                 Stretch.Uniform,
-                FrameworkPropertyMetadataOptions.AffectsRender));
-
-    public static readonly DependencyProperty BackgroundProperty =
-        DependencyProperty.Register(
-            nameof(Background),
-            typeof(Brush),
-            typeof(MediaView),
-            new FrameworkPropertyMetadata(
-                Brushes.Black,
-                FrameworkPropertyMetadataOptions.AffectsRender));
+                FrameworkPropertyMetadataOptions.AffectsRender,
+                OnStretchChanged));
 
     public static readonly DependencyProperty StateProperty = StatePropertyKey.DependencyProperty;
 
     public static readonly DependencyProperty LastErrorProperty = LastErrorPropertyKey.DependencyProperty;
 
-    private readonly IMediaPlayerFactory _playerFactory;
-    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    public static readonly DependencyProperty IsHardwareAccelerationActiveProperty =
+        IsHardwareAccelerationActivePropertyKey.DependencyProperty;
+
+    public static readonly DependencyProperty HardwareDiagnosticsProperty =
+        HardwareDiagnosticsPropertyKey.DependencyProperty;
+
+    private readonly MediaPlaybackController _playback = new();
     private readonly object _frameSync = new();
-    private IMediaPlayer? _player;
-    private MediaVideoFrame? _pendingFrame;
+    private readonly D3D11SwapChainPresenter _nativePresenter = new();
+    private IMediaFrameLease? _pendingFrame;
     private WriteableBitmap? _bitmap;
     private bool _renderScheduled;
     private bool _isLoaded;
     private bool _disposed;
 
     public MediaView()
-        : this(new FfmpegMediaPlayerFactory())
     {
-    }
-
-    internal MediaView(IMediaPlayerFactory playerFactory)
-    {
-        _playerFactory = playerFactory;
+        _playback.StateChanged += OnPlayerStateChanged;
+        _playback.Error += OnPlayerError;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
         SnapsToDevicePixels = true;
+        Background = Brushes.Black;
+        _nativePresenter.Visibility = Visibility.Collapsed;
+        Children.Add(_nativePresenter);
     }
 
     public MediaSource? Source
@@ -134,6 +151,12 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
     {
         get => (MediaOpenOptions)GetValue(OpenOptionsProperty);
         set => SetValue(OpenOptionsProperty, value ?? throw new ArgumentNullException(nameof(value)));
+    }
+
+    public IMediaPlayerFactory? PlayerFactory
+    {
+        get => (IMediaPlayerFactory?)GetValue(PlayerFactoryProperty);
+        set => SetValue(PlayerFactoryProperty, value);
     }
 
     public bool AutoPlay
@@ -172,15 +195,62 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
         set => SetValue(StretchProperty, value);
     }
 
-    public Brush Background
-    {
-        get => (Brush)GetValue(BackgroundProperty);
-        set => SetValue(BackgroundProperty, value);
-    }
-
     public MediaPlaybackState State => (MediaPlaybackState)GetValue(StateProperty);
 
     public MediaPlaybackError? LastError => (MediaPlaybackError?)GetValue(LastErrorProperty);
+
+    public bool IsHardwareAccelerationActive =>
+        (bool)GetValue(IsHardwareAccelerationActiveProperty);
+
+    public string HardwareDiagnostics => (string)GetValue(HardwareDiagnosticsProperty);
+
+    MediaRenderPreference IMediaVideoOutput.Preference => MediaRenderPreference.Software;
+
+    bool IMediaVideoOutput.Supports(MediaFramePixelFormat pixelFormat) =>
+        pixelFormat == MediaFramePixelFormat.Bgra32;
+
+    bool IMediaVideoOutput.TryPresent(IMediaFrameLease frame)
+    {
+        if (_disposed ||
+            frame.PixelFormat != MediaFramePixelFormat.Bgra32 ||
+            !frame.TryGetCpuBuffer(out _))
+        {
+            return false;
+        }
+
+        IMediaFrameLease? droppedFrame;
+        var schedule = false;
+        lock (_frameSync)
+        {
+            if (_disposed)
+            {
+                return false;
+            }
+
+            droppedFrame = _pendingFrame;
+            _pendingFrame = frame;
+            if (!_renderScheduled)
+            {
+                _renderScheduled = true;
+                schedule = true;
+            }
+        }
+
+        droppedFrame?.Dispose();
+        if (schedule)
+        {
+            try
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(RenderPendingFrame));
+            }
+            catch
+            {
+                ClearPendingFrame();
+            }
+        }
+
+        return true;
+    }
 
     public event EventHandler<MediaPlaybackStateChangedEventArgs>? PlaybackStateChanged;
 
@@ -190,69 +260,37 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
     {
         VerifyAccess();
         ThrowIfDisposed();
-        await _lifecycleGate.WaitAsync(cancellationToken);
-        try
+        ResetPresentation();
+        var options = OpenOptions with
         {
-            await StopSessionCoreAsync(setStoppedState: false);
-            var source = Source ?? throw new InvalidOperationException("A media source is required before playback can start.");
-            SetValue(LastErrorPropertyKey, null);
-            SetState(MediaPlaybackState.Opening);
-            var options = OpenOptions with
-            {
-                EnableAudio = EnableAudio
-            };
-            options.Validate();
-
-            var player = _playerFactory.Create();
-            player.Volume = Volume;
-            player.IsMuted = IsMuted;
-            player.StateChanged += OnPlayerStateChanged;
-            player.Error += OnPlayerError;
-            player.FrameReceived += OnFrameReceived;
-            _player = player;
-            try
-            {
-                await player.OpenAsync(source, options, cancellationToken);
-                await player.PlayAsync(cancellationToken);
-            }
-            catch
-            {
-                await StopSessionCoreAsync(setStoppedState: false);
-                throw;
-            }
-        }
-        catch (Exception exception)
-        {
-            ReportError(new MediaPlaybackError(
-                "OpenFailed",
-                exception.Message,
-                IsRecoverable: false,
-                exception));
-            SetState(MediaPlaybackState.Faulted);
-            throw;
-        }
-        finally
-        {
-            _lifecycleGate.Release();
-        }
+            EnableAudio = EnableAudio
+        };
+        var useNativeOutput =
+            options.StreamSharing == MediaStreamSharingMode.Dedicated &&
+            options.RenderPreference == MediaRenderPreference.NativeSurface &&
+            options.HardwareAcceleration != MediaHardwareAcceleration.Disabled &&
+            OperatingSystem.IsWindows();
+        _nativePresenter.SetStretch(Stretch);
+        _nativePresenter.Visibility = useNativeOutput ? Visibility.Visible : Visibility.Collapsed;
+        _playback.Volume = Volume;
+        _playback.IsMuted = IsMuted;
+        await _playback.StartAsync(
+            PlayerFactory,
+            Source,
+            options,
+            useNativeOutput ? _nativePresenter : this,
+            cancellationToken);
     }
 
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
         VerifyAccess();
-        await _lifecycleGate.WaitAsync(cancellationToken);
-        try
-        {
-            await StopSessionCoreAsync(setStoppedState: true);
-        }
-        finally
-        {
-            _lifecycleGate.Release();
-        }
+        await _playback.StopAsync(cancellationToken);
+        ResetPresentation();
     }
 
     public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default) =>
-        _player?.CaptureSnapshotAsync(cancellationToken) ?? ValueTask.FromResult<MediaSnapshot?>(null);
+        _playback.CaptureSnapshotAsync(cancellationToken);
 
     public async ValueTask DisposeAsync()
     {
@@ -265,8 +303,10 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
         _disposed = true;
         Loaded -= OnLoaded;
         Unloaded -= OnUnloaded;
-        await StopAsync();
-        _lifecycleGate.Dispose();
+        _playback.StateChanged -= OnPlayerStateChanged;
+        _playback.Error -= OnPlayerError;
+        await _playback.DisposeAsync();
+        ResetPresentation();
         GC.SuppressFinalize(this);
     }
 
@@ -289,7 +329,7 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
     private static void OnRestartPropertyChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
     {
         var view = (MediaView)sender;
-        if (view._isLoaded && (view.AutoPlay || view._player is not null))
+        if (view._isLoaded && (view.AutoPlay || view._playback.HasPlayer))
         {
             _ = view.RestartSafelyAsync();
         }
@@ -307,19 +347,19 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
     private static void OnVolumeChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
     {
         var view = (MediaView)sender;
-        if (view._player is not null)
-        {
-            view._player.Volume = (double)args.NewValue;
-        }
+        view._playback.Volume = (double)args.NewValue;
     }
 
     private static void OnIsMutedChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
     {
         var view = (MediaView)sender;
-        if (view._player is not null)
-        {
-            view._player.IsMuted = (bool)args.NewValue;
-        }
+        view._playback.IsMuted = (bool)args.NewValue;
+    }
+
+    private static void OnStretchChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
+    {
+        var view = (MediaView)sender;
+        view._nativePresenter.SetStretch((Stretch)args.NewValue);
     }
 
     private static bool IsValidVolume(object value) =>
@@ -379,29 +419,12 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
         }
     }
 
-    private async Task StopSessionCoreAsync(bool setStoppedState)
+    private void ResetPresentation()
     {
-        var player = _player;
-        _player = null;
-        if (player is not null)
-        {
-            player.StateChanged -= OnPlayerStateChanged;
-            player.Error -= OnPlayerError;
-            player.FrameReceived -= OnFrameReceived;
-            await player.StopAsync();
-            await player.DisposeAsync();
-        }
-
-        lock (_frameSync)
-        {
-            _pendingFrame = null;
-        }
+        ClearPendingFrame();
+        _nativePresenter.ClearPendingFrame();
         _bitmap = null;
         InvalidateVisual();
-        if (setStoppedState)
-        {
-            SetState(MediaPlaybackState.Stopped);
-        }
     }
 
     private void OnPlayerStateChanged(object? sender, MediaPlaybackStateChangedEventArgs args) =>
@@ -409,10 +432,12 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
             DispatcherPriority.DataBind,
             new Action(() =>
             {
-                if (ReferenceEquals(_player, sender))
-                {
-                    SetState(args.NewState);
-                }
+                SetState(args.NewState);
+                var diagnostics = _playback.Diagnostics;
+                SetValue(
+                    IsHardwareAccelerationActivePropertyKey,
+                    diagnostics.IsHardwareAccelerationActive);
+                SetValue(HardwareDiagnosticsPropertyKey, diagnostics.HardwareDiagnostics);
             }));
 
     private void OnPlayerError(object? sender, MediaPlaybackErrorEventArgs args) =>
@@ -420,35 +445,12 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
             DispatcherPriority.DataBind,
             new Action(() =>
             {
-                if (ReferenceEquals(_player, sender))
-                {
-                    ReportError(args.Error);
-                }
+                ReportError(args.Error);
             }));
-
-    private void OnFrameReceived(object? sender, MediaVideoFrame frame)
-    {
-        if (!ReferenceEquals(_player, sender))
-        {
-            return;
-        }
-
-        lock (_frameSync)
-        {
-            _pendingFrame = frame;
-            if (_renderScheduled)
-            {
-                return;
-            }
-            _renderScheduled = true;
-        }
-
-        Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(RenderPendingFrame));
-    }
 
     private void RenderPendingFrame()
     {
-        MediaVideoFrame? frame;
+        IMediaFrameLease? frame;
         lock (_frameSync)
         {
             frame = _pendingFrame;
@@ -461,37 +463,70 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
             return;
         }
 
-        RenderFrame(frame);
+        try
+        {
+            if (frame.TryGetCpuBuffer(out var source))
+            {
+                _nativePresenter.Visibility = Visibility.Collapsed;
+                RenderFrame(frame.Width, frame.Height, source);
+            }
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.TraceError(
+                "WPF software presentation failed: {0}",
+                exception);
+        }
+        finally
+        {
+            frame.Dispose();
+        }
     }
 
-    private unsafe void RenderFrame(MediaVideoFrame frame)
+    private unsafe void RenderFrame(
+        int width,
+        int height,
+        MediaCpuFrameBuffer frame)
     {
         if (_bitmap is null ||
-            _bitmap.PixelWidth != frame.Width ||
-            _bitmap.PixelHeight != frame.Height)
+            _bitmap.PixelWidth != width ||
+            _bitmap.PixelHeight != height)
         {
             _bitmap = new WriteableBitmap(
-                frame.Width,
-                frame.Height,
+                width,
+                height,
                 96,
                 96,
                 PixelFormats.Bgra32,
                 null);
         }
 
-        var rowBytes = checked(frame.Width * 4);
+        if (frame.Plane0 == IntPtr.Zero || frame.Plane0Stride <= 0)
+        {
+            return;
+        }
+
+        var rowBytes = Math.Min(checked(width * 4), frame.Plane0Stride);
+        var requiredSourceBytes =
+            checked((long)frame.Plane0Stride * (height - 1) + rowBytes);
+        if (frame.Size < requiredSourceBytes)
+        {
+            return;
+        }
+
         _bitmap.Lock();
         try
         {
-            var source = frame.Data.Span;
-            for (var row = 0; row < frame.Height; row++)
+            for (var row = 0; row < height; row++)
             {
-                source.Slice(row * frame.Stride, rowBytes).CopyTo(
+                new ReadOnlySpan<byte>(
+                    (byte*)frame.Plane0 + row * frame.Plane0Stride,
+                    rowBytes).CopyTo(
                     new Span<byte>(
                         (byte*)_bitmap.BackBuffer + row * _bitmap.BackBufferStride,
                         rowBytes));
             }
-            _bitmap.AddDirtyRect(new Int32Rect(0, 0, frame.Width, frame.Height));
+            _bitmap.AddDirtyRect(new Int32Rect(0, 0, width, height));
         }
         finally
         {
@@ -499,6 +534,19 @@ public sealed class MediaView : FrameworkElement, IAsyncDisposable
         }
 
         InvalidateVisual();
+    }
+
+    private void ClearPendingFrame()
+    {
+        IMediaFrameLease? frame;
+        lock (_frameSync)
+        {
+            frame = _pendingFrame;
+            _pendingFrame = null;
+            _renderScheduled = false;
+        }
+
+        frame?.Dispose();
     }
 
     private void SetState(MediaPlaybackState state)

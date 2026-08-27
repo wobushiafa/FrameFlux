@@ -2,7 +2,7 @@ using System;
 
 namespace FrameFlux.FFmpeg;
 
-public sealed record RtspStreamError(
+internal sealed record RtspStreamError(
     RtspStreamErrorKind Kind,
     string Message,
     Exception? Exception = null,

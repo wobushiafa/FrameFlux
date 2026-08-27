@@ -1,17 +1,12 @@
 using System;
-using System.Runtime.InteropServices;
-
 namespace FrameFlux.FFmpeg;
 
-public sealed class RtspFrameLease : IDisposable
+internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
 {
-    private readonly Action<RtspFrameLease>? _returnAction;
+    private readonly Action<FfmpegMediaFrameLease>? _returnAction;
     private bool _disposed;
 
-    [DllImport("libc.so.6", EntryPoint = "close")]
-    private static extern int posix_close(int fd);
-
-    internal RtspFrameLease(IntPtr buffer, int size, Action<RtspFrameLease> returnAction)
+    internal FfmpegMediaFrameLease(IntPtr buffer, int size, Action<FfmpegMediaFrameLease> returnAction)
     {
         Buffer = buffer;
         Size = size;
@@ -29,6 +24,49 @@ public sealed class RtspFrameLease : IDisposable
     public int Stride { get; internal set; }
 
     public RtspNativePixelFormat PixelFormat { get; internal set; } = RtspNativePixelFormat.Bgra32;
+
+    MediaFramePixelFormat IMediaFrameLease.PixelFormat => PixelFormat switch
+    {
+        RtspNativePixelFormat.Yuv420P => MediaFramePixelFormat.Yuv420P,
+        RtspNativePixelFormat.Nv12 => MediaFramePixelFormat.Nv12,
+        RtspNativePixelFormat.Nv21 => MediaFramePixelFormat.Nv21,
+        RtspNativePixelFormat.D3D11Texture => MediaFramePixelFormat.D3D11Texture,
+        _ => MediaFramePixelFormat.Bgra32
+    };
+
+    public bool TryGetCpuBuffer(out MediaCpuFrameBuffer buffer)
+    {
+        if (PixelFormat == RtspNativePixelFormat.D3D11Texture ||
+            Plane0Pointer == IntPtr.Zero)
+        {
+            buffer = default;
+            return false;
+        }
+
+        buffer = new MediaCpuFrameBuffer(
+            Buffer,
+            Size,
+            Plane0Pointer,
+            Plane1Pointer,
+            Plane2Pointer,
+            Plane0Stride,
+            Plane1Stride,
+            Plane2Stride);
+        return true;
+    }
+
+    public bool TryGetD3D11Texture(out MediaD3D11TextureBuffer texture)
+    {
+        if (PixelFormat != RtspNativePixelFormat.D3D11Texture ||
+            D3D11Texture == IntPtr.Zero)
+        {
+            texture = default;
+            return false;
+        }
+
+        texture = new MediaD3D11TextureBuffer(D3D11Texture, D3D11ArraySlice);
+        return true;
+    }
 
     public int Plane0Offset { get; internal set; }
 
@@ -54,24 +92,6 @@ public sealed class RtspFrameLease : IDisposable
 
     public int D3D11ArraySlice { get; internal set; }
 
-
-    /// <summary>DMA-BUF file descriptor for VAAPI zero-copy path. -1 when unused.</summary>
-    public int DmaBufFd { get; internal set; } = -1;
-
-    /// <summary>DRM fourcc code (e.g. DRM_FORMAT_NV12).</summary>
-    public uint DrmFourcc { get; internal set; }
-
-    /// <summary>DRM buffer modifier.</summary>
-    public ulong DrmModifier { get; internal set; }
-
-    public int DmaBufYOffset { get; internal set; }
-
-    public int DmaBufYPitch { get; internal set; }
-
-    public int DmaBufUvOffset { get; internal set; }
-
-    public int DmaBufUvPitch { get; internal set; }
-
     public void Dispose()
     {
         if (_disposed)
@@ -80,7 +100,6 @@ public sealed class RtspFrameLease : IDisposable
         }
 
         _disposed = true;
-        ReleaseNativeResources();
         _returnAction?.Invoke(this);
     }
 
@@ -183,61 +202,4 @@ public sealed class RtspFrameLease : IDisposable
     }
 
 
-    internal void ResetVaapiDmaBuf(
-        int width,
-        int height,
-        int dmaBufFd,
-        uint drmFourcc,
-        ulong drmModifier,
-        int yOffset,
-        int yPitch,
-        int uvOffset,
-        int uvPitch)
-    {
-        _disposed = false;
-        Width = width;
-        Height = height;
-        Stride = 0;
-        PixelFormat = RtspNativePixelFormat.VaapiDmaBuf;
-        Plane0Offset = 0;
-        Plane1Offset = 0;
-        Plane2Offset = 0;
-        Plane0Stride = yPitch;
-        Plane1Stride = uvPitch;
-        Plane2Stride = 0;
-        Plane0Pointer = IntPtr.Zero;
-        Plane1Pointer = IntPtr.Zero;
-        Plane2Pointer = IntPtr.Zero;
-        NativeHandle = IntPtr.Zero;
-        DmaBufFd = dmaBufFd;
-        DrmFourcc = drmFourcc;
-        DrmModifier = drmModifier;
-        DmaBufYOffset = yOffset;
-        DmaBufYPitch = yPitch;
-        DmaBufUvOffset = uvOffset;
-        DmaBufUvPitch = uvPitch;
-    }
-
-    private void ClearDmaBufFields()
-    {
-        DmaBufFd = -1;
-        DrmFourcc = 0;
-        DrmModifier = 0;
-        DmaBufYOffset = 0;
-        DmaBufYPitch = 0;
-        DmaBufUvOffset = 0;
-        DmaBufUvPitch = 0;
-        D3D11Texture = IntPtr.Zero;
-        D3D11ArraySlice = 0;
-    }
-
-    private void ReleaseNativeResources()
-    {
-        if (DmaBufFd >= 0)
-        {
-            posix_close(DmaBufFd);
-        }
-
-        ClearDmaBufFields();
-    }
 }

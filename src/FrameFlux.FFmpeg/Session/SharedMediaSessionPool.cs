@@ -1,37 +1,44 @@
+using System.Buffers;
+
 namespace FrameFlux.FFmpeg;
 
-internal sealed class SharedRtspSessionPool
+internal sealed class SharedMediaSessionPool
 {
     private readonly object _sync = new();
-    private readonly Dictionary<SharedRtspSessionKey, SharedRtspSessionEntry> _entries = [];
+    private readonly Dictionary<SharedMediaSessionKey, SharedMediaSessionEntry> _entries = [];
 
-    internal IRtspSession Acquire(
-        RtspSource source,
-        RtspSessionOptions options,
-        Func<IRtspSession> sessionFactory)
+    internal IFfmpegMediaSession Acquire(
+        MediaSource source,
+        MediaOpenOptions options,
+        double volume,
+        bool isMuted,
+        Func<IFfmpegMediaSession> sessionFactory,
+        IMediaVideoOutput? videoOutput = null)
     {
-        var key = SharedRtspSessionKey.Create(source, options);
-        SharedRtspSessionEntry entry;
+        var key = SharedMediaSessionKey.Create(source, options);
+        SharedMediaSessionEntry entry;
         lock (_sync)
         {
             if (!_entries.TryGetValue(key, out entry!))
             {
-                entry = new SharedRtspSessionEntry(sessionFactory());
+                entry = new SharedMediaSessionEntry(sessionFactory());
                 _entries.Add(key, entry);
             }
+
             entry.AddReference();
         }
 
-        return new SharedRtspSessionLease(
+        return new SharedMediaSessionLease(
             entry,
             source,
             options,
+            volume,
+            isMuted,
+            videoOutput,
             () => ReleaseAsync(key, entry));
     }
 
-    private ValueTask ReleaseAsync(
-        SharedRtspSessionKey key,
-        SharedRtspSessionEntry entry)
+    private ValueTask ReleaseAsync(SharedMediaSessionKey key, SharedMediaSessionEntry entry)
     {
         var dispose = false;
         lock (_sync)
@@ -48,34 +55,23 @@ internal sealed class SharedRtspSessionPool
         return dispose ? entry.DisposeAsync() : ValueTask.CompletedTask;
     }
 
-    private sealed record SharedRtspSessionKey(
-        string Source,
-        RtspSessionOptions Options)
+    private sealed record SharedMediaSessionKey(string Source, MediaOpenOptions Options)
     {
-        internal static SharedRtspSessionKey Create(
-            RtspSource source,
-            RtspSessionOptions options) =>
-            new(
-                source.Uri.AbsoluteUri,
-                options with
-                {
-                    StreamSharing = RtspStreamSharingMode.Dedicated,
-                    Volume = 1d,
-                    IsMuted = false
-                });
+        internal static SharedMediaSessionKey Create(MediaSource source, MediaOpenOptions options) =>
+            new(source.Uri.AbsoluteUri, options with { StreamSharing = MediaStreamSharingMode.Dedicated });
     }
 }
 
-internal sealed class SharedRtspSessionEntry : IAsyncDisposable
+internal sealed class SharedMediaSessionEntry : IAsyncDisposable
 {
     private readonly object _sync = new();
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
-    private readonly IRtspSession _session;
-    private readonly HashSet<SharedRtspSessionLease> _activeLeases = [];
+    private readonly IFfmpegMediaSession _session;
+    private readonly HashSet<SharedMediaSessionLease> _activeLeases = [];
     private int _references;
     private bool _disposed;
 
-    internal SharedRtspSessionEntry(IRtspSession session)
+    internal SharedMediaSessionEntry(IFfmpegMediaSession session)
     {
         _session = session;
         _session.StateChanged += OnStateChanged;
@@ -83,7 +79,7 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
         _session.FrameReceived += OnFrameReceived;
     }
 
-    internal RtspSessionDiagnostics Diagnostics => _session.Diagnostics;
+    internal MediaDiagnostics Diagnostics => _session.Diagnostics;
 
     internal double Volume
     {
@@ -102,9 +98,9 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
     internal int ReleaseReference() => --_references;
 
     internal async ValueTask StartAsync(
-        SharedRtspSessionLease lease,
+        SharedMediaSessionLease lease,
         double volume,
-        bool muted,
+        bool isMuted,
         CancellationToken cancellationToken)
     {
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -118,11 +114,12 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
                 {
                     return;
                 }
+
                 startPhysicalSession = _activeLeases.Count == 1;
             }
 
             Volume = volume;
-            IsMuted = muted;
+            IsMuted = isMuted;
             try
             {
                 if (startPhysicalSession)
@@ -140,6 +137,7 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
                 {
                     _activeLeases.Remove(lease);
                 }
+
                 if (startPhysicalSession)
                 {
                     try
@@ -150,6 +148,7 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
                     {
                     }
                 }
+
                 throw;
             }
         }
@@ -160,7 +159,7 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
     }
 
     internal async ValueTask StopAsync(
-        SharedRtspSessionLease lease,
+        SharedMediaSessionLease lease,
         CancellationToken cancellationToken)
     {
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -173,6 +172,7 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
                 {
                     return;
                 }
+
                 stopPhysicalSession = _activeLeases.Count == 0;
             }
 
@@ -187,8 +187,7 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
         }
     }
 
-    internal ValueTask<RtspSnapshot?> CaptureSnapshotAsync(
-        CancellationToken cancellationToken) =>
+    internal ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken) =>
         _session.CaptureSnapshotAsync(cancellationToken);
 
     public async ValueTask DisposeAsync()
@@ -209,6 +208,7 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
             {
                 _activeLeases.Clear();
             }
+
             try
             {
                 await _session.StopAsync(CancellationToken.None).ConfigureAwait(false);
@@ -225,7 +225,7 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
         }
     }
 
-    private void OnStateChanged(object? sender, RtspSessionStateChangedEventArgs args)
+    private void OnStateChanged(object? sender, MediaPlaybackStateChangedEventArgs args)
     {
         foreach (var lease in SnapshotActiveLeases())
         {
@@ -233,7 +233,7 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
         }
     }
 
-    private void OnError(object? sender, RtspSessionErrorEventArgs args)
+    private void OnError(object? sender, MediaPlaybackErrorEventArgs args)
     {
         foreach (var lease in SnapshotActiveLeases())
         {
@@ -241,7 +241,7 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
         }
     }
 
-    private void OnFrameReceived(object? sender, RtspVideoFrame frame)
+    private void OnFrameReceived(object? sender, MediaVideoFrame frame)
     {
         foreach (var lease in SnapshotActiveLeases())
         {
@@ -249,7 +249,7 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
         }
     }
 
-    private SharedRtspSessionLease[] SnapshotActiveLeases()
+    private SharedMediaSessionLease[] SnapshotActiveLeases()
     {
         lock (_sync)
         {
@@ -258,37 +258,42 @@ internal sealed class SharedRtspSessionEntry : IAsyncDisposable
     }
 }
 
-internal sealed class SharedRtspSessionLease : IRtspSession
+internal sealed class SharedMediaSessionLease : IFfmpegMediaSession
 {
-    private readonly SharedRtspSessionEntry _entry;
+    private readonly SharedMediaSessionEntry _entry;
     private readonly Func<ValueTask> _release;
+    private readonly IMediaVideoOutput? _videoOutput;
     private double _volume;
     private bool _isMuted;
     private int _started;
     private int _disposed;
-    private RtspSessionState _state = RtspSessionState.Idle;
+    private MediaPlaybackState _state = MediaPlaybackState.Idle;
 
-    internal SharedRtspSessionLease(
-        SharedRtspSessionEntry entry,
-        RtspSource source,
-        RtspSessionOptions options,
+    internal SharedMediaSessionLease(
+        SharedMediaSessionEntry entry,
+        MediaSource source,
+        MediaOpenOptions options,
+        double volume,
+        bool isMuted,
+        IMediaVideoOutput? videoOutput,
         Func<ValueTask> release)
     {
         _entry = entry;
         _release = release;
         Source = source;
         Options = options;
-        _volume = options.Volume;
-        _isMuted = options.IsMuted;
+        _volume = volume;
+        _isMuted = isMuted;
+        _videoOutput = videoOutput;
     }
 
-    public RtspSource Source { get; }
+    public MediaSource Source { get; }
 
-    public RtspSessionOptions Options { get; }
+    public MediaOpenOptions Options { get; }
 
-    public RtspSessionState State => _state;
+    public MediaPlaybackState State => _state;
 
-    public RtspSessionDiagnostics Diagnostics => _entry.Diagnostics;
+    public MediaDiagnostics Diagnostics => _entry.Diagnostics;
 
     public double Volume
     {
@@ -323,11 +328,11 @@ internal sealed class SharedRtspSessionLease : IRtspSession
         }
     }
 
-    public event EventHandler<RtspSessionStateChangedEventArgs>? StateChanged;
+    public event EventHandler<MediaPlaybackStateChangedEventArgs>? StateChanged;
 
-    public event EventHandler<RtspSessionErrorEventArgs>? Error;
+    public event EventHandler<MediaPlaybackErrorEventArgs>? Error;
 
-    public event EventHandler<RtspVideoFrame>? FrameReceived;
+    public event EventHandler<MediaVideoFrame>? FrameReceived;
 
     public async ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
@@ -339,8 +344,7 @@ internal sealed class SharedRtspSessionLease : IRtspSession
 
         try
         {
-            await _entry.StartAsync(this, _volume, _isMuted, cancellationToken)
-                .ConfigureAwait(false);
+            await _entry.StartAsync(this, _volume, _isMuted, cancellationToken).ConfigureAwait(false);
         }
         catch
         {
@@ -355,13 +359,12 @@ internal sealed class SharedRtspSessionLease : IRtspSession
         await StopCoreAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public ValueTask<RtspSnapshot?> CaptureSnapshotAsync(
-        CancellationToken cancellationToken = default)
+    public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         return Volatile.Read(ref _started) == 1
             ? _entry.CaptureSnapshotAsync(cancellationToken)
-            : ValueTask.FromResult<RtspSnapshot?>(null);
+            : ValueTask.FromResult<MediaSnapshot?>(null);
     }
 
     public async ValueTask DisposeAsync()
@@ -379,19 +382,19 @@ internal sealed class SharedRtspSessionLease : IRtspSession
         {
             await _release().ConfigureAwait(false);
         }
+
         GC.SuppressFinalize(this);
     }
 
-    internal void ForwardState(RtspSessionState state)
+    internal void ForwardState(MediaPlaybackState state)
     {
-        if (Volatile.Read(ref _started) == 0)
+        if (Volatile.Read(ref _started) == 1)
         {
-            return;
+            SetState(state);
         }
-        SetState(state);
     }
 
-    internal void ForwardError(RtspSessionErrorEventArgs args)
+    internal void ForwardError(MediaPlaybackErrorEventArgs args)
     {
         if (Volatile.Read(ref _started) == 1)
         {
@@ -399,12 +402,31 @@ internal sealed class SharedRtspSessionLease : IRtspSession
         }
     }
 
-    internal void ForwardFrame(RtspVideoFrame frame)
+    internal void ForwardFrame(MediaVideoFrame frame)
     {
-        if (Volatile.Read(ref _started) == 1)
+        if (Volatile.Read(ref _started) != 1)
         {
-            FrameReceived?.Invoke(this, frame);
+            return;
         }
+
+        FrameReceived?.Invoke(this, frame);
+        var output = _videoOutput;
+        if (output is null || !output.Supports(frame.PixelFormat))
+        {
+            return;
+        }
+
+        MediaFrameDelivery.Deliver(
+            output,
+            new ManagedMediaFrameLease(frame),
+            exception => Error?.Invoke(
+                this,
+                new MediaPlaybackErrorEventArgs(
+                    new MediaPlaybackError(
+                        "VideoOutputFailed",
+                        exception.Message,
+                        IsRecoverable: true,
+                        exception))));
     }
 
     private async ValueTask StopCoreAsync(CancellationToken cancellationToken)
@@ -417,7 +439,7 @@ internal sealed class SharedRtspSessionLease : IRtspSession
         try
         {
             await _entry.StopAsync(this, cancellationToken).ConfigureAwait(false);
-            SetState(RtspSessionState.Stopped);
+            SetState(MediaPlaybackState.Stopped);
         }
         catch
         {
@@ -426,7 +448,7 @@ internal sealed class SharedRtspSessionLease : IRtspSession
         }
     }
 
-    private void SetState(RtspSessionState state)
+    private void SetState(MediaPlaybackState state)
     {
         var oldState = _state;
         if (oldState == state)
@@ -435,9 +457,69 @@ internal sealed class SharedRtspSessionLease : IRtspSession
         }
 
         _state = state;
-        StateChanged?.Invoke(this, new RtspSessionStateChangedEventArgs(oldState, state));
+        StateChanged?.Invoke(this, new MediaPlaybackStateChangedEventArgs(oldState, state));
     }
 
     private void ThrowIfDisposed() =>
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+}
+
+internal sealed class ManagedMediaFrameLease : IMediaFrameLease
+{
+    private readonly MediaVideoFrame _frame;
+    private MemoryHandle _memoryHandle;
+    private readonly IntPtr _buffer;
+    private int _disposed;
+
+    internal unsafe ManagedMediaFrameLease(MediaVideoFrame frame)
+    {
+        _frame = frame;
+        _memoryHandle = frame.Data.Pin();
+        _buffer = (IntPtr)_memoryHandle.Pointer;
+    }
+
+    public int Width => _frame.Width;
+
+    public int Height => _frame.Height;
+
+    public MediaFramePixelFormat PixelFormat => _frame.PixelFormat;
+
+    public bool TryGetCpuBuffer(out MediaCpuFrameBuffer buffer)
+    {
+        if (Volatile.Read(ref _disposed) == 1 ||
+            _buffer == IntPtr.Zero ||
+            PixelFormat == MediaFramePixelFormat.D3D11Texture)
+        {
+            buffer = default;
+            return false;
+        }
+
+        buffer = new MediaCpuFrameBuffer(
+            _buffer,
+            _frame.Data.Length,
+            _buffer,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            _frame.Stride,
+            0,
+            0);
+        return true;
+    }
+
+    public bool TryGetD3D11Texture(out MediaD3D11TextureBuffer texture)
+    {
+        texture = default;
+        return false;
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 1)
+        {
+            return;
+        }
+
+        _memoryHandle.Dispose();
+        _memoryHandle = default;
+    }
 }

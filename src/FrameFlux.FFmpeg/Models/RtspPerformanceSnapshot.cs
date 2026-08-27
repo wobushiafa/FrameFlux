@@ -1,6 +1,6 @@
 namespace FrameFlux.FFmpeg;
 
-public readonly record struct RtspPerformanceSnapshot(
+internal readonly record struct RtspPerformanceSnapshot(
     double ReadMilliseconds,
     double CodecMilliseconds,
     double HardwareTransferMilliseconds,

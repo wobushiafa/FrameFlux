@@ -16,6 +16,8 @@ public interface IMediaPlayer : IAsyncDisposable
 
     bool IsMuted { get; set; }
 
+    IMediaVideoOutput? VideoOutput { get; set; }
+
     TimeSpan Position { get; }
 
     TimeSpan? Duration { get; }
@@ -143,7 +145,48 @@ public sealed record MediaCapabilities(
 
 public enum MediaFramePixelFormat
 {
-    Bgra32
+    Bgra32,
+    Yuv420P,
+    Nv12,
+    Nv21,
+    D3D11Texture
+}
+
+public readonly record struct MediaCpuFrameBuffer(
+    IntPtr Buffer,
+    int Size,
+    IntPtr Plane0,
+    IntPtr Plane1,
+    IntPtr Plane2,
+    int Plane0Stride,
+    int Plane1Stride,
+    int Plane2Stride);
+
+public readonly record struct MediaD3D11TextureBuffer(
+    IntPtr Texture,
+    int ArraySlice);
+
+public interface IMediaFrameLease : IDisposable
+{
+    int Width { get; }
+
+    int Height { get; }
+
+    MediaFramePixelFormat PixelFormat { get; }
+
+    bool TryGetCpuBuffer(out MediaCpuFrameBuffer buffer);
+
+    bool TryGetD3D11Texture(out MediaD3D11TextureBuffer texture);
+}
+
+public interface IMediaVideoOutput
+{
+    MediaRenderPreference Preference { get; }
+
+    bool Supports(MediaFramePixelFormat pixelFormat);
+
+    // Return true only after accepting ownership. On false or exception, the caller retains ownership.
+    bool TryPresent(IMediaFrameLease frame);
 }
 
 public sealed record MediaVideoFrame(

@@ -6,8 +6,8 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
 {
     private readonly object _sync = new();
     private readonly SemaphoreSlim _commands = new(1, 1);
-    private readonly IRtspSessionFactory _sessionFactory;
-    private IRtspSession? _session;
+    private readonly IFfmpegMediaSessionFactory _sessionFactory;
+    private IFfmpegMediaSession? _session;
     private MediaSource? _source;
     private MediaOpenOptions _options = new();
     private MediaPlaybackState _state = MediaPlaybackState.Idle;
@@ -15,14 +15,15 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
     private MediaDiagnostics _diagnostics = MediaDiagnostics.Empty;
     private double _volume = 1d;
     private bool _isMuted;
+    private IMediaVideoOutput? _videoOutput;
     private bool _disposed;
 
     public FfmpegMediaPlayer(ILoggerFactory? loggerFactory = null)
-        : this(new RtspSessionFactory(loggerFactory))
+        : this(new FfmpegMediaSessionFactory(loggerFactory))
     {
     }
 
-    internal FfmpegMediaPlayer(IRtspSessionFactory sessionFactory)
+    internal FfmpegMediaPlayer(IFfmpegMediaSessionFactory sessionFactory)
     {
         _sessionFactory = sessionFactory;
     }
@@ -75,7 +76,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
     {
         get
         {
-            IRtspSession? session;
+            IFfmpegMediaSession? session;
             MediaDiagnostics diagnostics;
             lock (_sync)
             {
@@ -83,7 +84,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
                 diagnostics = _diagnostics;
             }
 
-            return session is null ? diagnostics : MapDiagnostics(session.Diagnostics);
+            return session is null ? diagnostics : session.Diagnostics;
         }
     }
 
@@ -138,6 +139,30 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         }
     }
 
+    public IMediaVideoOutput? VideoOutput
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _videoOutput;
+            }
+        }
+        set
+        {
+            lock (_sync)
+            {
+                ThrowIfDisposed();
+                if (_session is not null)
+                {
+                    throw new InvalidOperationException("Set the video output before starting playback.");
+                }
+
+                _videoOutput = value;
+            }
+        }
+    }
+
     public TimeSpan Position => TimeSpan.Zero;
 
     public TimeSpan? Duration => null;
@@ -155,7 +180,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
     {
         ArgumentNullException.ThrowIfNull(source);
         var resolvedOptions = options ?? new MediaOpenOptions();
-        FfmpegMediaAdapter.Validate(resolvedOptions);
+        resolvedOptions.Validate();
 
         await _commands.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -164,7 +189,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             await StopSessionCoreAsync().ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!FfmpegMediaAdapter.Supports(source))
+            if (source.Uri.Scheme is not ("rtsp" or "rtsps"))
             {
                 throw new NotSupportedException(
                     $"The current FFmpeg backend does not support the '{source.Uri.Scheme}' media scheme yet.");
@@ -178,7 +203,9 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
                     IsLive: true,
                     CanPause: false,
                     CanSeek: false,
-                    CanCaptureSnapshots: resolvedOptions.CaptureSnapshots);
+                    CanCaptureSnapshots:
+                        resolvedOptions.CaptureSnapshots &&
+                        resolvedOptions.RenderPreference != MediaRenderPreference.NativeSurface);
                 _diagnostics = MediaDiagnostics.Empty;
             }
             TransitionTo(MediaPlaybackState.Ready);
@@ -213,6 +240,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             MediaOpenOptions options;
             double volume;
             bool muted;
+            IMediaVideoOutput? videoOutput;
             lock (_sync)
             {
                 if (_state is MediaPlaybackState.Playing or
@@ -227,13 +255,12 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
                 options = _options;
                 volume = _volume;
                 muted = _isMuted;
+                videoOutput = _videoOutput;
             }
 
             await StopSessionCoreAsync().ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            var session = _sessionFactory.Create(
-                FfmpegMediaAdapter.ToRtspSource(source),
-                FfmpegMediaAdapter.ToRtspOptions(options, volume, muted));
+            var session = _sessionFactory.Create(source, options, volume, muted, videoOutput);
             session.StateChanged += OnSessionStateChanged;
             session.Error += OnSessionError;
             session.FrameReceived += OnFrameReceived;
@@ -311,7 +338,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
     public async ValueTask<MediaSnapshot?> CaptureSnapshotAsync(
         CancellationToken cancellationToken = default)
     {
-        IRtspSession? session;
+        IFfmpegMediaSession? session;
         lock (_sync)
         {
             ThrowIfDisposed();
@@ -324,15 +351,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         }
 
         var snapshot = await session.CaptureSnapshotAsync(cancellationToken).ConfigureAwait(false);
-        return snapshot is null
-            ? null
-            : new MediaSnapshot(
-                snapshot.Data,
-                snapshot.Width,
-                snapshot.Height,
-                snapshot.Stride,
-                MediaFramePixelFormat.Bgra32,
-                snapshot.CapturedAt);
+        return snapshot;
     }
 
     public async ValueTask DisposeAsync()
@@ -363,7 +382,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
 
     private async ValueTask StopSessionCoreAsync()
     {
-        IRtspSession? session;
+        IFfmpegMediaSession? session;
         lock (_sync)
         {
             session = _session;
@@ -381,12 +400,12 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         await session.StopAsync().ConfigureAwait(false);
         lock (_sync)
         {
-            _diagnostics = MapDiagnostics(session.Diagnostics);
+            _diagnostics = session.Diagnostics;
         }
         await session.DisposeAsync().ConfigureAwait(false);
     }
 
-    private void OnSessionStateChanged(object? sender, RtspSessionStateChangedEventArgs args)
+    private void OnSessionStateChanged(object? sender, MediaPlaybackStateChangedEventArgs args)
     {
         lock (_sync)
         {
@@ -396,18 +415,10 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             }
         }
 
-        TransitionTo(args.NewState switch
-        {
-            RtspSessionState.Connecting => MediaPlaybackState.Opening,
-            RtspSessionState.Connected => MediaPlaybackState.Playing,
-            RtspSessionState.Reconnecting => MediaPlaybackState.Reconnecting,
-            RtspSessionState.Stopped => MediaPlaybackState.Stopped,
-            RtspSessionState.Faulted => MediaPlaybackState.Faulted,
-            _ => MediaPlaybackState.Idle
-        });
+        TransitionTo(args.NewState);
     }
 
-    private void OnSessionError(object? sender, RtspSessionErrorEventArgs args)
+    private void OnSessionError(object? sender, MediaPlaybackErrorEventArgs args)
     {
         lock (_sync)
         {
@@ -417,14 +428,10 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             }
         }
 
-        PublishError(new MediaPlaybackError(
-            args.Error.Code,
-            args.Error.Message,
-            args.Error.WillRetry,
-            args.Error.Exception));
+        PublishError(args.Error);
     }
 
-    private void OnFrameReceived(object? sender, RtspVideoFrame frame)
+    private void OnFrameReceived(object? sender, MediaVideoFrame frame)
     {
         lock (_sync)
         {
@@ -434,14 +441,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             }
         }
 
-        FrameReceived?.Invoke(this, new MediaVideoFrame(
-            frame.Data,
-            frame.Width,
-            frame.Height,
-            frame.Stride,
-            MediaFramePixelFormat.Bgra32,
-            frame.Sequence,
-            frame.CapturedAt));
+        FrameReceived?.Invoke(this, frame);
     }
 
     private void TransitionTo(MediaPlaybackState state)
@@ -477,20 +477,16 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         }
     }
 
-    private static MediaDiagnostics MapDiagnostics(RtspSessionDiagnostics diagnostics) =>
-        new(
-            diagnostics.IsHardwareAccelerationActive,
-            diagnostics.HardwareDiagnostics,
-            diagnostics.ReadMilliseconds,
-            diagnostics.DecodeMilliseconds,
-            diagnostics.PerformanceSampleCount,
-            diagnostics.LastError);
 }
 
-public sealed class FfmpegMediaPlayerFactory(ILoggerFactory? loggerFactory = null) : IMediaPlayerFactory
+public sealed class FfmpegMediaPlayerFactory : IMediaPlayerFactory
 {
-    private readonly ILoggerFactory _loggerFactory =
-        loggerFactory ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
+    private readonly IFfmpegMediaSessionFactory _sessionFactory;
 
-    public IMediaPlayer Create() => new FfmpegMediaPlayer(_loggerFactory);
+    public FfmpegMediaPlayerFactory(ILoggerFactory? loggerFactory = null)
+    {
+        _sessionFactory = new FfmpegMediaSessionFactory(loggerFactory);
+    }
+
+    public IMediaPlayer Create() => new FfmpegMediaPlayer(_sessionFactory);
 }

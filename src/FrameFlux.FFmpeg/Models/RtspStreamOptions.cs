@@ -1,6 +1,6 @@
 namespace FrameFlux.FFmpeg;
 
-public sealed class RtspStreamOptions
+internal sealed class RtspStreamOptions
 {
     public static int DefaultMaxConcurrentOpenStreams { get; set; } = 8;
 
@@ -41,8 +41,6 @@ public sealed class RtspStreamOptions
     public bool IsMuted { get; init; }
 
     public bool ForceOpaqueAlpha { get; init; } = true;
-
-    public bool EnableLinuxVaapiDmaBufInterop { get; init; }
 
     public RtspScaleQuality ScaleQuality { get; init; } = RtspScaleQuality.Bilinear;
 }

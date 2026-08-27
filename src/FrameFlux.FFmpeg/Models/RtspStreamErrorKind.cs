@@ -1,6 +1,6 @@
 namespace FrameFlux.FFmpeg;
 
-public enum RtspStreamErrorKind
+internal enum RtspStreamErrorKind
 {
     OpenFailed,
     ReadFailed,

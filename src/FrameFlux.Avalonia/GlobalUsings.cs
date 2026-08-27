@@ -1,1 +1,1 @@
-global using FrameFlux.FFmpeg;
+global using FrameFlux;

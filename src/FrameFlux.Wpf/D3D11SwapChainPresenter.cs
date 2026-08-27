@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
-using FrameFlux.FFmpeg;
 using SharpGen.Runtime;
 using Vortice;
 using Vortice.Direct3D11;
@@ -8,7 +7,7 @@ using Vortice.DXGI;
 
 namespace FrameFlux.Wpf;
 
-internal sealed class D3D11SwapChainPresenter : HwndHost
+internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
 {
     private const int WsChild = 0x40000000;
     private const int WsVisible = 0x10000000;
@@ -28,25 +27,119 @@ internal sealed class D3D11SwapChainPresenter : HwndHost
     private int _targetWidth = 1;
     private int _targetHeight = 1;
     private int _stretchMode = (int)System.Windows.Media.Stretch.Uniform;
+    private readonly object _frameSync = new();
+    private IMediaFrameLease? _pendingFrame;
+    private bool _presentScheduled;
 
     internal void SetStretch(System.Windows.Media.Stretch stretch) =>
         Volatile.Write(ref _stretchMode, (int)stretch);
 
-    internal void Present(RtspFrameLease lease)
+    public MediaRenderPreference Preference => MediaRenderPreference.NativeSurface;
+
+    public bool Supports(MediaFramePixelFormat pixelFormat) =>
+        pixelFormat == MediaFramePixelFormat.D3D11Texture;
+
+    public bool TryPresent(IMediaFrameLease frame)
     {
-        if (_window == IntPtr.Zero ||
-            lease.PixelFormat != RtspNativePixelFormat.D3D11Texture ||
-            lease.D3D11Texture == IntPtr.Zero)
+        if (!frame.TryGetD3D11Texture(out _))
+        {
+            return false;
+        }
+
+        IMediaFrameLease? droppedFrame;
+        var schedule = false;
+        lock (_frameSync)
+        {
+            droppedFrame = _pendingFrame;
+            _pendingFrame = frame;
+            if (!_presentScheduled)
+            {
+                _presentScheduled = true;
+                schedule = true;
+            }
+        }
+
+        droppedFrame?.Dispose();
+        if (schedule)
+        {
+            try
+            {
+                Dispatcher.BeginInvoke(
+                    System.Windows.Threading.DispatcherPriority.Render,
+                    new Action(PresentPendingFrame));
+            }
+            catch
+            {
+                ClearPendingFrame();
+            }
+        }
+
+        return true;
+    }
+
+    internal void ClearPendingFrame()
+    {
+        IMediaFrameLease? frame;
+        lock (_frameSync)
+        {
+            frame = _pendingFrame;
+            _pendingFrame = null;
+            _presentScheduled = false;
+        }
+
+        frame?.Dispose();
+    }
+
+    private void PresentPendingFrame()
+    {
+        IMediaFrameLease? lease;
+        lock (_frameSync)
+        {
+            lease = _pendingFrame;
+            _pendingFrame = null;
+            _presentScheduled = false;
+        }
+
+        if (lease is null)
         {
             return;
         }
 
-        Marshal.AddRef(lease.D3D11Texture);
-        using var texture = new ID3D11Texture2D(lease.D3D11Texture);
+        try
+        {
+            if (lease.TryGetD3D11Texture(out var frame))
+            {
+                PresentCore(lease.Width, lease.Height, frame);
+            }
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Trace.TraceError(
+                "WPF D3D11 presentation failed: {0}",
+                exception);
+        }
+        finally
+        {
+            lease.Dispose();
+        }
+    }
+
+    private void PresentCore(
+        int sourceWidth,
+        int sourceHeight,
+        MediaD3D11TextureBuffer frame)
+    {
+        if (_window == IntPtr.Zero || frame.Texture == IntPtr.Zero)
+        {
+            return;
+        }
+
+        Marshal.AddRef(frame.Texture);
+        using var texture = new ID3D11Texture2D(frame.Texture);
         EnsureDevice(texture);
         var width = Volatile.Read(ref _targetWidth);
         var height = Volatile.Read(ref _targetHeight);
-        EnsurePipeline(lease.Width, lease.Height, width, height);
+        EnsurePipeline(sourceWidth, sourceHeight, width, height);
 
         var inputDescription = new VideoProcessorInputViewDescription
         {
@@ -54,7 +147,7 @@ internal sealed class D3D11SwapChainPresenter : HwndHost
             Texture2D = new Texture2DVideoProcessorInputView
             {
                 MipSlice = 0,
-                ArraySlice = (uint)lease.D3D11ArraySlice
+                ArraySlice = checked((uint)frame.ArraySlice)
             }
         };
         _videoDevice!.CreateVideoProcessorInputView(
@@ -64,10 +157,10 @@ internal sealed class D3D11SwapChainPresenter : HwndHost
             out var inputView).CheckError();
         using (inputView)
         {
-            var sourceRect = new RawRect(0, 0, lease.Width, lease.Height);
+            var sourceRect = new RawRect(0, 0, sourceWidth, sourceHeight);
             var destinationRect = CalculateDestinationRect(
-                lease.Width,
-                lease.Height,
+                sourceWidth,
+                sourceHeight,
                 width,
                 height,
                 (System.Windows.Media.Stretch)Volatile.Read(ref _stretchMode));
@@ -125,6 +218,7 @@ internal sealed class D3D11SwapChainPresenter : HwndHost
 
     protected override void DestroyWindowCore(HandleRef hwnd)
     {
+        ClearPendingFrame();
         DisposePipeline();
         if (hwnd.Handle != IntPtr.Zero)
         {

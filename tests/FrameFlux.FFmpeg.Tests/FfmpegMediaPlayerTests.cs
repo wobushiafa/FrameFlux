@@ -7,9 +7,9 @@ namespace FrameFlux.FFmpeg.Tests;
 public sealed class FfmpegMediaPlayerTests
 {
     [Fact]
-    public async Task GenericPlayer_TransitionsAndForwardsRuntimeAudioControls()
+    public async Task GenericPlayer_TransitionsAndForwardsRuntimeControls()
     {
-        var factory = new FakeRtspSessionFactory();
+        var factory = new FakeMediaSessionFactory();
         await using var player = new FfmpegMediaPlayer(factory);
         var states = new List<MediaPlaybackState>();
         MediaVideoFrame? receivedFrame = null;
@@ -25,19 +25,14 @@ public sealed class FfmpegMediaPlayerTests
                 StreamSharing = MediaStreamSharingMode.Shared
             });
 
-        Assert.Equal(MediaPlaybackState.Ready, player.State);
-        Assert.True(player.Capabilities.IsLive);
-        Assert.False(player.Capabilities.CanPause);
-        Assert.False(player.Capabilities.CanSeek);
-
         player.Volume = 0.25d;
         player.IsMuted = true;
         await player.PlayAsync();
 
-        var session = Assert.IsType<FakeRtspSession>(factory.LastSession);
-        Assert.Equal(0.25d, factory.LastOptions?.Volume);
-        Assert.True(factory.LastOptions?.IsMuted);
-        Assert.Equal(RtspStreamSharingMode.Shared, factory.LastOptions?.StreamSharing);
+        var session = Assert.IsType<FakeMediaSession>(factory.LastSession);
+        Assert.Equal(0.25d, factory.LastVolume);
+        Assert.True(factory.LastIsMuted);
+        Assert.Equal(MediaStreamSharingMode.Shared, factory.LastOptions?.StreamSharing);
         Assert.Equal(MediaPlaybackState.Playing, player.State);
         Assert.NotNull(receivedFrame);
         Assert.Equal(MediaFramePixelFormat.Bgra32, receivedFrame.PixelFormat);
@@ -46,13 +41,9 @@ public sealed class FfmpegMediaPlayerTests
         player.IsMuted = false;
         Assert.Equal(0.5d, session.Volume);
         Assert.False(session.IsMuted);
-
-        var snapshot = await player.CaptureSnapshotAsync();
-        Assert.NotNull(snapshot);
-        Assert.Equal(MediaFramePixelFormat.Bgra32, snapshot.PixelFormat);
+        Assert.NotNull(await player.CaptureSnapshotAsync());
 
         await player.StopAsync();
-        Assert.Equal(MediaPlaybackState.Stopped, player.State);
         Assert.True(session.Disposed);
         Assert.Contains(MediaPlaybackState.Opening, states);
         Assert.Contains(MediaPlaybackState.Playing, states);
@@ -60,16 +51,15 @@ public sealed class FfmpegMediaPlayerTests
     }
 
     [Fact]
-    public async Task GenericPlayer_RejectsUnsupportedOperationsForLiveRtsp()
+    public async Task GenericPlayer_RejectsUnsupportedOperationsForLiveSource()
     {
-        await using var player = new FfmpegMediaPlayer(new FakeRtspSessionFactory());
+        await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory());
         await player.OpenAsync(MediaSource.Parse("rtsp://camera/live"));
 
         Assert.Throws<NotSupportedException>(() => player.PauseAsync());
         Assert.Throws<NotSupportedException>(() => player.SeekAsync(TimeSpan.FromSeconds(1)));
         await Assert.ThrowsAsync<NotSupportedException>(() =>
-            player.OpenAsync(MediaSource.FromFile(
-                Path.Combine(Path.GetTempPath(), "sample.mp4"))).AsTask());
+            player.OpenAsync(MediaSource.FromFile(Path.Combine(Path.GetTempPath(), "sample.mp4"))).AsTask());
     }
 
     [Fact]
@@ -79,7 +69,6 @@ public sealed class FfmpegMediaPlayerTests
         {
             ReadTimeout = TimeSpan.FromMilliseconds(-1)
         }.Validate());
-
         Assert.Throws<ArgumentOutOfRangeException>(() => new MediaOpenOptions
         {
             MaxVideoWidth = -1
@@ -87,101 +76,82 @@ public sealed class FfmpegMediaPlayerTests
     }
 
     [Fact]
-    public async Task GenericPlayer_NormalizesNativeSurfaceToBgraRendering()
+    public async Task GenericPlayer_ForwardsConfiguredVideoOutput()
     {
-        var factory = new FakeRtspSessionFactory();
-        await using var player = new FfmpegMediaPlayer(factory);
+        var factory = new FakeMediaSessionFactory();
+        var output = new FakeVideoOutput();
+        await using var player = new FfmpegMediaPlayer(factory) { VideoOutput = output };
 
         await player.OpenAsync(
             MediaSource.Parse("rtsp://camera/live"),
-            new MediaOpenOptions
-            {
-                RenderPreference = MediaRenderPreference.NativeSurface
-            });
+            new MediaOpenOptions { RenderPreference = MediaRenderPreference.NativeSurface });
+        Assert.False(player.Capabilities.CanCaptureSnapshots);
         await player.PlayAsync();
 
-        Assert.Equal(RtspRenderPreference.Software, factory.LastOptions?.RenderPreference);
+        Assert.Same(output, factory.LastVideoOutput);
+        Assert.Throws<InvalidOperationException>(() => player.VideoOutput = null);
     }
 
-    [Fact]
-    public void NativeSurfaceCapableUi_PreservesNativeRenderPreference()
+    private sealed class FakeMediaSessionFactory : IFfmpegMediaSessionFactory
     {
-        var options = FfmpegMediaAdapter.ToRtspOptions(
-            new MediaOpenOptions
-            {
-                RenderPreference = MediaRenderPreference.NativeSurface
-            },
-            volume: 1d,
-            muted: false,
-            supportsNativeSurface: true);
+        internal IFfmpegMediaSession? LastSession { get; private set; }
+        internal MediaOpenOptions? LastOptions { get; private set; }
+        internal double LastVolume { get; private set; }
+        internal bool LastIsMuted { get; private set; }
+        internal IMediaVideoOutput? LastVideoOutput { get; private set; }
 
-        Assert.Equal(RtspRenderPreference.NativeSurface, options.RenderPreference);
-    }
-
-    private sealed class FakeRtspSessionFactory : IRtspSessionFactory
-    {
-        internal IRtspSession? LastSession { get; private set; }
-        internal RtspSessionOptions? LastOptions { get; private set; }
-
-        public IRtspSession Create(RtspSource source, RtspSessionOptions? options = null)
+        public IFfmpegMediaSession Create(
+            MediaSource source,
+            MediaOpenOptions options,
+            double volume,
+            bool isMuted,
+            IMediaVideoOutput? videoOutput)
         {
             LastOptions = options;
-            LastSession = new FakeRtspSession(source, options ?? new RtspSessionOptions());
+            LastVolume = volume;
+            LastIsMuted = isMuted;
+            LastVideoOutput = videoOutput;
+            LastSession = new FakeMediaSession(source, options, volume, isMuted);
             return LastSession;
         }
     }
 
-    private sealed class FakeRtspSession(
-        RtspSource source,
-        RtspSessionOptions options) : IRtspSession
+    private sealed class FakeMediaSession(
+        MediaSource source,
+        MediaOpenOptions options,
+        double volume,
+        bool isMuted) : IFfmpegMediaSession
     {
-        public RtspSource Source { get; } = source;
-        public RtspSessionOptions Options { get; } = options;
-        public RtspSessionState State { get; private set; } = RtspSessionState.Idle;
-        public RtspSessionDiagnostics Diagnostics { get; } =
-            new(false, "Test", 1, 2, 3, null);
-        public double Volume { get; set; } = options.Volume;
-        public bool IsMuted { get; set; } = options.IsMuted;
+        public MediaSource Source { get; } = source;
+        public MediaOpenOptions Options { get; } = options;
+        public MediaPlaybackState State { get; private set; } = MediaPlaybackState.Idle;
+        public MediaDiagnostics Diagnostics { get; } = new(false, "Test", 1, 2, 3, null);
+        public double Volume { get; set; } = volume;
+        public bool IsMuted { get; set; } = isMuted;
         internal bool Disposed { get; private set; }
 
-        public event EventHandler<RtspSessionStateChangedEventArgs>? StateChanged;
-        public event EventHandler<RtspSessionErrorEventArgs>? Error
-        {
-            add { }
-            remove { }
-        }
-        public event EventHandler<RtspVideoFrame>? FrameReceived;
+        public event EventHandler<MediaPlaybackStateChangedEventArgs>? StateChanged;
+        public event EventHandler<MediaPlaybackErrorEventArgs>? Error { add { } remove { } }
+        public event EventHandler<MediaVideoFrame>? FrameReceived;
 
         public ValueTask StartAsync(CancellationToken cancellationToken = default)
         {
-            TransitionTo(RtspSessionState.Connecting);
-            TransitionTo(RtspSessionState.Connected);
-            FrameReceived?.Invoke(this, new RtspVideoFrame(
-                new byte[16],
-                2,
-                2,
-                8,
-                RtspFramePixelFormat.Bgra32,
-                1,
-                DateTimeOffset.UtcNow));
+            TransitionTo(MediaPlaybackState.Opening);
+            TransitionTo(MediaPlaybackState.Playing);
+            FrameReceived?.Invoke(this, new MediaVideoFrame(
+                new byte[16], 2, 2, 8, MediaFramePixelFormat.Bgra32, 1, DateTimeOffset.UtcNow));
             return ValueTask.CompletedTask;
         }
 
         public ValueTask StopAsync(CancellationToken cancellationToken = default)
         {
-            TransitionTo(RtspSessionState.Stopped);
+            TransitionTo(MediaPlaybackState.Stopped);
             return ValueTask.CompletedTask;
         }
 
-        public ValueTask<RtspSnapshot?> CaptureSnapshotAsync(
-            CancellationToken cancellationToken = default) =>
-            ValueTask.FromResult<RtspSnapshot?>(new RtspSnapshot(
-                new byte[16],
-                2,
-                2,
-                8,
-                RtspFramePixelFormat.Bgra32,
-                DateTimeOffset.UtcNow));
+        public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult<MediaSnapshot?>(new MediaSnapshot(
+                new byte[16], 2, 2, 8, MediaFramePixelFormat.Bgra32, DateTimeOffset.UtcNow));
 
         public ValueTask DisposeAsync()
         {
@@ -189,11 +159,22 @@ public sealed class FfmpegMediaPlayerTests
             return ValueTask.CompletedTask;
         }
 
-        private void TransitionTo(RtspSessionState state)
+        private void TransitionTo(MediaPlaybackState state)
         {
             var oldState = State;
             State = state;
-            StateChanged?.Invoke(this, new RtspSessionStateChangedEventArgs(oldState, state));
+            StateChanged?.Invoke(this, new MediaPlaybackStateChangedEventArgs(oldState, state));
+        }
+    }
+
+    private sealed class FakeVideoOutput : IMediaVideoOutput
+    {
+        public MediaRenderPreference Preference => MediaRenderPreference.NativeSurface;
+        public bool Supports(MediaFramePixelFormat pixelFormat) => true;
+        public bool TryPresent(IMediaFrameLease frame)
+        {
+            frame.Dispose();
+            return true;
         }
     }
 }

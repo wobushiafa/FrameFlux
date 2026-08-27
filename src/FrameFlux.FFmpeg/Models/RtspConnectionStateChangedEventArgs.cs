@@ -2,7 +2,7 @@ using System;
 
 namespace FrameFlux.FFmpeg;
 
-public sealed class RtspConnectionStateChangedEventArgs : EventArgs
+internal sealed class RtspConnectionStateChangedEventArgs : EventArgs
 {
     public RtspConnectionStateChangedEventArgs(RtspConnectionState oldState, RtspConnectionState newState)
     {

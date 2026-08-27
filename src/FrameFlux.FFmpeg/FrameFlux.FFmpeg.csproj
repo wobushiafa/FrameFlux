@@ -17,14 +17,6 @@
     <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <InternalsVisibleTo Include="FrameFlux.FFmpeg.Tests" />
-    <InternalsVisibleTo Include="FrameFlux.Avalonia" />
-    <InternalsVisibleTo Include="FrameFlux.Wpf" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Include="..\..\native\artifacts\runtimes\**\native\*"
-          Pack="true"
-          PackagePath="runtimes\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(FrameFluxNativeRuntimeIdentifier)' != ''">
@@ -34,14 +26,4 @@
              Pack="false" />
   </ItemGroup>
 
-  <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">
-    <AndroidNativeLibrary Include="..\..\native\artifacts\runtimes\android-arm\native\*.so"
-                          Link="lib\armeabi-v7a\%(Filename)%(Extension)" />
-    <AndroidNativeLibrary Include="..\..\native\artifacts\runtimes\android-arm64\native\*.so"
-                          Link="lib\arm64-v8a\%(Filename)%(Extension)" />
-    <AndroidNativeLibrary Include="..\..\native\artifacts\runtimes\android-x86\native\*.so"
-                          Link="lib\x86\%(Filename)%(Extension)" />
-    <AndroidNativeLibrary Include="..\..\native\artifacts\runtimes\android-x64\native\*.so"
-                          Link="lib\x86_64\%(Filename)%(Extension)" />
-  </ItemGroup>
 </Project>

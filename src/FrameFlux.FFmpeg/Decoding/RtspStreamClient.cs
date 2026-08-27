@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace FrameFlux.FFmpeg;
 
-public class RtspStreamClient : IDisposable
+internal sealed class RtspStreamClient : IDisposable
 {
     private static readonly object OpenSemaphoreLock = new();
     private static readonly Random ReconnectJitter = new();
@@ -20,26 +20,23 @@ public class RtspStreamClient : IDisposable
     private volatile bool _isFrameDeliveryEnabled = true;
     private RtspConnectionState _connectionState = RtspConnectionState.Idle;
     private readonly object _leasePoolLock = new();
-    private readonly List<RtspFrameLease> _leasePool = [];
+    private readonly List<FfmpegMediaFrameLease> _leasePool = [];
     private bool _disposeReturnedLeases;
     private int _disposeSignaled;
-#if !ANDROID
-    private bool _vaapiDmaBufAvailable;
-#endif
     private string _hardwareDiagnostics = "N/A";
     private double _volume;
     private bool _muted;
     private AudioPlaybackController? _audioPlayback;
     public string HardwareDiagnostics => _hardwareDiagnostics;
 
-    public delegate void FrameReceivedHandler(IntPtr buffer, int width, int height, int stride);
-    public delegate void FrameLeaseReceivedHandler(RtspFrameLease lease);
-    public event FrameReceivedHandler? OnFrameReceived;
-    public event FrameLeaseReceivedHandler? OnFrameLeaseReceived;
-    public event EventHandler<RtspStreamErrorEventArgs>? StreamError;
-    public event EventHandler<RtspConnectionStateChangedEventArgs>? ConnectionStateChanged;
-    public event EventHandler<bool>? HardwareAccelerationChanged;
-    public event EventHandler<RtspPerformanceSnapshot>? PerformanceUpdated;
+    internal delegate void FrameReceivedHandler(IntPtr buffer, int width, int height, int stride);
+    internal delegate void FrameLeaseReceivedHandler(FfmpegMediaFrameLease lease);
+    internal event FrameReceivedHandler? OnFrameReceived;
+    internal event FrameLeaseReceivedHandler? OnFrameLeaseReceived;
+    internal event EventHandler<RtspStreamErrorEventArgs>? StreamError;
+    internal event EventHandler<RtspConnectionStateChangedEventArgs>? ConnectionStateChanged;
+    internal event EventHandler<bool>? HardwareAccelerationChanged;
+    internal event EventHandler<RtspPerformanceSnapshot>? PerformanceUpdated;
 
     internal Task Completion => Volatile.Read(ref _completionSource).Task;
 
@@ -75,9 +72,6 @@ public class RtspStreamClient : IDisposable
         _volume = options.Volume;
         _muted = options.IsMuted;
         RtspRuntimeDiagnostics.OnStreamClientCreated();
-#if !ANDROID
-        _vaapiDmaBufAvailable = options.EnableLinuxVaapiDmaBufInterop;
-#endif
     }
 
     public void Start()
@@ -214,7 +208,7 @@ public class RtspStreamClient : IDisposable
                         var decodeElapsedTicks = Stopwatch.GetTimestamp() - decodeStart;
                         if (hasFrame && frame != null)
                         {
-                            RtspFrameLease? frameLease = null;
+                            FfmpegMediaFrameLease? frameLease = null;
                             try
                             {
                                 if (!SynchronizeVideo(frame, audioPlayback, cancellationToken))
@@ -243,50 +237,7 @@ public class RtspStreamClient : IDisposable
                                 IntPtr targetBuffer;
                                 var dispatchedNativeFrame = false;
 
-#if !ANDROID
-                                // VAAPI zero-copy path: export DMA-BUF fd directly, no GPU->CPU transfer.
-                                if (_vaapiDmaBufAvailable &&
-                                    useLeasedFrameDelivery &&
-                                    decoder.CanCreateVaapiDmaBufLease(frame))
-                                {
-                                    try
-                                    {
-                                        var nativeConvertStart = Stopwatch.GetTimestamp();
-                                        frameLease = decoder.CreateVaapiDmaBufFrameLease(frame);
-                                        var nativeConvertElapsedTicks = Stopwatch.GetTimestamp() - nativeConvertStart;
-                                        var nativeDispatchStart = Stopwatch.GetTimestamp();
-                                        OnFrameLeaseReceived?.Invoke(frameLease);
-                                        frameLease = null;
-                                        var nativeDispatchElapsedTicks = Stopwatch.GetTimestamp() - nativeDispatchStart;
-                                        PublishPerformanceSnapshot(
-                                            ref totalReadTicks,
-                                            ref totalCodecTicks,
-                                            ref totalHardwareTransferTicks,
-                                            ref totalDecodeTicks,
-                                            ref totalConvertTicks,
-                                            ref totalDispatchTicks,
-                                            ref performanceSamples,
-                                            decoder.LastReadTicks,
-                                            decoder.LastCodecTicks,
-                                            decoder.LastHardwareTransferTicks,
-                                            decodeElapsedTicks,
-                                            nativeConvertElapsedTicks,
-                                            nativeDispatchElapsedTicks);
-                                        dispatchedNativeFrame = true;
-                                    }
-                                    catch
-                                    {
-                                        // DMA-BUF export failed (e.g., missing VAAPI driver, unsupported surface).
-                                        // Disable the zero-copy path for this session and fall through to
-                                        // av_hwframe_transfer_data or software conversion.
-                                        _vaapiDmaBufAvailable = false;
-                                    }
-                                }
-#endif
-
-
-                                if (!dispatchedNativeFrame &&
-                                    useLeasedFrameDelivery &&
+                                if (useLeasedFrameDelivery &&
                                     _options.RenderMode == RtspRenderMode.NativeSurface &&
                                     decoder.TryGetNativePixelFormat(frame, out var nativePixelFormat))
                                 {
@@ -468,7 +419,7 @@ public class RtspStreamClient : IDisposable
         return completionSource;
     }
 
-    private RtspFrameLease RentFrameLease(int requiredSize)
+    private FfmpegMediaFrameLease RentFrameLease(int requiredSize)
     {
         lock (_leasePoolLock)
         {
@@ -486,11 +437,11 @@ public class RtspStreamClient : IDisposable
         }
 
         var buffer = Marshal.AllocHGlobal(requiredSize);
-        var createdLease = new RtspFrameLease(buffer, requiredSize, ReturnFrameLease);
+        var createdLease = new FfmpegMediaFrameLease(buffer, requiredSize, ReturnFrameLease);
         return createdLease;
     }
 
-    private void ReturnFrameLease(RtspFrameLease lease)
+    private void ReturnFrameLease(FfmpegMediaFrameLease lease)
     {
         if (lease.Buffer == IntPtr.Zero)
         {
@@ -585,7 +536,6 @@ public class RtspStreamClient : IDisposable
             Volume = options.Volume,
             IsMuted = options.IsMuted,
             ForceOpaqueAlpha = options.ForceOpaqueAlpha,
-            EnableLinuxVaapiDmaBufInterop = options.EnableLinuxVaapiDmaBufInterop,
             ScaleQuality = options.ScaleQuality
         };
     }

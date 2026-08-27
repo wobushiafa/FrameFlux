@@ -1,21 +1,48 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
-using FrameFlux;
 using DiagnosticActivity = System.Diagnostics.Activity;
 
 namespace FrameFlux.FFmpeg;
 
-public sealed class FfmpegRtspSession : IRtspSession
+internal interface IFfmpegMediaSession : IAsyncDisposable
+{
+    MediaSource Source { get; }
+
+    MediaOpenOptions Options { get; }
+
+    MediaPlaybackState State { get; }
+
+    MediaDiagnostics Diagnostics { get; }
+
+    double Volume { get; set; }
+
+    bool IsMuted { get; set; }
+
+    event EventHandler<MediaPlaybackStateChangedEventArgs>? StateChanged;
+
+    event EventHandler<MediaPlaybackErrorEventArgs>? Error;
+
+    event EventHandler<MediaVideoFrame>? FrameReceived;
+
+    ValueTask StartAsync(CancellationToken cancellationToken = default);
+
+    ValueTask StopAsync(CancellationToken cancellationToken = default);
+
+    ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default);
+}
+
+internal sealed class FfmpegMediaSession : IFfmpegMediaSession
 {
     private readonly object _sync = new();
     private readonly ILogger _logger;
+    private readonly IMediaVideoOutput? _videoOutput;
     private RtspStreamClient? _client;
     private Task? _stopTask;
     private DiagnosticActivity? _activity;
-    private EventHandler<RtspVideoFrame>? _frameReceived;
-    private RtspSessionState _state = RtspSessionState.Idle;
-    private RtspSnapshot? _lastSnapshot;
+    private EventHandler<MediaVideoFrame>? _frameReceived;
+    private MediaPlaybackState _state = MediaPlaybackState.Idle;
+    private MediaSnapshot? _lastSnapshot;
     private RtspPerformanceSnapshot _lastPerformance;
     private string? _lastError;
     private bool _isHardwareAccelerationActive;
@@ -24,22 +51,26 @@ public sealed class FfmpegRtspSession : IRtspSession
     private long _frameSequence;
     private bool _disposed;
 
-    public FfmpegRtspSession(
-        RtspSource source,
-        RtspSessionOptions options,
+    internal FfmpegMediaSession(
+        MediaSource source,
+        MediaOpenOptions options,
+        double volume,
+        bool isMuted,
+        IMediaVideoOutput? videoOutput,
         ILogger? logger = null)
     {
         Source = source ?? throw new ArgumentNullException(nameof(source));
         Options = options ?? throw new ArgumentNullException(nameof(options));
         Options.Validate();
-        _volume = Options.Volume;
-        _isMuted = Options.IsMuted;
+        _volume = volume;
+        _isMuted = isMuted;
+        _videoOutput = videoOutput;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
     }
 
-    public RtspSource Source { get; }
+    public MediaSource Source { get; }
 
-    public RtspSessionOptions Options { get; }
+    public MediaOpenOptions Options { get; }
 
     public double Volume
     {
@@ -86,7 +117,7 @@ public sealed class FfmpegRtspSession : IRtspSession
         }
     }
 
-    public RtspSessionState State
+    public MediaPlaybackState State
     {
         get
         {
@@ -97,13 +128,13 @@ public sealed class FfmpegRtspSession : IRtspSession
         }
     }
 
-    public RtspSessionDiagnostics Diagnostics
+    public MediaDiagnostics Diagnostics
     {
         get
         {
             lock (_sync)
             {
-                return new RtspSessionDiagnostics(
+                return new MediaDiagnostics(
                     _isHardwareAccelerationActive,
                     _client?.HardwareDiagnostics ?? "N/A",
                     _lastPerformance.ReadMilliseconds,
@@ -114,11 +145,11 @@ public sealed class FfmpegRtspSession : IRtspSession
         }
     }
 
-    public event EventHandler<RtspSessionStateChangedEventArgs>? StateChanged;
+    public event EventHandler<MediaPlaybackStateChangedEventArgs>? StateChanged;
 
-    public event EventHandler<RtspSessionErrorEventArgs>? Error;
+    public event EventHandler<MediaPlaybackErrorEventArgs>? Error;
 
-    public event EventHandler<RtspVideoFrame>? FrameReceived
+    public event EventHandler<MediaVideoFrame>? FrameReceived
     {
         add
         {
@@ -144,7 +175,7 @@ public sealed class FfmpegRtspSession : IRtspSession
         lock (_sync)
         {
             ThrowIfDisposed();
-            if (_client != null)
+            if (_client is not null)
             {
                 return ValueTask.CompletedTask;
             }
@@ -156,17 +187,15 @@ public sealed class FfmpegRtspSession : IRtspSession
             client.PerformanceUpdated += OnPerformanceUpdated;
             client.OnFrameLeaseReceived += OnFrameLeaseReceived;
             _client = client;
-            _activity = RtspTelemetry.Activities.StartActivity(
-                "rtsp.session",
-                ActivityKind.Client);
-            _activity?.SetTag("rtsp.source", Source.Uri.GetLeftPart(UriPartial.Authority));
-            _activity?.SetTag("rtsp.transport", Options.Transport.ToString());
+            _activity = RtspTelemetry.Activities.StartActivity("media.session", ActivityKind.Client);
+            _activity?.SetTag("media.source", Source.Uri.GetLeftPart(UriPartial.Authority));
+            _activity?.SetTag("media.transport", Options.Transport.ToString());
             UpdateFrameDeliveryLocked();
             client.Start();
         }
 
         RtspTelemetry.SessionsStarted.Add(1);
-        _logger.LogInformation("Started RTSP session for {Host}", Source.Uri.Host);
+        _logger.LogInformation("Started media session for {Host}", Source.Uri.Host);
         return ValueTask.CompletedTask;
     }
 
@@ -175,7 +204,7 @@ public sealed class FfmpegRtspSession : IRtspSession
         Task? stopTask;
         lock (_sync)
         {
-            if (_client == null)
+            if (_client is null)
             {
                 return;
             }
@@ -188,18 +217,15 @@ public sealed class FfmpegRtspSession : IRtspSession
         await stopTask.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public ValueTask<RtspSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default)
+    public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_sync)
         {
-            if (_lastSnapshot is null)
-            {
-                return ValueTask.FromResult<RtspSnapshot?>(null);
-            }
-
-            return ValueTask.FromResult<RtspSnapshot?>(
-                _lastSnapshot with { Data = _lastSnapshot.Data.ToArray() });
+            return ValueTask.FromResult(
+                _lastSnapshot is null
+                    ? null
+                    : _lastSnapshot with { Data = _lastSnapshot.Data.ToArray() });
         }
     }
 
@@ -245,26 +271,32 @@ public sealed class FfmpegRtspSession : IRtspSession
 
             _activity?.Dispose();
             _activity = null;
-            TransitionTo(RtspSessionState.Stopped);
+            TransitionTo(MediaPlaybackState.Stopped);
             RtspTelemetry.SessionsStopped.Add(1);
-            _logger.LogInformation("Stopped RTSP session for {Host}", Source.Uri.Host);
+            _logger.LogInformation("Stopped media session for {Host}", Source.Uri.Host);
         }
     }
 
     private RtspStreamOptions CreateEngineOptions() =>
         new()
         {
-            Transport = Options.Transport.ToString().ToLowerInvariant(),
-            UseHardwareAcceleration = Options.HardwareAcceleration != RtspHardwareAcceleration.Disabled,
+            Transport = Options.Transport switch
+            {
+                MediaTransport.Udp => "udp",
+                MediaTransport.Http => "http",
+                MediaTransport.Https => "https",
+                _ => "tcp"
+            },
+            UseHardwareAcceleration = Options.HardwareAcceleration != MediaHardwareAcceleration.Disabled,
             HardwareAccelerationMode = Options.HardwareAcceleration switch
             {
-                RtspHardwareAcceleration.Disabled => RtspHardwareAccelerationMode.Disabled,
-                RtspHardwareAcceleration.Enabled => RtspHardwareAccelerationMode.Enabled,
+                MediaHardwareAcceleration.Disabled => RtspHardwareAccelerationMode.Disabled,
+                MediaHardwareAcceleration.Enabled => RtspHardwareAccelerationMode.Enabled,
                 _ => RtspHardwareAccelerationMode.Auto
             },
-            // IRtspSession publishes owned BGRA frames. Native surfaces are consumed
-            // only by controls that use RtspStreamClient directly.
-            RenderMode = RtspRenderMode.SoftwareBitmap,
+            RenderMode = _videoOutput?.Preference == MediaRenderPreference.NativeSurface
+                ? RtspRenderMode.NativeSurface
+                : RtspRenderMode.SoftwareBitmap,
             OpenTimeoutMilliseconds = ToMilliseconds(Options.OpenTimeout),
             EndpointProbeTimeoutMilliseconds = ToMilliseconds(Options.EndpointProbeTimeout),
             ReadTimeoutMilliseconds = ToMilliseconds(Options.ReadTimeout),
@@ -283,25 +315,25 @@ public sealed class FfmpegRtspSession : IRtspSession
     private static int ToMilliseconds(TimeSpan value) =>
         checked((int)Math.Min(value.TotalMilliseconds, int.MaxValue));
 
-    private void OnConnectionStateChanged(object? sender, RtspConnectionStateChangedEventArgs e)
+    private void OnConnectionStateChanged(object? sender, RtspConnectionStateChangedEventArgs args)
     {
-        TransitionTo(e.NewState switch
+        TransitionTo(args.NewState switch
         {
-            RtspConnectionState.Connecting => RtspSessionState.Connecting,
-            RtspConnectionState.Connected => RtspSessionState.Connected,
-            RtspConnectionState.Reconnecting => RtspSessionState.Reconnecting,
-            RtspConnectionState.Stopped => RtspSessionState.Stopped,
-            _ => RtspSessionState.Idle
+            RtspConnectionState.Connecting => MediaPlaybackState.Opening,
+            RtspConnectionState.Connected => MediaPlaybackState.Playing,
+            RtspConnectionState.Reconnecting => MediaPlaybackState.Reconnecting,
+            RtspConnectionState.Stopped => MediaPlaybackState.Stopped,
+            _ => MediaPlaybackState.Idle
         });
     }
 
-    private void OnStreamError(object? sender, RtspStreamErrorEventArgs e)
+    private void OnStreamError(object? sender, RtspStreamErrorEventArgs args)
     {
-        var error = new RtspSessionError(
-            e.Error.Kind.ToString(),
-            e.Error.Message,
-            e.Error.WillRetry,
-            e.Error.Exception);
+        var error = new MediaPlaybackError(
+            args.Error.Kind.ToString(),
+            args.Error.Message,
+            args.Error.WillRetry,
+            args.Error.Exception);
         lock (_sync)
         {
             _lastError = error.Message;
@@ -309,12 +341,13 @@ public sealed class FfmpegRtspSession : IRtspSession
 
         RtspTelemetry.SessionErrors.Add(1);
         _activity?.SetStatus(ActivityStatusCode.Error, error.Message);
-        _logger.LogWarning(error.Exception, "RTSP stream error for {Host}: {Message}", Source.Uri.Host, error.Message);
-        if (!error.WillRetry)
+        _logger.LogWarning(error.Exception, "Media stream error for {Host}: {Message}", Source.Uri.Host, error.Message);
+        if (!error.IsRecoverable)
         {
-            TransitionTo(RtspSessionState.Faulted);
+            TransitionTo(MediaPlaybackState.Faulted);
         }
-        Error?.Invoke(this, new RtspSessionErrorEventArgs(error));
+
+        Error?.Invoke(this, new MediaPlaybackErrorEventArgs(error));
     }
 
     private void OnHardwareAccelerationChanged(object? sender, bool isActive)
@@ -336,87 +369,111 @@ public sealed class FfmpegRtspSession : IRtspSession
         RtspTelemetry.FrameDecodeDuration.Record(snapshot.DecodeMilliseconds);
     }
 
-    private void OnFrameLeaseReceived(RtspFrameLease lease)
+    private void OnFrameLeaseReceived(FfmpegMediaFrameLease lease)
     {
+        var deliveryCompleted = false;
         try
         {
-            EventHandler<RtspVideoFrame>? subscribers;
+            EventHandler<MediaVideoFrame>? subscribers;
             lock (_sync)
             {
                 subscribers = _frameReceived;
-                if (!Options.CaptureSnapshots && subscribers is null)
+            }
+
+            var frame = TryCopyFrame(lease, Options.CaptureSnapshots || subscribers is not null);
+            if (frame is not null)
+            {
+                lock (_sync)
                 {
-                    return;
-                }
-            }
-
-            if (lease.Buffer == IntPtr.Zero ||
-                lease.Width <= 0 ||
-                lease.Height <= 0 ||
-                lease.Stride <= 0)
-            {
-                return;
-            }
-
-            var byteCount = Math.Min(lease.Size, checked(lease.Stride * lease.Height));
-            if (byteCount <= 0)
-            {
-                return;
-            }
-
-            var data = GC.AllocateUninitializedArray<byte>(byteCount);
-            Marshal.Copy(lease.Buffer, data, 0, byteCount);
-            var capturedAt = DateTimeOffset.UtcNow;
-            var sequence = Interlocked.Increment(ref _frameSequence);
-            var frame = new RtspVideoFrame(
-                data,
-                lease.Width,
-                lease.Height,
-                lease.Stride,
-                RtspFramePixelFormat.Bgra32,
-                sequence,
-                capturedAt);
-
-            lock (_sync)
-            {
-                if (Options.CaptureSnapshots)
-                {
-                    _lastSnapshot = new RtspSnapshot(
-                        data,
-                        frame.Width,
-                        frame.Height,
-                        frame.Stride,
-                        frame.PixelFormat,
-                        capturedAt);
-                }
-            }
-
-            if (subscribers != null)
-            {
-                foreach (EventHandler<RtspVideoFrame> subscriber in subscribers.GetInvocationList())
-                {
-                    try
+                    if (Options.CaptureSnapshots)
                     {
-                        subscriber(this, frame);
-                    }
-                    catch (Exception exception)
-                    {
-                        _logger.LogWarning(exception, "An RTSP frame subscriber failed.");
+                        _lastSnapshot = new MediaSnapshot(
+                            frame.Data,
+                            frame.Width,
+                            frame.Height,
+                            frame.Stride,
+                            frame.PixelFormat,
+                            frame.CapturedAt);
                     }
                 }
 
-                RtspTelemetry.FramesDelivered.Add(1);
+                PublishFrame(subscribers, frame);
             }
+
+            MediaFrameDelivery.Deliver(
+                _videoOutput,
+                lease,
+                exception => _logger.LogWarning(exception, "A media video output failed."));
+            deliveryCompleted = true;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "A media video output failed.");
         }
         finally
         {
-            lease.Dispose();
+            if (!deliveryCompleted)
+            {
+                lease.Dispose();
+            }
         }
     }
 
-    private void TransitionTo(RtspSessionState state)
+    private MediaVideoFrame? TryCopyFrame(FfmpegMediaFrameLease lease, bool required)
     {
-        RtspSessionState oldState;
+        if (!required ||
+            lease.PixelFormat != RtspNativePixelFormat.Bgra32 ||
+            lease.Buffer == IntPtr.Zero ||
+            lease.Width <= 0 ||
+            lease.Height <= 0 ||
+            lease.Stride <= 0)
+        {
+            return null;
+        }
+
+        var byteCount = Math.Min(lease.Size, checked(lease.Stride * lease.Height));
+        if (byteCount <= 0)
+        {
+            return null;
+        }
+
+        var data = GC.AllocateUninitializedArray<byte>(byteCount);
+        Marshal.Copy(lease.Buffer, data, 0, byteCount);
+        return new MediaVideoFrame(
+            data,
+            lease.Width,
+            lease.Height,
+            lease.Stride,
+            MediaFramePixelFormat.Bgra32,
+            Interlocked.Increment(ref _frameSequence),
+            DateTimeOffset.UtcNow);
+    }
+
+    private void PublishFrame(EventHandler<MediaVideoFrame>? subscribers, MediaVideoFrame frame)
+    {
+        if (subscribers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler<MediaVideoFrame> subscriber in subscribers.GetInvocationList())
+        {
+            try
+            {
+                subscriber(this, frame);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(exception, "A media frame subscriber failed.");
+            }
+        }
+
+        RtspTelemetry.FramesDelivered.Add(1);
+    }
+
+    private void TransitionTo(MediaPlaybackState state)
+    {
+        MediaPlaybackState oldState;
         lock (_sync)
         {
             oldState = _state;
@@ -428,16 +485,12 @@ public sealed class FfmpegRtspSession : IRtspSession
             _state = state;
         }
 
-        StateChanged?.Invoke(this, new RtspSessionStateChangedEventArgs(oldState, state));
+        StateChanged?.Invoke(this, new MediaPlaybackStateChangedEventArgs(oldState, state));
     }
 
-    private void UpdateFrameDeliveryLocked()
-    {
-        _client?.SetFrameDeliveryEnabled(Options.CaptureSnapshots || _frameReceived != null);
-    }
+    private void UpdateFrameDeliveryLocked() =>
+        _client?.SetFrameDeliveryEnabled(
+            Options.CaptureSnapshots || _frameReceived is not null || _videoOutput is not null);
 
-    private void ThrowIfDisposed()
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-    }
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 }

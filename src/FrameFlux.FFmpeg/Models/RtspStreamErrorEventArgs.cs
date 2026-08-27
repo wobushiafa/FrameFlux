@@ -2,7 +2,7 @@ using System;
 
 namespace FrameFlux.FFmpeg;
 
-public sealed class RtspStreamErrorEventArgs : EventArgs
+internal sealed class RtspStreamErrorEventArgs : EventArgs
 {
     public RtspStreamErrorEventArgs(RtspStreamError error)
     {

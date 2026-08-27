@@ -1,7 +1,6 @@
 #if !ANDROID
 using System.Runtime.InteropServices;
 using Avalonia.Media;
-using FrameFlux.FFmpeg;
 using SharpGen.Runtime;
 using Vortice;
 using Vortice.Direct3D11;
@@ -61,24 +60,25 @@ internal sealed class WindowsD3D11Presenter : IDisposable
     }
 
     internal void Present(
-        RtspFrameLease lease,
+        int sourceWidth,
+        int sourceHeight,
+        MediaD3D11TextureBuffer frame,
         int outputWidth,
         int outputHeight,
         Stretch stretch)
     {
         if (_window == IntPtr.Zero ||
-            lease.PixelFormat != RtspNativePixelFormat.D3D11Texture ||
-            lease.D3D11Texture == IntPtr.Zero)
+            frame.Texture == IntPtr.Zero)
         {
             return;
         }
 
-        Marshal.AddRef(lease.D3D11Texture);
-        using var texture = new ID3D11Texture2D(lease.D3D11Texture);
+        Marshal.AddRef(frame.Texture);
+        using var texture = new ID3D11Texture2D(frame.Texture);
         EnsureDevice(texture);
         EnsurePipeline(
-            lease.Width,
-            lease.Height,
+            sourceWidth,
+            sourceHeight,
             Math.Max(1, outputWidth),
             Math.Max(1, outputHeight));
 
@@ -88,7 +88,7 @@ internal sealed class WindowsD3D11Presenter : IDisposable
             Texture2D = new Texture2DVideoProcessorInputView
             {
                 MipSlice = 0,
-                ArraySlice = checked((uint)lease.D3D11ArraySlice)
+                ArraySlice = checked((uint)frame.ArraySlice)
             }
         };
         _videoDevice!.CreateVideoProcessorInputView(
@@ -98,10 +98,10 @@ internal sealed class WindowsD3D11Presenter : IDisposable
             out var inputView).CheckError();
         using (inputView)
         {
-            var sourceRect = new RawRect(0, 0, lease.Width, lease.Height);
+            var sourceRect = new RawRect(0, 0, sourceWidth, sourceHeight);
             var destinationRect = CalculateDestinationRect(
-                lease.Width,
-                lease.Height,
+                sourceWidth,
+                sourceHeight,
                 _outputWidth,
                 _outputHeight,
                 stretch);

@@ -1,6 +1,6 @@
 namespace FrameFlux.FFmpeg;
 
-public enum RtspRenderMode
+internal enum RtspRenderMode
 {
     Auto,
     SoftwareBitmap,

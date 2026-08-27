@@ -17,14 +17,16 @@ await player.OpenAsync(
 await player.PlayAsync();
 ```
 
-`IRtspSession` remains available as a compatibility API.
-
 Stream sharing is opt-in. `Dedicated` keeps one physical input per player;
 `Shared` reuses an input only when the source and stream-affecting options
 match. Logical players retain separate events and stop independently. The
 shared input and its audio output are released after the last lease stops.
 
-Applications may provide their own platform FFmpeg shared-library directory before creating any player or session:
+Platform-specific native binaries are distributed separately in
+`FrameFlux.FFmpeg.NativeAssets.Windows`, `FrameFlux.FFmpeg.NativeAssets.Linux`,
+and `FrameFlux.FFmpeg.NativeAssets.Android`. The core package contains no
+native libraries. Applications may instead provide their own platform FFmpeg
+shared-library directory before creating a player:
 
 ```csharp
 FFmpegHelper.RegisterFFmpeg(@"C:\ffmpeg\bin");

@@ -1,6 +1,6 @@
 namespace FrameFlux.FFmpeg;
 
-public enum RtspHardwareAccelerationMode
+internal enum RtspHardwareAccelerationMode
 {
     Auto,
     Disabled,

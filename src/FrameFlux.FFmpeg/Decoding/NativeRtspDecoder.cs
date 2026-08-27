@@ -31,7 +31,7 @@ internal sealed class NativeDecodedFrame : IDisposable
     }
 }
 
-public sealed class RtspDecoder : IDisposable
+internal sealed class RtspDecoder : IDisposable
 {
     private readonly RtspStreamOptions _options;
     private readonly NativeRtspSessionHandle _session;
@@ -182,13 +182,13 @@ public sealed class RtspDecoder : IDisposable
             NativePixelFormat.D3D11Texture;
     }
 
-    internal RtspFrameLease CreateNativeFrameLease(
+    internal FfmpegMediaFrameLease CreateNativeFrameLease(
         NativeDecodedFrame frame,
         RtspNativePixelFormat pixelFormat)
     {
         var info = frame.Info;
         var handle = frame.DetachHandle();
-        var lease = new RtspFrameLease(IntPtr.Zero, 0, _ => handle.Dispose());
+        var lease = new FfmpegMediaFrameLease(IntPtr.Zero, 0, _ => handle.Dispose());
         if (pixelFormat == RtspNativePixelFormat.D3D11Texture)
         {
             lease.ResetD3D11(info.Width, info.Height, info.Plane0, checked((int)info.Plane1));
@@ -207,12 +207,6 @@ public sealed class RtspDecoder : IDisposable
             info.Stride2);
         return lease;
     }
-
-    internal bool CanCreateVaapiDmaBufLease(NativeDecodedFrame frame) => false;
-
-    internal RtspFrameLease CreateVaapiDmaBufFrameLease(NativeDecodedFrame frame) =>
-        throw new NotSupportedException(
-            "VAAPI DMA-BUF export is not exposed by the standardized FrameFlux native ABI yet.");
 
     public void Dispose()
     {
