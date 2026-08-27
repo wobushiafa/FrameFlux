@@ -19,7 +19,6 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
     private int _recoveryCount;
     private bool _needsRecovery;
     private bool _disposed;
-    private float _volume = 1f;
 
     internal WindowsWasapiAudioOutput(
         int sampleRate,
@@ -78,21 +77,6 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
                     _recoveryCount,
                     _lastError);
             }
-        }
-    }
-
-    public bool TrySetVolume(double volume, bool muted)
-    {
-        lock (_sync)
-        {
-            _volume = (float)(muted ? 0d : Math.Clamp(volume, 0d, 1d));
-            if (_output is null)
-            {
-                return false;
-            }
-
-            _output.Volume = _volume;
-            return true;
         }
     }
 
@@ -190,7 +174,6 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
             latency);
         output.PlaybackStopped += OnPlaybackStopped;
         output.Init(provider);
-        output.Volume = _volume;
         output.Play();
         _provider = provider;
         _output = output;

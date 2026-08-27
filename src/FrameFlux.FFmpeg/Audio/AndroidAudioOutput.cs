@@ -44,7 +44,6 @@ internal sealed class AndroidAudioOutput : IAudioOutput
     public int SampleRate { get; }
     public int Channels { get; }
     public bool IsOperational => _track is not null;
-    public bool TrySetVolume(double volume, bool muted) => false;
     public MediaAudioDiagnostics Diagnostics
     {
         get

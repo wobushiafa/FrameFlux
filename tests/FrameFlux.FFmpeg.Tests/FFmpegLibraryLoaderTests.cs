@@ -62,9 +62,6 @@ public sealed class FFmpegLibraryLoaderTests
 
         using (output)
         {
-            Assert.True(output.TrySetVolume(0.25d, muted: false));
-            Assert.True(output.TrySetVolume(1d, muted: true));
-            Assert.True(output.TrySetVolume(1d, muted: false));
             output.Write(new byte[48000 * 2 * sizeof(short) / 10]);
             Assert.True(
                 SpinWait.SpinUntil(() => output.PlayedFrames > 0, TimeSpan.FromSeconds(2)),
@@ -84,7 +81,27 @@ public sealed class FFmpegLibraryLoaderTests
         Assert.True(controller.IsOperational);
         Assert.Equal("Test", controller.Diagnostics.Backend);
         Assert.Equal("test-device", controller.Diagnostics.OutputDeviceId);
-        Assert.Equal(0.5d, output.Volume);
+    }
+
+    [Fact]
+    public void AudioPlaybackController_AppliesVolumeAndMuteBeforeOutput()
+    {
+        using var output = new TestAudioOutput();
+        using var controller = new AudioPlaybackController(
+            volume: 0.5d,
+            muted: false,
+            output: output);
+
+        controller.Write(CreateAudioFrame([10000, -10000]));
+        Assert.Equal([5000, -5000], ReadSamples(output.LastPcm));
+
+        controller.SetVolume(0.25d);
+        controller.Write(CreateAudioFrame([10000, -10000]));
+        Assert.Equal([2500, -2500], ReadSamples(output.LastPcm));
+
+        controller.SetMuted(true);
+        controller.Write(CreateAudioFrame([10000, -10000]));
+        Assert.Equal([0, 0], ReadSamples(output.LastPcm));
     }
 
     [Fact]
@@ -234,6 +251,21 @@ public sealed class FFmpegLibraryLoaderTests
             [directory.Path], "avcodec", FFmpegLibraryPlatform.Linux));
     }
 
+    private static NativeAudioFrame CreateAudioFrame(short[] samples)
+    {
+        var pcm = new byte[samples.Length * sizeof(short)];
+        Buffer.BlockCopy(samples, 0, pcm, 0, pcm.Length);
+        return new NativeAudioFrame(pcm, 48000, 2, 0, 1, 48000);
+    }
+
+    private static short[] ReadSamples(byte[]? pcm)
+    {
+        Assert.NotNull(pcm);
+        var samples = new short[pcm.Length / sizeof(short)];
+        Buffer.BlockCopy(pcm, 0, samples, 0, pcm.Length);
+        return samples;
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         internal TemporaryDirectory()
@@ -258,7 +290,7 @@ public sealed class FFmpegLibraryLoaderTests
         public bool IsOperational { get; set; } = true;
         public int WriteCount { get; private set; }
         public int ResetCount { get; private set; }
-        public double Volume { get; private set; }
+        public byte[]? LastPcm { get; private set; }
         public MediaAudioDiagnostics Diagnostics { get; } = new(
             "Test",
             "test-device",
@@ -271,15 +303,10 @@ public sealed class FFmpegLibraryLoaderTests
             0,
             null);
 
-        public bool TrySetVolume(double volume, bool muted)
-        {
-            Volume = muted ? 0d : volume;
-            return true;
-        }
-
         public void Write(byte[] pcm)
         {
             WriteCount++;
+            LastPcm = pcm.ToArray();
         }
 
         public void Reset()

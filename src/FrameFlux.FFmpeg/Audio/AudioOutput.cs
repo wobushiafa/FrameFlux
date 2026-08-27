@@ -9,7 +9,6 @@ internal interface IAudioOutput : IDisposable
     long PlayedFrames { get; }
     bool IsOperational { get; }
     MediaAudioDiagnostics Diagnostics { get; }
-    bool TrySetVolume(double volume, bool muted);
     void Reset();
     void Write(byte[] pcm);
 }
@@ -66,7 +65,6 @@ internal sealed class AudioPlaybackController : IDisposable
     private readonly double _gainMultiplier;
     private double _volume;
     private bool _muted;
-    private bool _outputVolumeActive;
     private double? _mediaStartSeconds;
     private double? _lastSubmittedEndSeconds;
     private long _outputFramesAtMediaStart;
@@ -86,7 +84,6 @@ internal sealed class AudioPlaybackController : IDisposable
         _gainMultiplier = DecibelsToAmplitude(gainDecibels);
         _volume = volume;
         _muted = muted;
-        _outputVolumeActive = _output.TrySetVolume(volume, muted);
     }
 
     internal bool IsOperational => _output.IsOperational;
@@ -112,17 +109,11 @@ internal sealed class AudioPlaybackController : IDisposable
     internal void SetVolume(double volume)
     {
         Volatile.Write(ref _volume, volume);
-        Volatile.Write(
-            ref _outputVolumeActive,
-            _output.TrySetVolume(volume, Volatile.Read(ref _muted)));
     }
 
     internal void SetMuted(bool muted)
     {
         Volatile.Write(ref _muted, muted);
-        Volatile.Write(
-            ref _outputVolumeActive,
-            _output.TrySetVolume(Volatile.Read(ref _volume), muted));
     }
 
     internal void Write(NativeAudioFrame frame)
@@ -159,10 +150,7 @@ internal sealed class AudioPlaybackController : IDisposable
         }
 
         ApplyGainMultiplier(frame.Data, _gainMultiplier);
-        if (!Volatile.Read(ref _outputVolumeActive))
-        {
-            ApplyVolume(frame.Data, Volatile.Read(ref _volume), Volatile.Read(ref _muted));
-        }
+        ApplyVolume(frame.Data, Volatile.Read(ref _volume), Volatile.Read(ref _muted));
         _output.Write(frame.Data);
     }
 
@@ -247,7 +235,6 @@ internal sealed class NullAudioOutput : IAudioOutput
         false,
         0,
         _lastError);
-    public bool TrySetVolume(double volume, bool muted) => false;
     public void Reset() { }
     public void Write(byte[] pcm) { }
     public void Dispose() { }

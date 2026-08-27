@@ -48,7 +48,6 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
     public int SampleRate { get; }
     public int Channels { get; }
     public bool IsOperational => _handle != IntPtr.Zero;
-    public bool TrySetVolume(double volume, bool muted) => false;
     public MediaAudioDiagnostics Diagnostics
     {
         get

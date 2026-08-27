@@ -103,18 +103,6 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput
         }
     }
 
-    public bool TrySetVolume(double volume, bool muted)
-    {
-        var normalized = muted ? 0d : Math.Clamp(volume, 0d, 1d);
-        var channelVolume = checked((uint)Math.Round(normalized * ushort.MaxValue));
-        var packedVolume = channelVolume | (channelVolume << 16);
-        lock (_sync)
-        {
-            return _handle != IntPtr.Zero &&
-                   waveOutSetVolume(_handle, packedVolume) == 0;
-        }
-    }
-
     public void Write(byte[] pcm)
     {
         if (pcm.Length == 0) return;
@@ -294,7 +282,6 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput
     [DllImport("winmm.dll")] private static extern uint waveOutOpen(out IntPtr handle, uint deviceId, ref WaveFormat format, IntPtr callback, IntPtr instance, uint flags);
     [DllImport("winmm.dll")] private static extern uint waveOutPause(IntPtr handle);
     [DllImport("winmm.dll")] private static extern uint waveOutRestart(IntPtr handle);
-    [DllImport("winmm.dll")] private static extern uint waveOutSetVolume(IntPtr handle, uint volume);
     [DllImport("winmm.dll")] private static extern uint waveOutGetPosition(IntPtr handle, ref MmTime time, int size);
     [DllImport("winmm.dll")] private static extern uint waveOutPrepareHeader(IntPtr handle, IntPtr header, int size);
     [DllImport("winmm.dll")] private static extern uint waveOutWrite(IntPtr handle, IntPtr header, int size);
