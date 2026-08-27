@@ -32,31 +32,39 @@ dotnet build examples/FrameFlux.Demo.Avalonia.Android -c Release
 
 Desktop demo builds automatically copy the current host RID's FFmpeg files from `native/artifacts/runtimes/{rid}/native` into their output. Override `FrameFluxNativeRuntimeIdentifier` when testing a different RID. Published applications should reference the matching `FrameFlux.FFmpeg.NativeAssets.*` package; the core `FrameFlux.FFmpeg` package contains no native binaries. The Android asset package maps each ABI-specific `.so` into the Android application package.
 
-On Windows, `MediaRenderPreference.NativeSurface` with hardware acceleration
-enabled uses FFmpeg D3D11VA frames directly in a D3D11 video processor and DXGI
-swap chain. This minimum-latency path does not read frames back to the CPU.
-Avalonia and WPF also support `MediaRenderPreference.CompositedGpu` for
-dedicated playback. It converts the decoder texture to a shared BGRA texture
-and imports it into the framework compositor, allowing framework controls to
-render above the video. Linux and Android currently use software frame
-delivery.
+On Windows, `MediaVideoPresentationMode.NativeSurface` uses FFmpeg D3D11VA
+frames directly in a D3D11 video processor and DXGI swap chain. This
+minimum-latency path does not read frames back to the CPU. Avalonia and WPF
+also support `MediaVideoPresentationMode.GpuComposition` for dedicated
+playback. It converts the decoder texture to a shared BGRA texture and imports
+it into the framework compositor, allowing framework controls to render above
+the video. Linux and Android currently use software frame delivery.
 
 Decoding and rendering are configured independently:
 
 ```csharp
-Player.OpenOptions = Player.OpenOptions with
+Player.OpenOptions = new MediaOpenOptions
 {
-    HardwareAcceleration = MediaHardwareAcceleration.Auto,
-    RenderPreference = MediaRenderPreference.CompositedGpu
+    Video = new MediaVideoOptions
+    {
+        DecodingPolicy = MediaVideoDecodingPolicy.HardwarePreferred
+    }
 };
+Player.PresentationMode = MediaVideoPresentationMode.GpuComposition;
 ```
 
-`HardwareAcceleration` accepts `Auto`, `Enabled`, or `Disabled`.
-`RenderPreference` accepts `Auto`, `Software`, `NativeSurface`, or
-`CompositedGpu`. Assigning new open options while an Avalonia or WPF player is
-active performs a controlled restart with the new pipeline. `NativeSurface`
-and `CompositedGpu` require D3D11 hardware frames; the demos resolve a
-`Disabled` decoding selection to `Software` rendering.
+`DecodingPolicy` accepts `Automatic`, `SoftwareOnly`,
+`HardwarePreferred`, or `HardwareRequired`. `PresentationMode` accepts
+`Automatic`, `SoftwareBitmap`, `NativeSurface`, or `GpuComposition`.
+Assigning either setting while an Avalonia or WPF player is active performs a
+controlled restart. Explicit GPU presentation requires Windows, a dedicated
+session, and hardware-capable decoding; unsupported explicit combinations
+throw instead of silently changing mode. `Automatic` presentation chooses GPU
+composition when available and software otherwise. When
+`HardwarePreferred` falls back to software decoding, the adaptive output
+switches to `SoftwareBitmap`; inspect `EffectivePresentationMode`,
+`IsHardwareVideoDecodingActive`, and `VideoDecoderDiagnostics` for the
+active pipeline.
 
 The current Android FFmpeg binaries are not aligned for Android 16's required
 16 KB memory page size. They work for current test targets, but must be rebuilt
@@ -101,10 +109,23 @@ await player.OpenAsync(
     MediaSource.Parse("rtsp://camera/stream"),
     new MediaOpenOptions
     {
-        EnableAudio = true,
-        LowLatency = true,
-        Transport = MediaTransport.Tcp,
-        StreamSharing = MediaStreamSharingMode.Shared
+        SessionSharing = MediaSessionSharingMode.Shared,
+        Network = new MediaNetworkOptions
+        {
+            Transport = MediaTransport.Tcp,
+            LatencyMode = MediaLatencyMode.Low,
+            Reconnect = new MediaReconnectOptions
+            {
+                IsEnabled = true,
+                MaximumAttempts = 5
+            }
+        },
+        Video = new MediaVideoOptions
+        {
+            DecodingPolicy = MediaVideoDecodingPolicy.HardwarePreferred,
+            SnapshotPolicy = MediaSnapshotPolicy.KeepLatestFrame
+        },
+        Audio = new MediaAudioOptions { IsEnabled = true }
     });
 
 player.Volume = 0.75;
@@ -112,13 +133,19 @@ player.IsMuted = false;
 await player.PlayAsync();
 ```
 
-`StreamSharing` defaults to `Dedicated`, so each player opens its own input.
+`SessionSharing` defaults to `Dedicated`, so each player opens its own input.
 Set it to `Shared` only when players with the same source and
 stream-affecting options should reuse one physical input. Each player keeps
 independent events and lifecycle; the input closes after the last player
 stops. A shared input has one audio output, so volume and mute are shared and
 the latest change applies. Shared playback uses software frame rendering
 because native surfaces cannot be fanned out to multiple views.
+
+Snapshot buffering defaults to `Disabled`. Use `KeepLatestFrame` only when
+`CaptureSnapshotAsync` is required; GPU-texture presentation does not retain
+a CPU snapshot. Applications that create many players can set
+`FfmpegMediaPlayerFactoryOptions.MaximumConcurrentOpenOperations`; the
+default is 8 and `null` removes the factory-level limit.
 
 Frames sent to a platform renderer use `IMediaFrameLease` through
 `IMediaVideoOutput`. A successful `TryPresent` transfers ownership to the
