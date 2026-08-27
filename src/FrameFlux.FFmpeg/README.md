@@ -28,7 +28,11 @@ await player.OpenAsync(
             DecodingPolicy = MediaVideoDecodingPolicy.HardwarePreferred,
             SnapshotPolicy = MediaSnapshotPolicy.KeepLatestFrame
         },
-        Audio = new MediaAudioOptions { IsEnabled = true }
+        Audio = new MediaAudioOptions
+        {
+            IsEnabled = true,
+            GainDecibels = 6
+        }
     });
 await player.PlayAsync();
 ```
@@ -51,6 +55,9 @@ Snapshot buffering is opt-in through
 `MediaSnapshotPolicy.KeepLatestFrame`. Network timeouts are nullable;
 `null` leaves the corresponding backend timeout disabled. Reconnect attempts
 and exponential backoff are configured under `Network.Reconnect`.
+`Audio.GainDecibels` is a source-level gain applied before the runtime
+`Volume` control. It defaults to `0 dB` and accepts `-60 dB` through
+`+24 dB`.
 
 Limit simultaneous FFmpeg open operations per factory when many players start
 together:

@@ -308,6 +308,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
             MaxVideoHeight = Options.Video.MaximumHeight ?? 0,
             LowLatency = Options.Network.LatencyMode == MediaLatencyMode.Low,
             EnableAudio = Options.Audio.IsEnabled,
+            AudioGainDecibels = Options.Audio.GainDecibels,
             Volume = _volume,
             IsMuted = _isMuted
         };

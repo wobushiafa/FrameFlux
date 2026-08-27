@@ -125,7 +125,11 @@ await player.OpenAsync(
             DecodingPolicy = MediaVideoDecodingPolicy.HardwarePreferred,
             SnapshotPolicy = MediaSnapshotPolicy.KeepLatestFrame
         },
-        Audio = new MediaAudioOptions { IsEnabled = true }
+        Audio = new MediaAudioOptions
+        {
+            IsEnabled = true,
+            GainDecibels = 6
+        }
     });
 
 player.Volume = 0.75;
@@ -146,6 +150,11 @@ Snapshot buffering defaults to `Disabled`. Use `KeepLatestFrame` only when
 a CPU snapshot. Applications that create many players can set
 `FfmpegMediaPlayerFactoryOptions.MaximumConcurrentOpenOperations`; the
 default is 8 and `null` removes the factory-level limit.
+
+`Audio.GainDecibels` applies source gain before runtime volume control. It
+defaults to `0 dB` and accepts `-60 dB` through `+24 dB`; positive gain can
+raise quiet camera audio and uses saturating conversion to prevent integer
+overflow. Keep `IMediaPlayer.Volume` in its standard `0..1` range.
 
 Frames sent to a platform renderer use `IMediaFrameLease` through
 `IMediaVideoOutput`. A successful `TryPresent` transfers ownership to the

@@ -101,6 +101,16 @@ public sealed class MediaConfigurationTests
             {
                 Video = new MediaVideoOptions { MaximumFrameRate = double.NaN }
             }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new MediaOpenOptions
+            {
+                Audio = new MediaAudioOptions { GainDecibels = double.NaN }
+            }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new MediaOpenOptions
+            {
+                Audio = new MediaAudioOptions { GainDecibels = 24.1d }
+            }.Validate());
     }
 
     [Fact]

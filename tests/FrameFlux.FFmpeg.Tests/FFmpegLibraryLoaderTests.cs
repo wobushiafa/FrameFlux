@@ -24,6 +24,25 @@ public sealed class FFmpegLibraryLoaderTests
     }
 
     [Fact]
+    public void PcmGainProcessor_AppliesDecibelsAndSaturates()
+    {
+        short[] source = [10000, -10000, 20000, -20000];
+        var pcm = new byte[source.Length * sizeof(short)];
+        Buffer.BlockCopy(source, 0, pcm, 0, pcm.Length);
+
+        AudioPlaybackController.ApplyGain(pcm, 6.020599913279624d);
+
+        var amplified = new short[source.Length];
+        Buffer.BlockCopy(pcm, 0, amplified, 0, pcm.Length);
+        Assert.Equal([20000, -20000, short.MaxValue, short.MinValue], amplified);
+
+        AudioPlaybackController.ApplyGain(pcm, -6.020599913279624d);
+        var attenuated = new short[source.Length];
+        Buffer.BlockCopy(pcm, 0, attenuated, 0, pcm.Length);
+        Assert.Equal([10000, -10000, 16384, -16384], attenuated);
+    }
+
+    [Fact]
     public void WindowsAudioOutput_QueuedSilenceAdvancesDeviceClock()
     {
         if (!OperatingSystem.IsWindows())

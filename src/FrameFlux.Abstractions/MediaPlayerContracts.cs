@@ -74,6 +74,7 @@ public sealed record MediaOpenOptions
 
         Network.Validate();
         Video.Validate();
+        Audio.Validate();
     }
 }
 
@@ -163,6 +164,20 @@ public sealed record MediaVideoOptions
 public sealed record MediaAudioOptions
 {
     public bool IsEnabled { get; init; } = true;
+
+    public double GainDecibels { get; init; }
+
+    internal void Validate()
+    {
+        if (!double.IsFinite(GainDecibels) ||
+            GainDecibels is < -60d or > 24d)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(GainDecibels),
+                GainDecibels,
+                "Audio gain must be finite and between -60 dB and +24 dB.");
+        }
+    }
 }
 
 public enum MediaSessionSharingMode

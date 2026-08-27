@@ -36,6 +36,8 @@ internal sealed class RtspStreamOptions
 
     public bool EnableAudio { get; init; } = true;
 
+    public double AudioGainDecibels { get; init; }
+
     public double Volume { get; init; } = 1d;
 
     public bool IsMuted { get; init; }

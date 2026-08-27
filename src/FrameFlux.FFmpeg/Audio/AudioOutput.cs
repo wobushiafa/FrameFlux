@@ -40,14 +40,19 @@ internal static class AudioOutputFactory
 internal sealed class AudioPlaybackController : IDisposable
 {
     private readonly IAudioOutput _output;
+    private readonly double _gainMultiplier;
     private double _volume;
     private bool _muted;
     private bool _outputVolumeActive;
     private double? _mediaStartSeconds;
 
-    internal AudioPlaybackController(double volume, bool muted)
+    internal AudioPlaybackController(
+        double volume,
+        bool muted,
+        double gainDecibels = 0d)
     {
         _output = AudioOutputFactory.Create();
+        _gainMultiplier = DecibelsToAmplitude(gainDecibels);
         _volume = volume;
         _muted = muted;
         _outputVolumeActive = _output.TrySetVolume(volume, muted);
@@ -87,6 +92,7 @@ internal sealed class AudioPlaybackController : IDisposable
             _mediaStartSeconds = presentation;
         }
 
+        ApplyGainMultiplier(frame.Data, _gainMultiplier);
         if (!Volatile.Read(ref _outputVolumeActive))
         {
             ApplyVolume(frame.Data, Volatile.Read(ref _volume), Volatile.Read(ref _muted));
@@ -95,6 +101,9 @@ internal sealed class AudioPlaybackController : IDisposable
     }
 
     public void Dispose() => _output.Dispose();
+
+    internal static void ApplyGain(Span<byte> pcm, double gainDecibels) =>
+        ApplyGainMultiplier(pcm, DecibelsToAmplitude(gainDecibels));
 
     internal static void ApplyVolume(Span<byte> pcm, double volume, bool muted)
     {
@@ -118,6 +127,26 @@ internal sealed class AudioPlaybackController : IDisposable
                 short.MaxValue);
         }
     }
+
+    private static void ApplyGainMultiplier(Span<byte> pcm, double multiplier)
+    {
+        if (multiplier == 1d)
+        {
+            return;
+        }
+
+        var samples = MemoryMarshal.Cast<byte, short>(pcm);
+        for (var index = 0; index < samples.Length; index++)
+        {
+            samples[index] = (short)Math.Clamp(
+                (int)Math.Round(samples[index] * multiplier),
+                short.MinValue,
+                short.MaxValue);
+        }
+    }
+
+    private static double DecibelsToAmplitude(double gainDecibels) =>
+        Math.Pow(10d, gainDecibels / 20d);
 }
 
 internal sealed class NullAudioOutput(int sampleRate, int channels) : IAudioOutput

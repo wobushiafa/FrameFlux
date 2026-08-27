@@ -182,7 +182,8 @@ internal sealed class RtspStreamClient : IDisposable
                     {
                         audioPlayback = new AudioPlaybackController(
                             Volatile.Read(ref _volume),
-                            Volatile.Read(ref _muted));
+                            Volatile.Read(ref _muted),
+                            _options.AudioGainDecibels);
                         Volatile.Write(ref _audioPlayback, audioPlayback);
                     }
                     if (openSemaphoreEntered)
@@ -544,6 +545,7 @@ internal sealed class RtspStreamClient : IDisposable
             MaxVideoHeight = options.MaxVideoHeight,
             LowLatency = options.LowLatency,
             EnableAudio = options.EnableAudio,
+            AudioGainDecibels = options.AudioGainDecibels,
             Volume = options.Volume,
             IsMuted = options.IsMuted,
             ForceOpaqueAlpha = options.ForceOpaqueAlpha,
