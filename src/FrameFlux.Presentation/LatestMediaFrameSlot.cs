@@ -54,6 +54,18 @@ internal sealed class LatestMediaFrameSlot : IDisposable
         frame?.Dispose();
     }
 
+    public void ReleasePendingFrame()
+    {
+        IMediaFrameLease? frame;
+        lock (_sync)
+        {
+            frame = _pendingFrame;
+            _pendingFrame = null;
+        }
+
+        frame?.Dispose();
+    }
+
     public void Dispose()
     {
         IMediaFrameLease? frame;

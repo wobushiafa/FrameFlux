@@ -65,7 +65,7 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
 
     internal void Clear()
     {
-        ClearPendingFrame();
+        _frameSlot.ReleasePendingFrame();
         _bitmap = null;
         InvalidateVisual();
     }

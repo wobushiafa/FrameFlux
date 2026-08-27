@@ -53,10 +53,11 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
 
     internal void Clear()
     {
-        ClearPendingFrame();
-        _bitmap?.Dispose();
+        _frameSlot.ReleasePendingFrame();
+        var bitmap = _bitmap;
         _bitmap = null;
         Source = null;
+        bitmap?.Dispose();
     }
 
     public void Dispose()

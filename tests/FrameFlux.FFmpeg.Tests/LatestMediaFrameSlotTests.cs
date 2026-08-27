@@ -77,6 +77,31 @@ public sealed class LatestMediaFrameSlotTests
     }
 
     [Fact]
+    public void ReleasePendingFrame_PreservesExistingPresentationSchedule()
+    {
+        using var slot = new LatestMediaFrameSlot();
+        var stoppedFrame = new TestFrameLease();
+        var restartedFrame = new TestFrameLease();
+        var nextFrame = new TestFrameLease();
+        Assert.True(slot.TrySubmit(stoppedFrame, out var initialSchedule));
+
+        slot.ReleasePendingFrame();
+        var accepted = slot.TrySubmit(restartedFrame, out var duplicateSchedule);
+
+        Assert.True(initialSchedule);
+        Assert.Equal(1, stoppedFrame.DisposeCount);
+        Assert.True(accepted);
+        Assert.False(duplicateSchedule);
+        Assert.Same(restartedFrame, slot.Take());
+        restartedFrame.Dispose();
+
+        Assert.True(slot.TrySubmit(nextFrame, out var nextSchedule));
+        Assert.True(nextSchedule);
+        Assert.Same(nextFrame, slot.Take());
+        nextFrame.Dispose();
+    }
+
+    [Fact]
     public void Dispose_DisposesPendingFrameAndRejectsWithoutTakingOwnership()
     {
         var slot = new LatestMediaFrameSlot();
