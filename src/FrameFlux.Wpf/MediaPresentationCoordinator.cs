@@ -9,16 +9,17 @@ internal sealed class MediaPresentationCoordinator : IDisposable
 {
     private readonly Grid _surface;
     private readonly Action<MediaVideoPresentationMode?> _modeChanged;
-    private readonly Action<Exception> _presentationFailed;
+    private readonly Action<MediaPresentationFailure> _presentationFailed;
     private readonly SoftwareBitmapMediaOutput _softwareOutput = new();
     private readonly D3D11ImageMediaOutput _compositedOutput = new();
     private readonly D3D11SwapChainPresenter _nativePresenter = new();
+    private bool _softwareFallbackRequested;
     private bool _disposed;
 
     internal MediaPresentationCoordinator(
         Grid surface,
         Action<MediaVideoPresentationMode?> modeChanged,
-        Action<Exception> presentationFailed)
+        Action<MediaPresentationFailure> presentationFailed)
     {
         _surface = surface;
         _modeChanged = modeChanged;
@@ -30,6 +31,7 @@ internal sealed class MediaPresentationCoordinator : IDisposable
         _compositedOutput.PresentationFailed += OnCompositedPresentationFailed;
         _surface.Children.Add(_compositedOutput);
         _nativePresenter.Visibility = Visibility.Collapsed;
+        _nativePresenter.PresentationFailed += OnNativePresentationFailed;
         _surface.Children.Add(_nativePresenter);
     }
 
@@ -39,7 +41,9 @@ internal sealed class MediaPresentationCoordinator : IDisposable
         Stretch stretch)
     {
         var plan = MediaPresentationPolicy.Resolve(
-            requestedMode,
+            _softwareFallbackRequested
+                ? MediaVideoPresentationMode.SoftwareBitmap
+                : requestedMode,
             options,
             OperatingSystem.IsWindows(),
             HasOverlayChildren());
@@ -71,12 +75,14 @@ internal sealed class MediaPresentationCoordinator : IDisposable
         _nativePresenter.SetStretch(stretch);
     }
 
+    internal void ClearSoftwareFallback() => _softwareFallbackRequested = false;
+
     internal void Reset()
     {
         _softwareOutput.Clear();
         _compositedOutput.Clear();
         _compositedOutput.Visibility = Visibility.Collapsed;
-        _nativePresenter.ClearPendingFrame();
+        _nativePresenter.Clear();
         _nativePresenter.Visibility = Visibility.Collapsed;
         _softwareOutput.Visibility = Visibility.Visible;
         _modeChanged(null);
@@ -93,6 +99,7 @@ internal sealed class MediaPresentationCoordinator : IDisposable
         _softwareOutput.FramePresented -= OnSoftwareFramePresented;
         _compositedOutput.FramePresented -= OnCompositedFramePresented;
         _compositedOutput.PresentationFailed -= OnCompositedPresentationFailed;
+        _nativePresenter.PresentationFailed -= OnNativePresentationFailed;
         _softwareOutput.Dispose();
         _compositedOutput.Dispose();
         _nativePresenter.Dispose();
@@ -120,6 +127,23 @@ internal sealed class MediaPresentationCoordinator : IDisposable
         _modeChanged(MediaVideoPresentationMode.GpuComposition);
     }
 
-    private void OnCompositedPresentationFailed(object? sender, Exception exception) =>
-        _presentationFailed(exception);
+    private void OnCompositedPresentationFailed(
+        object? sender,
+        MediaPresentationFailure failure) =>
+        ReportPresentationFailure(failure);
+
+    private void OnNativePresentationFailed(
+        object? sender,
+        MediaPresentationFailure failure) =>
+        ReportPresentationFailure(failure);
+
+    private void ReportPresentationFailure(MediaPresentationFailure failure)
+    {
+        if (failure.RequiresSoftwareFallback)
+        {
+            _softwareFallbackRequested = true;
+        }
+
+        _presentationFailed(failure);
+    }
 }

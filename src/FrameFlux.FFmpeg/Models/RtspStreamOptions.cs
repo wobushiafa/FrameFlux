@@ -36,6 +36,8 @@ internal sealed class RtspStreamOptions
 
     public bool EnableAudio { get; init; } = true;
 
+    public bool CreateSnapshotFrames { get; init; }
+
     public double AudioGainDecibels { get; init; }
 
     public string? AudioOutputDeviceId { get; init; }

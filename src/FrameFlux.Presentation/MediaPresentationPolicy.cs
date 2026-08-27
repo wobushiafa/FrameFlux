@@ -72,3 +72,29 @@ internal sealed class AdaptiveMediaVideoOutput(
                output.TryPresent(frame);
     }
 }
+
+internal sealed record MediaPresentationFailure(
+    Exception Exception,
+    int ConsecutiveFailureCount,
+    bool RequiresSoftwareFallback);
+
+internal sealed class MediaPresentationFailureTracker(int maximumAttempts = 3)
+{
+    private int _consecutiveFailureCount;
+
+    internal bool IsExhausted => _consecutiveFailureCount >= maximumAttempts;
+
+    internal MediaPresentationFailure Register(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        _consecutiveFailureCount++;
+        return new MediaPresentationFailure(
+            exception,
+            _consecutiveFailureCount,
+            IsExhausted);
+    }
+
+    internal void ReportSuccess() => _consecutiveFailureCount = 0;
+
+    internal void Reset() => _consecutiveFailureCount = 0;
+}

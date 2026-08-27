@@ -194,6 +194,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
             client.HardwareVideoDecodingChanged += OnHardwareVideoDecodingChanged;
             client.PerformanceUpdated += OnPerformanceUpdated;
             client.OnFrameLeaseReceived += OnFrameLeaseReceived;
+            client.OnSnapshotFrameLeaseReceived += OnSnapshotFrameLeaseReceived;
             _client = client;
             _activity = RtspTelemetry.Activities.StartActivity("media.session", ActivityKind.Client);
             _activity?.SetTag("media.source", Source.Uri.GetLeftPart(UriPartial.Authority));
@@ -266,6 +267,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
             client.HardwareVideoDecodingChanged -= OnHardwareVideoDecodingChanged;
             client.PerformanceUpdated -= OnPerformanceUpdated;
             client.OnFrameLeaseReceived -= OnFrameLeaseReceived;
+            client.OnSnapshotFrameLeaseReceived -= OnSnapshotFrameLeaseReceived;
             client.Dispose();
 
             lock (_sync)
@@ -313,6 +315,8 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
             MaxVideoHeight = Options.Video.MaximumHeight ?? 0,
             LowLatency = Options.Network.LatencyMode == MediaLatencyMode.Low,
             EnableAudio = Options.Audio.IsEnabled,
+            CreateSnapshotFrames =
+                Options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame,
             AudioGainDecibels = Options.Audio.GainDecibels,
             AudioOutputDeviceId = Options.Audio.OutputDeviceId,
             AudioBufferDurationMilliseconds = ToMilliseconds(Options.Audio.BufferDuration),
@@ -430,6 +434,41 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
             {
                 lease.Dispose();
             }
+        }
+    }
+
+    private void OnSnapshotFrameLeaseReceived(FfmpegMediaFrameLease lease)
+    {
+        try
+        {
+            var frame = TryCopyFrame(lease, required: true);
+            if (frame is null)
+            {
+                return;
+            }
+
+            EventHandler<MediaVideoFrame>? subscribers;
+            lock (_sync)
+            {
+                _lastSnapshot = new MediaSnapshot(
+                    frame.Data,
+                    frame.Width,
+                    frame.Height,
+                    frame.Stride,
+                    frame.PixelFormat,
+                    frame.CapturedAt);
+                subscribers = _frameReceived;
+            }
+
+            PublishFrame(subscribers, frame);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "A GPU snapshot frame could not be copied.");
+        }
+        finally
+        {
+            lease.Dispose();
         }
     }
 

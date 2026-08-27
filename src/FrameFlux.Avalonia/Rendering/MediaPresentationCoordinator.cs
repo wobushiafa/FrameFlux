@@ -7,18 +7,19 @@ namespace FrameFlux.Avalonia;
 internal sealed class MediaPresentationCoordinator : IAsyncDisposable
 {
     private readonly Action<MediaVideoPresentationMode?> _modeChanged;
-    private readonly Action<Exception> _presentationFailed;
+    private readonly Action<MediaPresentationFailure> _presentationFailed;
     private readonly SoftwareBitmapMediaOutput _softwareOutput = new();
 #if !ANDROID
     private readonly WindowsD3D11CompositionMediaOutput _compositedOutput = new();
     private readonly WindowsD3D11MediaOutput _nativeOutput = new();
 #endif
     private Control? _overlay;
+    private bool _softwareFallbackRequested;
     private bool _disposed;
 
     internal MediaPresentationCoordinator(
         Action<MediaVideoPresentationMode?> modeChanged,
-        Action<Exception> presentationFailed)
+        Action<MediaPresentationFailure> presentationFailed)
     {
         _modeChanged = modeChanged;
         _presentationFailed = presentationFailed;
@@ -31,6 +32,7 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         _compositedOutput.PresentationFailed += OnCompositedPresentationFailed;
         Surface.Children.Add(_compositedOutput);
         _nativeOutput.IsVisible = false;
+        _nativeOutput.PresentationFailed += OnNativePresentationFailed;
         Surface.Children.Add(_nativeOutput);
 #endif
     }
@@ -43,7 +45,9 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         Stretch stretch)
     {
         var plan = MediaPresentationPolicy.Resolve(
-            requestedMode,
+            _softwareFallbackRequested
+                ? MediaVideoPresentationMode.SoftwareBitmap
+                : requestedMode,
             options,
             OperatingSystem.IsWindows(),
             _overlay is not null);
@@ -91,13 +95,15 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         }
     }
 
+    internal void ClearSoftwareFallback() => _softwareFallbackRequested = false;
+
     internal void Reset()
     {
         _softwareOutput.Clear();
 #if !ANDROID
         _compositedOutput.Clear();
         _compositedOutput.IsVisible = false;
-        _nativeOutput.ClearPendingFrame();
+        _nativeOutput.Clear();
         _nativeOutput.IsVisible = false;
 #endif
         _softwareOutput.IsVisible = true;
@@ -118,6 +124,7 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         _compositedOutput.FramePresented -= OnCompositedFramePresented;
         _compositedOutput.PresentationFailed -= OnCompositedPresentationFailed;
         await _compositedOutput.DisposeAsync();
+        _nativeOutput.PresentationFailed -= OnNativePresentationFailed;
         _nativeOutput.Dispose();
 #endif
     }
@@ -141,7 +148,24 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         _modeChanged(MediaVideoPresentationMode.GpuComposition);
     }
 
-    private void OnCompositedPresentationFailed(object? sender, Exception exception) =>
-        _presentationFailed(exception);
+    private void OnCompositedPresentationFailed(
+        object? sender,
+        MediaPresentationFailure failure) =>
+        ReportPresentationFailure(failure);
+
+    private void OnNativePresentationFailed(
+        object? sender,
+        MediaPresentationFailure failure) =>
+        ReportPresentationFailure(failure);
+
+    private void ReportPresentationFailure(MediaPresentationFailure failure)
+    {
+        if (failure.RequiresSoftwareFallback)
+        {
+            _softwareFallbackRequested = true;
+        }
+
+        _presentationFailed(failure);
+    }
 #endif
 }

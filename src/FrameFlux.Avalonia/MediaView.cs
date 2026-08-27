@@ -231,6 +231,7 @@ public sealed class MediaView : Control, IAsyncDisposable
     {
         await _playback.StopAsync(cancellationToken);
         _presentation.Reset();
+        _presentation.ClearSoftwareFallback();
     }
 
     public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default) =>
@@ -297,12 +298,15 @@ public sealed class MediaView : Control, IAsyncDisposable
         {
             _ = AutoPlay ? StartSafelyAsync() : StopSafelyAsync();
         }
-        else if ((change.Property == SourceProperty ||
-                  change.Property == OpenOptionsProperty ||
-                  change.Property == PresentationModeProperty) &&
-                 _attached && AutoPlay)
+        else if (change.Property == SourceProperty ||
+                 change.Property == OpenOptionsProperty ||
+                 change.Property == PresentationModeProperty)
         {
-            _ = RestartSafelyAsync();
+            _presentation.ClearSoftwareFallback();
+            if (_attached && AutoPlay)
+            {
+                _ = RestartSafelyAsync();
+            }
         }
     }
 
@@ -345,12 +349,18 @@ public sealed class MediaView : Control, IAsyncDisposable
         _frameReceived?.Invoke(this, frame);
     }
 
-    private void OnPresentationFailed(Exception exception) =>
+    private void OnPresentationFailed(MediaPresentationFailure failure)
+    {
         ReportError(new MediaPlaybackError(
             "GpuCompositionFailed",
-            exception.Message,
-            IsRecoverable: false,
-            exception));
+            failure.Exception.Message,
+            IsRecoverable: true,
+            failure.Exception));
+        if (failure.RequiresSoftwareFallback)
+        {
+            _ = RestartForPresentationFallbackAsync();
+        }
+    }
 
     private void SetState(MediaPlaybackState state)
     {
@@ -381,6 +391,27 @@ public sealed class MediaView : Control, IAsyncDisposable
         if (_attached && AutoPlay && Source is not null)
         {
             await StartSafelyAsync();
+        }
+    }
+
+    private async Task RestartForPresentationFallbackAsync()
+    {
+        try
+        {
+            await _playback.StopAsync();
+            _presentation.Reset();
+            if (_attached && Source is not null)
+            {
+                await StartAsync();
+            }
+        }
+        catch (Exception exception)
+        {
+            ReportError(new MediaPlaybackError(
+                "PresentationFallbackFailed",
+                exception.Message,
+                IsRecoverable: false,
+                exception));
         }
     }
 

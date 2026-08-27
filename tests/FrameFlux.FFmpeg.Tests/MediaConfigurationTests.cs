@@ -186,4 +186,29 @@ public sealed class MediaConfigurationTests
 
         Assert.Equal(3, semaphore.CurrentCount);
     }
+
+    [Theory]
+    [InlineData(MediaSnapshotPolicy.Disabled, false)]
+    [InlineData(MediaSnapshotPolicy.KeepLatestFrame, true)]
+    public void SnapshotPolicy_ControlsGpuSnapshotCopies(
+        MediaSnapshotPolicy policy,
+        bool expected)
+    {
+        var session = new FfmpegMediaSession(
+            MediaSource.Parse("rtsp://camera/snapshot"),
+            new MediaOpenOptions
+            {
+                Video = new MediaVideoOptions { SnapshotPolicy = policy }
+            },
+            volume: 1d,
+            isMuted: false,
+            videoOutput: null);
+        var method = typeof(FfmpegMediaSession).GetMethod(
+            "CreateEngineOptions",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+
+        var options = Assert.IsType<RtspStreamOptions>(method?.Invoke(session, null));
+
+        Assert.Equal(expected, options.CreateSnapshotFrames);
+    }
 }

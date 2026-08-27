@@ -11,6 +11,7 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
 {
     private readonly LatestMediaFrameSlot _frameSlot = new();
     private readonly WindowsD3D11Presenter _presenter = new();
+    private readonly MediaPresentationFailureTracker _failureTracker = new();
     private Stretch _stretch = Stretch.Uniform;
     private bool _disposed;
 
@@ -25,9 +26,11 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
     public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
         storageKind == MediaFrameStorageKind.D3D11Texture;
 
+    internal event Action<object?, MediaPresentationFailure>? PresentationFailed;
+
     public bool TryPresent(IMediaFrameLease frame)
     {
-        if (_disposed ||
+        if (_disposed || _failureTracker.IsExhausted ||
             !frame.TryGetD3D11Texture(out _))
         {
             return false;
@@ -48,7 +51,7 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
             }
             catch
             {
-                ClearPendingFrame();
+                Clear();
             }
         }
 
@@ -79,9 +82,11 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
         _presenter.Dispose();
     }
 
-    internal void ClearPendingFrame()
+    internal void Clear()
     {
         _frameSlot.Clear();
+        _failureTracker.Reset();
+        _presenter.Reset();
     }
 
     private void PresentPendingFrame()
@@ -108,12 +113,15 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
                 (int)Math.Ceiling(Bounds.Width * scaling),
                 (int)Math.Ceiling(Bounds.Height * scaling),
                 ToMediaStretchMode(_stretch));
+            _failureTracker.ReportSuccess();
         }
         catch (Exception exception)
         {
             System.Diagnostics.Trace.TraceError(
                 "Avalonia D3D11 presentation failed: {0}",
                 exception);
+            _presenter.Reset();
+            PresentationFailed?.Invoke(this, _failureTracker.Register(exception));
         }
         finally
         {

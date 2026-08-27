@@ -246,6 +246,7 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         VerifyAccess();
         await _playback.StopAsync(cancellationToken);
         _presentation.Reset();
+        _presentation.ClearSoftwareFallback();
     }
 
     public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default) =>
@@ -273,6 +274,7 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
     private static void OnRestartPropertyChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
     {
         var view = (MediaView)sender;
+        view._presentation.ClearSoftwareFallback();
         if (view._isLoaded && (view.AutoPlay || view._playback.HasPlayer))
         {
             _ = view.RestartSafelyAsync();
@@ -386,12 +388,39 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
                 ReportError(args.Error);
             }));
 
-    private void OnPresentationFailed(Exception exception) =>
+    private void OnPresentationFailed(MediaPresentationFailure failure)
+    {
         ReportError(new MediaPlaybackError(
             "GpuCompositionFailed",
-            exception.Message,
-            IsRecoverable: false,
-            exception));
+            failure.Exception.Message,
+            IsRecoverable: true,
+            failure.Exception));
+        if (failure.RequiresSoftwareFallback)
+        {
+            _ = RestartForPresentationFallbackAsync();
+        }
+    }
+
+    private async Task RestartForPresentationFallbackAsync()
+    {
+        try
+        {
+            await _playback.StopAsync();
+            _presentation.Reset();
+            if (_isLoaded && Source is not null)
+            {
+                await StartAsync();
+            }
+        }
+        catch (Exception exception)
+        {
+            ReportError(new MediaPlaybackError(
+                "PresentationFallbackFailed",
+                exception.Message,
+                IsRecoverable: false,
+                exception));
+        }
+    }
 
     private void SetState(MediaPlaybackState state)
     {

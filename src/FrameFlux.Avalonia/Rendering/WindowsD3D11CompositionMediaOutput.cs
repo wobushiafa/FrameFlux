@@ -21,6 +21,7 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
     private readonly LatestMediaFrameSlot _frameSlot = new();
     private readonly WindowsD3D11CompositionTexture _texture = new();
     private readonly SemaphoreSlim _presentationGate = new(1, 1);
+    private readonly MediaPresentationFailureTracker _failureTracker = new();
     private ICompositionGpuInterop? _gpuInterop;
     private ICompositionImportedGpuImage? _importedImage;
     private CompositionDrawingSurface? _drawingSurface;
@@ -29,7 +30,6 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
     private long _importedGeneration;
     private int _sourceWidth;
     private int _sourceHeight;
-    private bool _faulted;
     private bool _disposed;
 
     internal WindowsD3D11CompositionMediaOutput()
@@ -52,14 +52,15 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
 
     internal event EventHandler? FramePresented;
 
-    internal event EventHandler<Exception>? PresentationFailed;
+    internal event Action<object?, MediaPresentationFailure>? PresentationFailed;
 
     public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
         storageKind == MediaFrameStorageKind.D3D11Texture;
 
     public bool TryPresent(IMediaFrameLease frame)
     {
-        if (_disposed || _faulted || !frame.TryGetD3D11Texture(out _))
+        if (_disposed || _failureTracker.IsExhausted ||
+            !frame.TryGetD3D11Texture(out _))
         {
             return false;
         }
@@ -88,7 +89,7 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
 
     internal void Clear()
     {
-        _faulted = false;
+        _failureTracker.Reset();
         _frameSlot.Clear();
         if (_surfaceVisual is not null)
         {
@@ -193,17 +194,17 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
                 checked((uint)ProducerKey));
             _surfaceVisual!.Visible = true;
             UpdateVisualLayout(Bounds.Size);
+            _failureTracker.ReportSuccess();
             FramePresented?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception exception)
         {
-            _faulted = true;
             System.Diagnostics.Trace.TraceError(
                 "Avalonia D3D11 composition presentation failed: {0}",
                 exception);
             await ReleaseImportedImageAsync();
             _texture.Reset();
-            PresentationFailed?.Invoke(this, exception);
+            PresentationFailed?.Invoke(this, _failureTracker.Register(exception));
         }
         finally
         {

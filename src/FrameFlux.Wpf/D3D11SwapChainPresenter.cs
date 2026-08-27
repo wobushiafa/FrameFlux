@@ -9,6 +9,7 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
 {
     private readonly LatestMediaFrameSlot _frameSlot = new();
     private readonly WindowsD3D11Presenter _presenter = new();
+    private readonly MediaPresentationFailureTracker _failureTracker = new();
     private int _targetWidth = 1;
     private int _targetHeight = 1;
     private int _stretchMode = (int)MediaStretchMode.Uniform;
@@ -22,9 +23,12 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
     public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
         storageKind == MediaFrameStorageKind.D3D11Texture;
 
+    internal event Action<object?, MediaPresentationFailure>? PresentationFailed;
+
     public bool TryPresent(IMediaFrameLease frame)
     {
-        if (_disposed || !frame.TryGetD3D11Texture(out _))
+        if (_disposed || _failureTracker.IsExhausted ||
+            !frame.TryGetD3D11Texture(out _))
         {
             return false;
         }
@@ -44,16 +48,18 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
             }
             catch
             {
-                ClearPendingFrame();
+                Clear();
             }
         }
 
         return true;
     }
 
-    internal void ClearPendingFrame()
+    internal void Clear()
     {
         _frameSlot.Clear();
+        _failureTracker.Reset();
+        _presenter.Reset();
     }
 
     protected override HandleRef BuildWindowCore(HandleRef hwndParent) =>
@@ -73,7 +79,7 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
 
     protected override void DestroyWindowCore(HandleRef hwnd)
     {
-        ClearPendingFrame();
+        _frameSlot.Clear();
         _presenter.DestroyWindow();
     }
 
@@ -112,6 +118,7 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
                     Volatile.Read(ref _targetWidth),
                     Volatile.Read(ref _targetHeight),
                     (MediaStretchMode)Volatile.Read(ref _stretchMode));
+                _failureTracker.ReportSuccess();
             }
         }
         catch (Exception exception)
@@ -119,6 +126,8 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
             System.Diagnostics.Trace.TraceError(
                 "WPF D3D11 presentation failed: {0}",
                 exception);
+            _presenter.Reset();
+            PresentationFailed?.Invoke(this, _failureTracker.Register(exception));
         }
         finally
         {

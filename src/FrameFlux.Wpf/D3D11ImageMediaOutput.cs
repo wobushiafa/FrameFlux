@@ -18,6 +18,7 @@ internal sealed class D3D11ImageMediaOutput :
     private readonly LatestMediaFrameSlot _frameSlot = new();
     private readonly WindowsD3D11CompositionTexture _texture = new(
         WindowsD3D11CompositionSynchronization.Shared);
+    private readonly MediaPresentationFailureTracker _failureTracker = new();
     private readonly D3DImage _image = new();
     private IDirect3D9Ex? _direct3D;
     private IDirect3DDevice9Ex? _device;
@@ -27,7 +28,6 @@ internal sealed class D3D11ImageMediaOutput :
     private int _width;
     private int _height;
     private bool _backBufferAttached;
-    private bool _faulted;
     private bool _disposed;
 
     internal D3D11ImageMediaOutput()
@@ -41,14 +41,15 @@ internal sealed class D3D11ImageMediaOutput :
 
     internal event EventHandler? FramePresented;
 
-    internal event EventHandler<Exception>? PresentationFailed;
+    internal event Action<object?, MediaPresentationFailure>? PresentationFailed;
 
     public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
         storageKind == MediaFrameStorageKind.D3D11Texture;
 
     public bool TryPresent(IMediaFrameLease frame)
     {
-        if (_disposed || _faulted || !frame.TryGetD3D11Texture(out _))
+        if (_disposed || _failureTracker.IsExhausted ||
+            !frame.TryGetD3D11Texture(out _))
         {
             return false;
         }
@@ -77,7 +78,7 @@ internal sealed class D3D11ImageMediaOutput :
 
     internal void Clear()
     {
-        _faulted = false;
+        _failureTracker.Reset();
         _frameSlot.Clear();
         ResetPresentationResources();
     }
@@ -159,16 +160,16 @@ internal sealed class D3D11ImageMediaOutput :
                 _image.Unlock();
             }
 
+            _failureTracker.ReportSuccess();
             FramePresented?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception exception)
         {
-            _faulted = true;
             System.Diagnostics.Trace.TraceError(
                 "WPF D3D11 composition presentation failed: {0}",
                 exception);
             ResetPresentationResources();
-            PresentationFailed?.Invoke(this, exception);
+            PresentationFailed?.Invoke(this, _failureTracker.Register(exception));
         }
         finally
         {
@@ -212,7 +213,8 @@ internal sealed class D3D11ImageMediaOutput :
         }
 
         throw new InvalidOperationException(
-            "No D3D9Ex adapter could open the D3D11 shared texture.");
+            $"None of the {_direct3D.AdapterCount} D3D9Ex adapters could open the D3D11 shared texture. " +
+            "The decoder and WPF renderer may be using incompatible graphics adapters.");
     }
 
     private IDirect3DDevice9Ex CreateDevice(uint adapter)

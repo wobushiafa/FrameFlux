@@ -141,6 +141,12 @@ internal sealed class WindowsD3D11Presenter : IDisposable
         }
     }
 
+    internal void Reset()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        DisposePipeline();
+    }
+
     public void Dispose()
     {
         if (_disposed)

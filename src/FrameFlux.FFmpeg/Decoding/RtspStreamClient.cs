@@ -40,6 +40,7 @@ internal sealed class RtspStreamClient : IDisposable
     internal delegate void FrameLeaseReceivedHandler(FfmpegMediaFrameLease lease);
     internal event FrameReceivedHandler? OnFrameReceived;
     internal event FrameLeaseReceivedHandler? OnFrameLeaseReceived;
+    internal event FrameLeaseReceivedHandler? OnSnapshotFrameLeaseReceived;
     internal event EventHandler<RtspStreamErrorEventArgs>? StreamError;
     internal event EventHandler<RtspConnectionStateChangedEventArgs>? ConnectionStateChanged;
     internal event EventHandler<bool>? HardwareVideoDecodingChanged;
@@ -247,7 +248,9 @@ internal sealed class RtspStreamClient : IDisposable
                                     frame.Info.Height,
                                     _options.MaxVideoWidth,
                                     _options.MaxVideoHeight);
-                                var useLeasedFrameDelivery = OnFrameLeaseReceived != null;
+                                var useLeasedFrameDelivery =
+                                    OnFrameLeaseReceived != null ||
+                                    OnSnapshotFrameLeaseReceived != null;
                                 IntPtr targetBuffer;
                                 var dispatchedNativeFrame = false;
 
@@ -256,11 +259,43 @@ internal sealed class RtspStreamClient : IDisposable
                                     decoder.TryGetNativePixelFormat(frame, out var nativePixelFormat))
                                 {
                                     var nativeConvertStart = Stopwatch.GetTimestamp();
+                                    if (_options.CreateSnapshotFrames &&
+                                        OnSnapshotFrameLeaseReceived is { } snapshotHandler)
+                                    {
+                                        var snapshotStride = outputSize.Width * 4;
+                                        var snapshotSize = snapshotStride * outputSize.Height;
+                                        FfmpegMediaFrameLease? snapshotLease =
+                                            RentFrameLease(snapshotSize);
+                                        try
+                                        {
+                                            decoder.ConvertFrameToBgra(
+                                                frame,
+                                                snapshotLease.Buffer,
+                                                outputSize.Width,
+                                                outputSize.Height,
+                                                snapshotStride);
+                                            snapshotLease.ResetBgra(
+                                                outputSize.Width,
+                                                outputSize.Height,
+                                                snapshotStride);
+                                            snapshotHandler.Invoke(snapshotLease);
+                                            snapshotLease = null;
+                                        }
+                                        finally
+                                        {
+                                            snapshotLease?.Dispose();
+                                        }
+                                    }
+
                                     frameLease = decoder.CreateNativeFrameLease(frame, nativePixelFormat);
                                     var nativeConvertElapsedTicks = Stopwatch.GetTimestamp() - nativeConvertStart;
                                     var nativeDispatchStart = Stopwatch.GetTimestamp();
-                                    OnFrameLeaseReceived?.Invoke(frameLease);
-                                    frameLease = null;
+                                    var nativeHandler = OnFrameLeaseReceived;
+                                    if (nativeHandler is not null)
+                                    {
+                                        nativeHandler.Invoke(frameLease);
+                                        frameLease = null;
+                                    }
                                     var nativeDispatchElapsedTicks = Stopwatch.GetTimestamp() - nativeDispatchStart;
                                     PublishPerformanceSnapshot(
                                         ref totalReadTicks,
@@ -314,7 +349,15 @@ internal sealed class RtspStreamClient : IDisposable
                                 if (frameLease != null)
                                 {
                                     frameLease.ResetBgra(outputSize.Width, outputSize.Height, dstStride);
-                                    OnFrameLeaseReceived?.Invoke(frameLease);
+                                    var handler = OnFrameLeaseReceived;
+                                    if (handler is null)
+                                    {
+                                        frameLease.Dispose();
+                                    }
+                                    else
+                                    {
+                                        handler.Invoke(frameLease);
+                                    }
                                     frameLease = null;
                                 }
                                 else
@@ -567,6 +610,7 @@ internal sealed class RtspStreamClient : IDisposable
             MaxVideoHeight = options.MaxVideoHeight,
             LowLatency = options.LowLatency,
             EnableAudio = options.EnableAudio,
+            CreateSnapshotFrames = options.CreateSnapshotFrames,
             AudioGainDecibels = options.AudioGainDecibels,
             AudioOutputDeviceId = options.AudioOutputDeviceId,
             AudioBufferDurationMilliseconds = options.AudioBufferDurationMilliseconds,

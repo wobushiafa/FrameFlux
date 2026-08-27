@@ -54,7 +54,10 @@ path cannot be established. Presentation is deliberately not part of
 `MediaView.PresentationMode`.
 
 Snapshot buffering is opt-in through
-`MediaSnapshotPolicy.KeepLatestFrame`. Network timeouts are nullable;
+`MediaSnapshotPolicy.KeepLatestFrame`. GPU presentation stays zero-readback
+when snapshots are disabled. When `KeepLatestFrame` is selected, the decoder
+creates a separate BGRA snapshot copy while the original D3D11 texture remains
+on the GPU presentation path. Network timeouts are nullable;
 `null` leaves the corresponding backend timeout disabled. Reconnect attempts
 and exponential backoff are configured under `Network.Reconnect`.
 `Audio.GainDecibels` is a source-level gain applied before the runtime

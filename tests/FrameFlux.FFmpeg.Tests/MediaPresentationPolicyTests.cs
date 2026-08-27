@@ -63,4 +63,32 @@ public sealed class MediaPresentationPolicyTests
                 platformGpuPresentationAvailable: true,
                 hasOverlay: true));
     }
+
+    [Fact]
+    public void PresentationFailures_RequireFallbackAfterThreeConsecutiveAttempts()
+    {
+        var tracker = new MediaPresentationFailureTracker();
+
+        Assert.False(tracker.Register(new InvalidOperationException("first")).RequiresSoftwareFallback);
+        Assert.False(tracker.Register(new InvalidOperationException("second")).RequiresSoftwareFallback);
+        var final = tracker.Register(new InvalidOperationException("third"));
+
+        Assert.True(final.RequiresSoftwareFallback);
+        Assert.True(tracker.IsExhausted);
+        Assert.Equal(3, final.ConsecutiveFailureCount);
+    }
+
+    [Fact]
+    public void SuccessfulPresentation_ResetsFailureBudget()
+    {
+        var tracker = new MediaPresentationFailureTracker();
+        _ = tracker.Register(new InvalidOperationException("first"));
+        _ = tracker.Register(new InvalidOperationException("second"));
+
+        tracker.ReportSuccess();
+
+        var next = tracker.Register(new InvalidOperationException("next"));
+        Assert.Equal(1, next.ConsecutiveFailureCount);
+        Assert.False(next.RequiresSoftwareFallback);
+    }
 }
