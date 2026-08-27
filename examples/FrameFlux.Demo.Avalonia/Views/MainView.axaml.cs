@@ -24,7 +24,7 @@ public sealed partial class MainView : UserControl
             LowLatency = true,
             Transport = MediaTransport.Tcp,
             HardwareAcceleration = MediaHardwareAcceleration.Enabled,
-            RenderPreference = MediaRenderPreference.NativeSurface,
+            RenderPreference = MediaRenderPreference.CompositedGpu,
             FallbackToSoftwareDecoding = false
         };
     }

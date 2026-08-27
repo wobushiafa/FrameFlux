@@ -36,7 +36,31 @@
                            IsPlaybackEnabled="False"
                            PlaybackError="Player_OnPlaybackError"
                            PlaybackStateChanged="Player_OnPlaybackStateChanged"
-                           Stretch="Uniform" />
+                           Stretch="Uniform">
+        <frameFlux:MediaView.Overlay>
+          <Border Margin="12"
+                  Padding="8,4"
+                  HorizontalAlignment="Right"
+                  VerticalAlignment="Top"
+                  Background="#B30B0D0F"
+                  CornerRadius="3"
+                  IsHitTestVisible="False">
+            <StackPanel Orientation="Horizontal"
+                        Spacing="6">
+              <Border Width="7"
+                      Height="7"
+                      VerticalAlignment="Center"
+                      Background="#EF4444"
+                      CornerRadius="4" />
+              <TextBlock VerticalAlignment="Center"
+                         FontSize="12"
+                         FontWeight="SemiBold"
+                         Foreground="White"
+                         Text="LIVE" />
+            </StackPanel>
+          </Border>
+        </frameFlux:MediaView.Overlay>
+      </frameFlux:MediaView>
     </Border>
 
     <Grid Grid.Row="2"
