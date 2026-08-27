@@ -63,40 +63,26 @@ public sealed class MediaView : Control, IAsyncDisposable
             view => view.EffectivePresentationMode);
 
     private readonly MediaPlaybackController _playback = new();
-    private readonly Grid _surface = new();
-    private readonly SoftwareBitmapMediaOutput _softwareOutput = new();
-#if !ANDROID
-    private readonly WindowsD3D11CompositionMediaOutput _compositedOutput = new();
-    private readonly WindowsD3D11MediaOutput _nativeOutput = new();
-#endif
+    private readonly MediaPresentationCoordinator _presentation;
     private EventHandler<MediaVideoFrame>? _frameReceived;
     private MediaPlaybackState _state = MediaPlaybackState.Idle;
     private MediaPlaybackError? _lastError;
     private bool _isHardwareVideoDecodingActive;
     private string _videoDecoderDiagnostics = "Not started";
     private MediaVideoPresentationMode? _effectivePresentationMode;
-    private Control? _attachedOverlay;
     private bool _attached;
     private bool _disposed;
 
     public MediaView()
     {
+        _presentation = new MediaPresentationCoordinator(
+            mode => EffectivePresentationMode = mode,
+            OnPresentationFailed);
         _playback.StateChanged += OnPlayerStateChanged;
         _playback.Error += OnPlayerError;
-        _softwareOutput.Stretch = Stretch;
-        _softwareOutput.FramePresented += OnSoftwareFramePresented;
-        _surface.Children.Add(_softwareOutput);
-#if !ANDROID
-        _compositedOutput.IsVisible = false;
-        _compositedOutput.Stretch = Stretch;
-        _compositedOutput.FramePresented += OnCompositedFramePresented;
-        _compositedOutput.PresentationFailed += OnCompositedPresentationFailed;
-        _surface.Children.Add(_compositedOutput);
-        _nativeOutput.IsVisible = false;
-        _surface.Children.Add(_nativeOutput);
-#endif
-        LogicalChildren.Add(_surface);
-        VisualChildren.Add(_surface);
+        _presentation.SetStretch(Stretch);
+        LogicalChildren.Add(_presentation.Surface);
+        VisualChildren.Add(_presentation.Surface);
     }
 
     public MediaSource? Source
@@ -226,8 +212,11 @@ public sealed class MediaView : Control, IAsyncDisposable
     public async ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        ResetPresentation();
-        var output = ConfigureVideoOutput(OpenOptions);
+        _presentation.Reset();
+        var output = _presentation.Configure(
+            OpenOptions,
+            PresentationMode,
+            Stretch);
         _playback.Volume = Volume;
         _playback.IsMuted = IsMuted;
         await _playback.StartAsync(
@@ -241,7 +230,7 @@ public sealed class MediaView : Control, IAsyncDisposable
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
         await _playback.StopAsync(cancellationToken);
-        ResetPresentation();
+        _presentation.Reset();
     }
 
     public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default) =>
@@ -270,13 +259,13 @@ public sealed class MediaView : Control, IAsyncDisposable
 
     protected override Size MeasureOverride(Size availableSize)
     {
-        _surface.Measure(availableSize);
-        return _surface.DesiredSize;
+        _presentation.Surface.Measure(availableSize);
+        return _presentation.Surface.DesiredSize;
     }
 
     protected override Size ArrangeOverride(Size finalSize)
     {
-        _surface.Arrange(new Rect(finalSize));
+        _presentation.Surface.Arrange(new Rect(finalSize));
         return finalSize;
     }
 
@@ -298,15 +287,11 @@ public sealed class MediaView : Control, IAsyncDisposable
         }
         else if (change.Property == StretchProperty)
         {
-            _softwareOutput.Stretch = Stretch;
-#if !ANDROID
-            _compositedOutput.Stretch = Stretch;
-            _nativeOutput.Stretch = Stretch;
-#endif
+            _presentation.SetStretch(Stretch);
         }
         else if (change.Property == OverlayProperty)
         {
-            AttachOverlay();
+            _presentation.SetOverlay(Overlay);
         }
         else if (change.Property == AutoPlayProperty)
         {
@@ -332,103 +317,13 @@ public sealed class MediaView : Control, IAsyncDisposable
         _disposed = true;
         _playback.StateChanged -= OnPlayerStateChanged;
         _playback.Error -= OnPlayerError;
-        _softwareOutput.FramePresented -= OnSoftwareFramePresented;
         if (_frameReceived is not null)
         {
             _playback.FrameReceived -= OnFrameReceived;
         }
         await _playback.DisposeAsync();
-        _softwareOutput.Dispose();
-#if !ANDROID
-        _compositedOutput.FramePresented -= OnCompositedFramePresented;
-        _compositedOutput.PresentationFailed -= OnCompositedPresentationFailed;
-        await _compositedOutput.DisposeAsync();
-        _nativeOutput.Dispose();
-#endif
+        await _presentation.DisposeAsync();
         GC.SuppressFinalize(this);
-    }
-
-    private IMediaVideoOutput ConfigureVideoOutput(MediaOpenOptions options)
-    {
-        options.Validate();
-        if (!Enum.IsDefined(PresentationMode))
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(PresentationMode),
-                PresentationMode,
-                "Unsupported presentation mode.");
-        }
-
-        if (Overlay is not null && PresentationMode == MediaVideoPresentationMode.NativeSurface)
-        {
-            throw new InvalidOperationException(
-                "Overlay content requires SoftwareBitmap or GpuComposition presentation.");
-        }
-
-        var gpuPresentationAvailable =
-            OperatingSystem.IsWindows() &&
-            options.SessionSharing == MediaSessionSharingMode.Dedicated &&
-            options.Video.DecodingPolicy != MediaVideoDecodingPolicy.SoftwareOnly;
-        if (!gpuPresentationAvailable &&
-            PresentationMode is MediaVideoPresentationMode.NativeSurface or
-                MediaVideoPresentationMode.GpuComposition)
-        {
-            throw new InvalidOperationException(
-                "The requested GPU presentation mode requires Windows, a dedicated session, and hardware-capable decoding.");
-        }
-
-        var effectiveMode = PresentationMode == MediaVideoPresentationMode.Automatic
-            ? gpuPresentationAvailable
-                ? MediaVideoPresentationMode.GpuComposition
-                : MediaVideoPresentationMode.SoftwareBitmap
-            : PresentationMode;
-        var useNativeOutput = effectiveMode == MediaVideoPresentationMode.NativeSurface;
-        var useCompositedOutput = effectiveMode == MediaVideoPresentationMode.GpuComposition;
-#if !ANDROID
-        _compositedOutput.Stretch = Stretch;
-        _compositedOutput.IsVisible = useCompositedOutput;
-        _nativeOutput.Stretch = Stretch;
-        _nativeOutput.IsVisible = useNativeOutput;
-        var primaryOutput = useNativeOutput
-            ? (IMediaVideoOutput)_nativeOutput
-            : useCompositedOutput
-                ? _compositedOutput
-                : _softwareOutput;
-        var output = useNativeOutput || useCompositedOutput
-            ? new AdaptiveMediaVideoOutput(primaryOutput, _softwareOutput)
-            : primaryOutput;
-#else
-        var output = (IMediaVideoOutput)_softwareOutput;
-#endif
-        _softwareOutput.IsVisible = !useNativeOutput && !useCompositedOutput;
-        EffectivePresentationMode = effectiveMode;
-        return output;
-    }
-
-    private void AttachOverlay()
-    {
-        if (_attachedOverlay is not null)
-        {
-            _surface.Children.Remove(_attachedOverlay);
-        }
-
-        _attachedOverlay = Overlay;
-        if (_attachedOverlay is not null)
-        {
-            _surface.Children.Add(_attachedOverlay);
-        }
-    }
-
-    private void ResetPresentation()
-    {
-        _softwareOutput.Clear();
-#if !ANDROID
-        _compositedOutput.Clear();
-        _compositedOutput.IsVisible = false;
-        _nativeOutput.ClearPendingFrame();
-        _nativeOutput.IsVisible = false;
-#endif
-        _softwareOutput.IsVisible = true;
     }
 
     private void OnPlayerStateChanged(object? sender, MediaPlaybackStateChangedEventArgs args) =>
@@ -450,32 +345,12 @@ public sealed class MediaView : Control, IAsyncDisposable
         _frameReceived?.Invoke(this, frame);
     }
 
-    private void OnSoftwareFramePresented(object? sender, EventArgs args)
-    {
-#if !ANDROID
-        _compositedOutput.IsVisible = false;
-        _nativeOutput.IsVisible = false;
-#endif
-        _softwareOutput.IsVisible = true;
-        EffectivePresentationMode = MediaVideoPresentationMode.SoftwareBitmap;
-    }
-
-#if !ANDROID
-    private void OnCompositedFramePresented(object? sender, EventArgs args)
-    {
-        _nativeOutput.IsVisible = false;
-        _softwareOutput.IsVisible = false;
-        _compositedOutput.IsVisible = true;
-        EffectivePresentationMode = MediaVideoPresentationMode.GpuComposition;
-    }
-
-    private void OnCompositedPresentationFailed(object? sender, Exception exception) =>
+    private void OnPresentationFailed(Exception exception) =>
         ReportError(new MediaPlaybackError(
             "GpuCompositionFailed",
             exception.Message,
             IsRecoverable: false,
             exception));
-#endif
 
     private void SetState(MediaPlaybackState state)
     {
@@ -544,23 +419,4 @@ public sealed class MediaView : Control, IAsyncDisposable
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 
-    private sealed class AdaptiveMediaVideoOutput(
-        IMediaVideoOutput primary,
-        IMediaVideoOutput softwareFallback) : IMediaVideoOutput
-    {
-        public MediaFrameStorageKind PreferredFrameStorage => primary.PreferredFrameStorage;
-
-        public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
-            primary.Supports(storageKind, pixelFormat) ||
-            softwareFallback.Supports(storageKind, pixelFormat);
-
-        public bool TryPresent(IMediaFrameLease frame)
-        {
-            var output = primary.Supports(frame.StorageKind, frame.PixelFormat)
-                ? primary
-                : softwareFallback;
-            return output.Supports(frame.StorageKind, frame.PixelFormat) &&
-                   output.TryPresent(frame);
-        }
-    }
 }
