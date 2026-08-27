@@ -6,15 +6,36 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
 {
     private IntPtr _handle;
     private long _submittedFrames;
+    private readonly AudioOutputConfiguration _configuration;
+    private readonly string _deviceName;
+    private string? _lastError;
 
-    internal LinuxAlsaAudioOutput(int sampleRate, int channels)
+    internal LinuxAlsaAudioOutput(
+        int sampleRate,
+        int channels,
+        AudioOutputConfiguration? configuration = null)
     {
         SampleRate = sampleRate;
         Channels = channels;
-        ThrowIfFailed(snd_pcm_open(out _handle, "default", 0, 0), "snd_pcm_open");
+        _configuration = configuration ?? new AudioOutputConfiguration(
+            null,
+            TimeSpan.FromMilliseconds(100));
+        _deviceName = _configuration.OutputDeviceId ?? "default";
+        ThrowIfFailed(snd_pcm_open(out _handle, _deviceName, 0, 0), "snd_pcm_open");
         try
         {
-            ThrowIfFailed(snd_pcm_set_params(_handle, 2, 3, checked((uint)channels), checked((uint)sampleRate), 1, 100000), "snd_pcm_set_params");
+            var latencyMicroseconds = checked((uint)Math.Ceiling(
+                _configuration.BufferDuration.TotalMilliseconds * 1000d));
+            ThrowIfFailed(
+                snd_pcm_set_params(
+                    _handle,
+                    2,
+                    3,
+                    checked((uint)channels),
+                    checked((uint)sampleRate),
+                    1,
+                    latencyMicroseconds),
+                "snd_pcm_set_params");
         }
         catch
         {
@@ -28,6 +49,24 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
     public int Channels { get; }
     public bool IsOperational => _handle != IntPtr.Zero;
     public bool TrySetVolume(double volume, bool muted) => false;
+    public MediaAudioDiagnostics Diagnostics
+    {
+        get
+        {
+            var queuedFrames = GetQueuedFrames();
+            return new MediaAudioDiagnostics(
+                "ALSA",
+                _configuration.OutputDeviceId,
+                _deviceName,
+                SampleRate,
+                Channels,
+                _configuration.BufferDuration,
+                TimeSpan.FromSeconds((double)queuedFrames / SampleRate),
+                _handle != IntPtr.Zero,
+                0,
+                _lastError);
+        }
+    }
     public long PlayedFrames
     {
         get
@@ -54,7 +93,11 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
                 if (result < 0)
                 {
                     result = snd_pcm_recover(_handle, (int)result, 1);
-                    if (result < 0) ThrowIfFailed((int)result, "snd_pcm_writei");
+                    if (result < 0)
+                    {
+                        _lastError = $"snd_pcm_writei failed with ALSA code {result}.";
+                        ThrowIfFailed((int)result, "snd_pcm_writei");
+                    }
                     continue;
                 }
                 var written = checked((int)result);
@@ -67,6 +110,13 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
         {
             pinned.Free();
         }
+    }
+
+    private long GetQueuedFrames()
+    {
+        return _handle != IntPtr.Zero && snd_pcm_delay(_handle, out var delay) >= 0
+            ? Math.Max(0, delay)
+            : 0;
     }
 
     public void Dispose()

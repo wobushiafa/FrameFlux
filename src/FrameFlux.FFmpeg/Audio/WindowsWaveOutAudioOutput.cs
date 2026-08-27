@@ -11,6 +11,8 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput
     private readonly object _sync = new();
     private readonly Queue<PendingBuffer> _pendingBuffers = [];
     private readonly long _startBufferFrames;
+    private readonly AudioOutputConfiguration _configuration;
+    private readonly string? _fallbackError;
     private IntPtr _handle;
     private long _completedFrames;
     private uint _lastDevicePosition;
@@ -18,11 +20,21 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput
     private long _pendingFrames;
     private bool _started;
 
-    internal WindowsWaveOutAudioOutput(int sampleRate, int channels)
+    internal WindowsWaveOutAudioOutput(
+        int sampleRate,
+        int channels,
+        AudioOutputConfiguration? configuration = null,
+        string? fallbackError = null)
     {
         SampleRate = sampleRate;
         Channels = channels;
-        _startBufferFrames = Math.Max(1, sampleRate * 80L / 1000L);
+        _configuration = configuration ?? new AudioOutputConfiguration(
+            null,
+            TimeSpan.FromMilliseconds(100));
+        _fallbackError = fallbackError;
+        _startBufferFrames = Math.Max(
+            1,
+            (long)Math.Ceiling(sampleRate * _configuration.BufferDuration.TotalSeconds));
         var format = new WaveFormat
         {
             FormatTag = 1,
@@ -70,6 +82,26 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput
         }
     }
     public bool IsOperational => _handle != IntPtr.Zero;
+    public MediaAudioDiagnostics Diagnostics
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return new MediaAudioDiagnostics(
+                    "waveOut",
+                    null,
+                    "Windows default audio output",
+                    SampleRate,
+                    Channels,
+                    _configuration.BufferDuration,
+                    TimeSpan.FromSeconds((double)_pendingFrames / SampleRate),
+                    _handle != IntPtr.Zero,
+                    0,
+                    _fallbackError);
+            }
+        }
+    }
 
     public bool TrySetVolume(double volume, bool muted)
     {

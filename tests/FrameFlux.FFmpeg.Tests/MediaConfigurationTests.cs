@@ -111,6 +111,27 @@ public sealed class MediaConfigurationTests
             {
                 Audio = new MediaAudioOptions { GainDecibels = 24.1d }
             }.Validate());
+        Assert.Throws<ArgumentException>(() =>
+            new MediaOpenOptions
+            {
+                Audio = new MediaAudioOptions { OutputDeviceId = " " }
+            }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new MediaOpenOptions
+            {
+                Audio = new MediaAudioOptions
+                {
+                    BufferDuration = TimeSpan.FromMilliseconds(9)
+                }
+            }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new MediaOpenOptions
+            {
+                Audio = new MediaAudioOptions
+                {
+                    BufferDuration = TimeSpan.FromMilliseconds(2001)
+                }
+            }.Validate());
     }
 
     [Fact]

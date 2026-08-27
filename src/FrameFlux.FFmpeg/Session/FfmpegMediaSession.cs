@@ -143,7 +143,10 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
                     _lastPerformance.ReadMilliseconds,
                     _lastPerformance.DecodeMilliseconds,
                     _lastPerformance.SampleCount,
-                    _lastError);
+                    _lastError)
+                {
+                    Audio = _client?.AudioDiagnostics ?? MediaAudioDiagnostics.Empty
+                };
             }
         }
     }
@@ -309,6 +312,8 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
             LowLatency = Options.Network.LatencyMode == MediaLatencyMode.Low,
             EnableAudio = Options.Audio.IsEnabled,
             AudioGainDecibels = Options.Audio.GainDecibels,
+            AudioOutputDeviceId = Options.Audio.OutputDeviceId,
+            AudioBufferDurationMilliseconds = ToMilliseconds(Options.Audio.BufferDuration),
             Volume = _volume,
             IsMuted = _isMuted
         };

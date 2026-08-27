@@ -73,6 +73,72 @@ public sealed class FFmpegLibraryLoaderTests
     }
 
     [Fact]
+    public void AudioPlaybackController_ExposesBackendDiagnostics()
+    {
+        using var output = new TestAudioOutput();
+        using var controller = new AudioPlaybackController(
+            volume: 0.5d,
+            muted: false,
+            output: output);
+
+        Assert.True(controller.IsOperational);
+        Assert.Equal("Test", controller.Diagnostics.Backend);
+        Assert.Equal("test-device", controller.Diagnostics.OutputDeviceId);
+        Assert.Equal(0.5d, output.Volume);
+    }
+
+    [Fact]
+    public void AudioPlaybackController_AllowsFaultedBackendToRecoverOnWrite()
+    {
+        using var output = new TestAudioOutput { IsOperational = false };
+        using var controller = new AudioPlaybackController(
+            volume: 1d,
+            muted: false,
+            output: output);
+        var frame = new NativeAudioFrame(
+            new byte[4],
+            48000,
+            2,
+            0,
+            1,
+            48000);
+
+        controller.Write(frame);
+
+        Assert.Equal(1, output.WriteCount);
+    }
+
+    [Fact]
+    public void WasapiAudioOutput_ReportsSelectedEndpointWhenAvailable()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        WindowsWasapiAudioOutput? output;
+        try
+        {
+            output = new WindowsWasapiAudioOutput(
+                48000,
+                2,
+                new AudioOutputConfiguration(null, TimeSpan.FromMilliseconds(100)));
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        using (output)
+        {
+            Assert.Equal("WASAPI", output.Diagnostics.Backend);
+            Assert.False(string.IsNullOrWhiteSpace(output.Diagnostics.OutputDeviceId));
+            Assert.False(string.IsNullOrWhiteSpace(output.Diagnostics.OutputDeviceName));
+            Assert.True(output.IsOperational);
+        }
+    }
+
+    [Fact]
     public void BundledWindowsLibraries_LoadDirectlyWithoutFrameFluxAdapter()
     {
         if (!OperatingSystem.IsWindows() || RuntimeInformation.ProcessArchitecture != Architecture.X64)
@@ -154,5 +220,41 @@ public sealed class FFmpegLibraryLoaderTests
         internal string Path { get; }
 
         public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+
+    private sealed class TestAudioOutput : IAudioOutput
+    {
+        public int SampleRate => 48000;
+        public int Channels => 2;
+        public long PlayedFrames => 0;
+        public bool IsOperational { get; set; } = true;
+        public int WriteCount { get; private set; }
+        public double Volume { get; private set; }
+        public MediaAudioDiagnostics Diagnostics { get; } = new(
+            "Test",
+            "test-device",
+            "Test device",
+            48000,
+            2,
+            TimeSpan.FromMilliseconds(100),
+            TimeSpan.Zero,
+            true,
+            0,
+            null);
+
+        public bool TrySetVolume(double volume, bool muted)
+        {
+            Volume = muted ? 0d : volume;
+            return true;
+        }
+
+        public void Write(byte[] pcm)
+        {
+            WriteCount++;
+        }
+
+        public void Dispose()
+        {
+        }
     }
 }

@@ -16,6 +16,7 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
     <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="NAudio" Condition="'$(TargetFramework)' == 'net8.0'" />
     <InternalsVisibleTo Include="FrameFlux.FFmpeg.Tests" />
   </ItemGroup>
 

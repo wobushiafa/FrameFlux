@@ -6,23 +6,36 @@ namespace FrameFlux.FFmpeg;
 internal sealed class AndroidAudioOutput : IAudioOutput
 {
     private AudioTrack? _track;
+    private readonly AudioOutputConfiguration _configuration;
+    private readonly int _bufferSizeBytes;
+    private long _submittedFrames;
+    private string? _lastError;
     private uint _lastHead;
     private long _headWraps;
 
-    internal AndroidAudioOutput(int sampleRate, int channels)
+    internal AndroidAudioOutput(
+        int sampleRate,
+        int channels,
+        AudioOutputConfiguration? configuration = null)
     {
         SampleRate = sampleRate;
         Channels = channels;
+        _configuration = configuration ?? new AudioOutputConfiguration(
+            null,
+            TimeSpan.FromMilliseconds(100));
         var channelMask = channels == 1 ? ChannelOut.Mono : ChannelOut.Stereo;
         var minimum = AudioTrack.GetMinBufferSize(sampleRate, channelMask, Encoding.Pcm16bit);
         if (minimum <= 0) throw new InvalidOperationException($"AudioTrack buffer query failed with code {minimum}.");
+        var requested = checked((int)Math.Ceiling(
+            sampleRate * channels * sizeof(short) * _configuration.BufferDuration.TotalSeconds));
+        _bufferSizeBytes = Math.Max(minimum, requested);
 #pragma warning disable CS0618, CA1422
         _track = new AudioTrack(
             Android.Media.Stream.Music,
             sampleRate,
             channels == 1 ? ChannelConfiguration.Mono : ChannelConfiguration.Stereo,
             Encoding.Pcm16bit,
-            minimum * 2,
+            _bufferSizeBytes,
             AudioTrackMode.Stream);
 #pragma warning restore CS0618, CA1422
         _track.Play();
@@ -32,6 +45,24 @@ internal sealed class AndroidAudioOutput : IAudioOutput
     public int Channels { get; }
     public bool IsOperational => _track is not null;
     public bool TrySetVolume(double volume, bool muted) => false;
+    public MediaAudioDiagnostics Diagnostics
+    {
+        get
+        {
+            var queuedFrames = Math.Max(0, Interlocked.Read(ref _submittedFrames) - PlayedFrames);
+            return new MediaAudioDiagnostics(
+                "AudioTrack",
+                null,
+                "Android system audio output",
+                SampleRate,
+                Channels,
+                _configuration.BufferDuration,
+                TimeSpan.FromSeconds((double)queuedFrames / SampleRate),
+                _track is not null,
+                0,
+                _lastError);
+        }
+    }
     public long PlayedFrames
     {
         get
@@ -52,7 +83,12 @@ internal sealed class AndroidAudioOutput : IAudioOutput
         var written = OperatingSystem.IsAndroidVersionAtLeast(23)
             ? track.Write(pcm, 0, pcm.Length, WriteMode.Blocking)
             : track.Write(pcm, 0, pcm.Length);
-        if (written < 0) throw new InvalidOperationException($"AudioTrack.Write failed with code {written}.");
+        if (written < 0)
+        {
+            _lastError = $"AudioTrack.Write failed with code {written}.";
+            throw new InvalidOperationException(_lastError);
+        }
+        Interlocked.Add(ref _submittedFrames, written / (Channels * sizeof(short)));
     }
 
     public void Dispose()

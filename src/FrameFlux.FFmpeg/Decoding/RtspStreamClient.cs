@@ -27,7 +27,10 @@ internal sealed class RtspStreamClient : IDisposable
     private double _volume;
     private bool _muted;
     private AudioPlaybackController? _audioPlayback;
+    private MediaAudioDiagnostics _lastAudioDiagnostics = MediaAudioDiagnostics.Empty;
     public string VideoDecoderDiagnostics => _videoDecoderDiagnostics;
+    public MediaAudioDiagnostics AudioDiagnostics =>
+        Volatile.Read(ref _audioPlayback)?.Diagnostics ?? _lastAudioDiagnostics;
 
     internal delegate void FrameReceivedHandler(IntPtr buffer, int width, int height, int stride);
     internal delegate void FrameLeaseReceivedHandler(FfmpegMediaFrameLease lease);
@@ -183,7 +186,10 @@ internal sealed class RtspStreamClient : IDisposable
                         audioPlayback = new AudioPlaybackController(
                             Volatile.Read(ref _volume),
                             Volatile.Read(ref _muted),
-                            _options.AudioGainDecibels);
+                            _options.AudioGainDecibels,
+                            _options.AudioOutputDeviceId,
+                            TimeSpan.FromMilliseconds(
+                                _options.AudioBufferDurationMilliseconds));
                         Volatile.Write(ref _audioPlayback, audioPlayback);
                     }
                     if (openSemaphoreEntered)
@@ -390,6 +396,10 @@ internal sealed class RtspStreamClient : IDisposable
                     {
                         Volatile.Write(ref _audioPlayback, null);
                     }
+                    if (audioPlayback is not null)
+                    {
+                        _lastAudioDiagnostics = audioPlayback.Diagnostics;
+                    }
                     audioPlayback?.Dispose();
                     if (openSemaphoreEntered)
                     {
@@ -546,6 +556,8 @@ internal sealed class RtspStreamClient : IDisposable
             LowLatency = options.LowLatency,
             EnableAudio = options.EnableAudio,
             AudioGainDecibels = options.AudioGainDecibels,
+            AudioOutputDeviceId = options.AudioOutputDeviceId,
+            AudioBufferDurationMilliseconds = options.AudioBufferDurationMilliseconds,
             Volume = options.Volume,
             IsMuted = options.IsMuted,
             ForceOpaqueAlpha = options.ForceOpaqueAlpha,

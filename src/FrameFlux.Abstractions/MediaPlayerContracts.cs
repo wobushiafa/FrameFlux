@@ -167,6 +167,10 @@ public sealed record MediaAudioOptions
 
     public double GainDecibels { get; init; }
 
+    public string? OutputDeviceId { get; init; }
+
+    public TimeSpan BufferDuration { get; init; } = TimeSpan.FromMilliseconds(100);
+
     internal void Validate()
     {
         if (!double.IsFinite(GainDecibels) ||
@@ -176,6 +180,22 @@ public sealed record MediaAudioOptions
                 nameof(GainDecibels),
                 GainDecibels,
                 "Audio gain must be finite and between -60 dB and +24 dB.");
+        }
+
+        if (OutputDeviceId is not null && string.IsNullOrWhiteSpace(OutputDeviceId))
+        {
+            throw new ArgumentException(
+                "Audio output device ID cannot be empty or whitespace.",
+                nameof(OutputDeviceId));
+        }
+
+        if (BufferDuration < TimeSpan.FromMilliseconds(10) ||
+            BufferDuration > TimeSpan.FromSeconds(2))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(BufferDuration),
+                BufferDuration,
+                "Audio buffer duration must be between 10 milliseconds and 2 seconds.");
         }
     }
 }
@@ -311,11 +331,38 @@ public sealed record MediaDiagnostics(
     int PerformanceSampleCount,
     string? LastError)
 {
+    public MediaAudioDiagnostics Audio { get; init; } = MediaAudioDiagnostics.Empty;
+
     public static MediaDiagnostics Empty { get; } = new(
         false,
         "N/A",
         0,
         0,
+        0,
+        null);
+}
+
+public sealed record MediaAudioDiagnostics(
+    string Backend,
+    string? OutputDeviceId,
+    string? OutputDeviceName,
+    int SampleRate,
+    int Channels,
+    TimeSpan ConfiguredBufferDuration,
+    TimeSpan QueuedDuration,
+    bool IsOperational,
+    int RecoveryCount,
+    string? LastError)
+{
+    public static MediaAudioDiagnostics Empty { get; } = new(
+        "None",
+        null,
+        null,
+        0,
+        0,
+        TimeSpan.Zero,
+        TimeSpan.Zero,
+        false,
         0,
         null);
 }

@@ -8,6 +8,7 @@ internal interface IAudioOutput : IDisposable
     int Channels { get; }
     long PlayedFrames { get; }
     bool IsOperational { get; }
+    MediaAudioDiagnostics Diagnostics { get; }
     bool TrySetVolume(double volume, bool muted);
     void Write(byte[] pcm);
 }
@@ -17,25 +18,44 @@ internal static class AudioOutputFactory
     internal const int SampleRate = 48000;
     internal const int Channels = 2;
 
-    internal static IAudioOutput Create()
+    internal static IAudioOutput Create(AudioOutputConfiguration configuration)
     {
         try
         {
 #if ANDROID
-            return new AndroidAudioOutput(SampleRate, Channels);
+            return new AndroidAudioOutput(SampleRate, Channels, configuration);
 #else
-            if (OperatingSystem.IsWindows()) return new WindowsWaveOutAudioOutput(SampleRate, Channels);
-            if (OperatingSystem.IsLinux()) return new LinuxAlsaAudioOutput(SampleRate, Channels);
+            if (OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    return new WindowsWasapiAudioOutput(SampleRate, Channels, configuration);
+                }
+                catch (Exception exception)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Failed to initialize WASAPI output: {exception}");
+                    if (configuration.OutputDeviceId is not null)
+                    {
+                        throw;
+                    }
+                    return new WindowsWaveOutAudioOutput(SampleRate, Channels, configuration, exception.Message);
+                }
+            }
+            if (OperatingSystem.IsLinux()) return new LinuxAlsaAudioOutput(SampleRate, Channels, configuration);
             return new NullAudioOutput(SampleRate, Channels);
 #endif
         }
         catch (Exception exception)
         {
             System.Diagnostics.Debug.WriteLine($"Failed to initialize platform audio output: {exception}");
-            return new NullAudioOutput(SampleRate, Channels);
+            return new NullAudioOutput(SampleRate, Channels, configuration, exception.Message);
         }
     }
 }
+
+internal sealed record AudioOutputConfiguration(
+    string? OutputDeviceId,
+    TimeSpan BufferDuration);
 
 internal sealed class AudioPlaybackController : IDisposable
 {
@@ -49,9 +69,14 @@ internal sealed class AudioPlaybackController : IDisposable
     internal AudioPlaybackController(
         double volume,
         bool muted,
-        double gainDecibels = 0d)
+        double gainDecibels = 0d,
+        string? outputDeviceId = null,
+        TimeSpan? bufferDuration = null,
+        IAudioOutput? output = null)
     {
-        _output = AudioOutputFactory.Create();
+        _output = output ?? AudioOutputFactory.Create(new AudioOutputConfiguration(
+            outputDeviceId,
+            bufferDuration ?? TimeSpan.FromMilliseconds(100)));
         _gainMultiplier = DecibelsToAmplitude(gainDecibels);
         _volume = volume;
         _muted = muted;
@@ -59,6 +84,8 @@ internal sealed class AudioPlaybackController : IDisposable
     }
 
     internal bool IsOperational => _output.IsOperational;
+
+    internal MediaAudioDiagnostics Diagnostics => _output.Diagnostics;
 
     internal double? PositionSeconds => _mediaStartSeconds is { } start
         ? start + (double)_output.PlayedFrames / _output.SampleRate
@@ -82,7 +109,7 @@ internal sealed class AudioPlaybackController : IDisposable
 
     internal void Write(NativeAudioFrame frame)
     {
-        if (!_output.IsOperational || frame.Data.Length == 0)
+        if (frame.Data.Length == 0)
         {
             return;
         }
@@ -149,12 +176,38 @@ internal sealed class AudioPlaybackController : IDisposable
         Math.Pow(10d, gainDecibels / 20d);
 }
 
-internal sealed class NullAudioOutput(int sampleRate, int channels) : IAudioOutput
+internal sealed class NullAudioOutput : IAudioOutput
 {
-    public int SampleRate { get; } = sampleRate;
-    public int Channels { get; } = channels;
+    private readonly AudioOutputConfiguration? _configuration;
+    private readonly string? _lastError;
+
+    internal NullAudioOutput(
+        int sampleRate,
+        int channels,
+        AudioOutputConfiguration? configuration = null,
+        string? lastError = null)
+    {
+        SampleRate = sampleRate;
+        Channels = channels;
+        _configuration = configuration;
+        _lastError = lastError;
+    }
+
+    public int SampleRate { get; }
+    public int Channels { get; }
     public long PlayedFrames => 0;
     public bool IsOperational => false;
+    public MediaAudioDiagnostics Diagnostics => new(
+        "None",
+        _configuration?.OutputDeviceId,
+        null,
+        SampleRate,
+        Channels,
+        _configuration?.BufferDuration ?? TimeSpan.Zero,
+        TimeSpan.Zero,
+        false,
+        0,
+        _lastError);
     public bool TrySetVolume(double volume, bool muted) => false;
     public void Write(byte[] pcm) { }
     public void Dispose() { }

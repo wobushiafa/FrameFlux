@@ -31,7 +31,9 @@ await player.OpenAsync(
         Audio = new MediaAudioOptions
         {
             IsEnabled = true,
-            GainDecibels = 6
+            GainDecibels = 6,
+            OutputDeviceId = null,
+            BufferDuration = TimeSpan.FromMilliseconds(100)
         }
     });
 await player.PlayAsync();
@@ -57,7 +59,13 @@ Snapshot buffering is opt-in through
 and exponential backoff are configured under `Network.Reconnect`.
 `Audio.GainDecibels` is a source-level gain applied before the runtime
 `Volume` control. It defaults to `0 dB` and accepts `-60 dB` through
-`+24 dB`.
+`+24 dB`. `Audio.OutputDeviceId` selects a platform output endpoint;
+`null` follows the operating-system default. `Audio.BufferDuration` controls
+the requested output latency and accepts 10 milliseconds through 2 seconds.
+Windows uses shared-mode WASAPI by default and falls back to `waveOut` only
+when WASAPI initialization fails. Linux maps the device ID to an ALSA PCM name.
+The effective backend, selected endpoint, queued duration, recovery count, and
+last backend error are available from `player.Diagnostics.Audio`.
 
 Limit simultaneous FFmpeg open operations per factory when many players start
 together:

@@ -38,6 +38,10 @@ internal sealed class RtspStreamOptions
 
     public double AudioGainDecibels { get; init; }
 
+    public string? AudioOutputDeviceId { get; init; }
+
+    public int AudioBufferDurationMilliseconds { get; init; } = 100;
+
     public double Volume { get; init; } = 1d;
 
     public bool IsMuted { get; init; }
