@@ -1,12 +1,11 @@
 using System.Windows;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using FrameFlux.Presentation;
 
 namespace FrameFlux.Wpf;
 
-public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable, IMediaVideoOutput
+public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
 {
     private static readonly DependencyPropertyKey StatePropertyKey =
         DependencyProperty.RegisterReadOnly(
@@ -121,11 +120,8 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable, 
         HardwareDiagnosticsPropertyKey.DependencyProperty;
 
     private readonly MediaPlaybackController _playback = new();
-    private readonly object _frameSync = new();
+    private readonly SoftwareBitmapMediaOutput _softwareOutput = new();
     private readonly D3D11SwapChainPresenter _nativePresenter = new();
-    private IMediaFrameLease? _pendingFrame;
-    private WriteableBitmap? _bitmap;
-    private bool _renderScheduled;
     private bool _isLoaded;
     private bool _disposed;
 
@@ -137,6 +133,9 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable, 
         Unloaded += OnUnloaded;
         SnapsToDevicePixels = true;
         Background = Brushes.Black;
+        _softwareOutput.Stretch = Stretch;
+        _softwareOutput.FramePresented += OnSoftwareFramePresented;
+        Children.Add(_softwareOutput);
         _nativePresenter.Visibility = Visibility.Collapsed;
         Children.Add(_nativePresenter);
     }
@@ -204,54 +203,6 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable, 
 
     public string HardwareDiagnostics => (string)GetValue(HardwareDiagnosticsProperty);
 
-    MediaRenderPreference IMediaVideoOutput.Preference => MediaRenderPreference.Software;
-
-    bool IMediaVideoOutput.Supports(MediaFramePixelFormat pixelFormat) =>
-        pixelFormat == MediaFramePixelFormat.Bgra32;
-
-    bool IMediaVideoOutput.TryPresent(IMediaFrameLease frame)
-    {
-        if (_disposed ||
-            frame.PixelFormat != MediaFramePixelFormat.Bgra32 ||
-            !frame.TryGetCpuBuffer(out _))
-        {
-            return false;
-        }
-
-        IMediaFrameLease? droppedFrame;
-        var schedule = false;
-        lock (_frameSync)
-        {
-            if (_disposed)
-            {
-                return false;
-            }
-
-            droppedFrame = _pendingFrame;
-            _pendingFrame = frame;
-            if (!_renderScheduled)
-            {
-                _renderScheduled = true;
-                schedule = true;
-            }
-        }
-
-        droppedFrame?.Dispose();
-        if (schedule)
-        {
-            try
-            {
-                Dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(RenderPendingFrame));
-            }
-            catch
-            {
-                ClearPendingFrame();
-            }
-        }
-
-        return true;
-    }
-
     public event EventHandler<MediaPlaybackStateChangedEventArgs>? PlaybackStateChanged;
 
     public event EventHandler<MediaPlaybackErrorEventArgs>? PlaybackError;
@@ -272,13 +223,14 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable, 
             OperatingSystem.IsWindows();
         _nativePresenter.SetStretch(Stretch);
         _nativePresenter.Visibility = useNativeOutput ? Visibility.Visible : Visibility.Collapsed;
+        _softwareOutput.Visibility = useNativeOutput ? Visibility.Collapsed : Visibility.Visible;
         _playback.Volume = Volume;
         _playback.IsMuted = IsMuted;
         await _playback.StartAsync(
             PlayerFactory,
             Source,
             options,
-            useNativeOutput ? _nativePresenter : this,
+            useNativeOutput ? _nativePresenter : _softwareOutput,
             cancellationToken);
     }
 
@@ -305,25 +257,12 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable, 
         Unloaded -= OnUnloaded;
         _playback.StateChanged -= OnPlayerStateChanged;
         _playback.Error -= OnPlayerError;
+        _softwareOutput.FramePresented -= OnSoftwareFramePresented;
         await _playback.DisposeAsync();
         ResetPresentation();
+        _softwareOutput.Dispose();
+        _nativePresenter.Dispose();
         GC.SuppressFinalize(this);
-    }
-
-    protected override void OnRender(DrawingContext drawingContext)
-    {
-        base.OnRender(drawingContext);
-        drawingContext.DrawRectangle(Background, null, new Rect(RenderSize));
-        if (_bitmap is null)
-        {
-            return;
-        }
-
-        drawingContext.DrawImage(_bitmap, CalculateDestinationRect(
-            _bitmap.PixelWidth,
-            _bitmap.PixelHeight,
-            RenderSize,
-            Stretch));
     }
 
     private static void OnRestartPropertyChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
@@ -359,6 +298,7 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable, 
     private static void OnStretchChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
     {
         var view = (MediaView)sender;
+        view._softwareOutput.Stretch = (Stretch)args.NewValue;
         view._nativePresenter.SetStretch((Stretch)args.NewValue);
     }
 
@@ -421,10 +361,10 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable, 
 
     private void ResetPresentation()
     {
-        ClearPendingFrame();
+        _softwareOutput.Clear();
         _nativePresenter.ClearPendingFrame();
-        _bitmap = null;
-        InvalidateVisual();
+        _nativePresenter.Visibility = Visibility.Collapsed;
+        _softwareOutput.Visibility = Visibility.Visible;
     }
 
     private void OnPlayerStateChanged(object? sender, MediaPlaybackStateChangedEventArgs args) =>
@@ -448,105 +388,10 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable, 
                 ReportError(args.Error);
             }));
 
-    private void RenderPendingFrame()
+    private void OnSoftwareFramePresented(object? sender, EventArgs args)
     {
-        IMediaFrameLease? frame;
-        lock (_frameSync)
-        {
-            frame = _pendingFrame;
-            _pendingFrame = null;
-            _renderScheduled = false;
-        }
-
-        if (frame is null)
-        {
-            return;
-        }
-
-        try
-        {
-            if (frame.TryGetCpuBuffer(out var source))
-            {
-                _nativePresenter.Visibility = Visibility.Collapsed;
-                RenderFrame(frame.Width, frame.Height, source);
-            }
-        }
-        catch (Exception exception)
-        {
-            System.Diagnostics.Trace.TraceError(
-                "WPF software presentation failed: {0}",
-                exception);
-        }
-        finally
-        {
-            frame.Dispose();
-        }
-    }
-
-    private unsafe void RenderFrame(
-        int width,
-        int height,
-        MediaCpuFrameBuffer frame)
-    {
-        if (_bitmap is null ||
-            _bitmap.PixelWidth != width ||
-            _bitmap.PixelHeight != height)
-        {
-            _bitmap = new WriteableBitmap(
-                width,
-                height,
-                96,
-                96,
-                PixelFormats.Bgra32,
-                null);
-        }
-
-        if (frame.Plane0 == IntPtr.Zero || frame.Plane0Stride <= 0)
-        {
-            return;
-        }
-
-        var rowBytes = Math.Min(checked(width * 4), frame.Plane0Stride);
-        var requiredSourceBytes =
-            checked((long)frame.Plane0Stride * (height - 1) + rowBytes);
-        if (frame.Size < requiredSourceBytes)
-        {
-            return;
-        }
-
-        _bitmap.Lock();
-        try
-        {
-            for (var row = 0; row < height; row++)
-            {
-                new ReadOnlySpan<byte>(
-                    (byte*)frame.Plane0 + row * frame.Plane0Stride,
-                    rowBytes).CopyTo(
-                    new Span<byte>(
-                        (byte*)_bitmap.BackBuffer + row * _bitmap.BackBufferStride,
-                        rowBytes));
-            }
-            _bitmap.AddDirtyRect(new Int32Rect(0, 0, width, height));
-        }
-        finally
-        {
-            _bitmap.Unlock();
-        }
-
-        InvalidateVisual();
-    }
-
-    private void ClearPendingFrame()
-    {
-        IMediaFrameLease? frame;
-        lock (_frameSync)
-        {
-            frame = _pendingFrame;
-            _pendingFrame = null;
-            _renderScheduled = false;
-        }
-
-        frame?.Dispose();
+        _nativePresenter.Visibility = Visibility.Collapsed;
+        _softwareOutput.Visibility = Visibility.Visible;
     }
 
     private void SetState(MediaPlaybackState state)
@@ -565,45 +410,6 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable, 
     {
         SetValue(LastErrorPropertyKey, error);
         PlaybackError?.Invoke(this, new MediaPlaybackErrorEventArgs(error));
-    }
-
-    private static Rect CalculateDestinationRect(
-        double sourceWidth,
-        double sourceHeight,
-        Size target,
-        Stretch stretch)
-    {
-        if (sourceWidth <= 0 || sourceHeight <= 0 || target.Width <= 0 || target.Height <= 0)
-        {
-            return Rect.Empty;
-        }
-
-        if (stretch == Stretch.Fill)
-        {
-            return new Rect(target);
-        }
-
-        if (stretch == Stretch.None)
-        {
-            return new Rect(
-                (target.Width - sourceWidth) / 2,
-                (target.Height - sourceHeight) / 2,
-                sourceWidth,
-                sourceHeight);
-        }
-
-        var scaleX = target.Width / sourceWidth;
-        var scaleY = target.Height / sourceHeight;
-        var scale = stretch == Stretch.UniformToFill
-            ? Math.Max(scaleX, scaleY)
-            : Math.Min(scaleX, scaleY);
-        var width = sourceWidth * scale;
-        var height = sourceHeight * scale;
-        return new Rect(
-            (target.Width - width) / 2,
-            (target.Height - height) / 2,
-            width,
-            height);
     }
 
     private void ThrowIfDisposed()

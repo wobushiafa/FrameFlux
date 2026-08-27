@@ -1,15 +1,13 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
-using Avalonia.Media.Imaging;
-using Avalonia.Platform;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using FrameFlux.Presentation;
 
 namespace FrameFlux.Avalonia;
 
-public sealed class MediaView : ContentControl, IAsyncDisposable, IMediaVideoOutput
+public sealed class MediaView : ContentControl, IAsyncDisposable
 {
     public static readonly StyledProperty<MediaSource?> SourceProperty =
         AvaloniaProperty.Register<MediaView, MediaSource?>(nameof(Source));
@@ -55,21 +53,17 @@ public sealed class MediaView : ContentControl, IAsyncDisposable, IMediaVideoOut
         AvaloniaProperty.RegisterDirect<MediaView, string?>(nameof(ActiveRendererId), view => view.ActiveRendererId);
 
     private readonly MediaPlaybackController _playback = new();
-    private readonly object _frameSync = new();
     private readonly Grid _surface = new();
-    private readonly Image _image = new();
+    private readonly SoftwareBitmapMediaOutput _softwareOutput = new();
 #if !ANDROID
     private readonly WindowsD3D11MediaOutput _nativeOutput = new();
 #endif
-    private IMediaFrameLease? _pendingFrame;
     private EventHandler<MediaVideoFrame>? _frameReceived;
-    private WriteableBitmap? _bitmap;
     private MediaPlaybackState _state = MediaPlaybackState.Idle;
     private MediaPlaybackError? _lastError;
     private bool _isHardwareAccelerationActive;
     private string _hardwareDiagnostics = "Not started";
     private string? _activeRendererId;
-    private bool _renderScheduled;
     private bool _attached;
     private bool _disposed;
 
@@ -77,8 +71,9 @@ public sealed class MediaView : ContentControl, IAsyncDisposable, IMediaVideoOut
     {
         _playback.StateChanged += OnPlayerStateChanged;
         _playback.Error += OnPlayerError;
-        _image.Stretch = Stretch;
-        _surface.Children.Add(_image);
+        _softwareOutput.Stretch = Stretch;
+        _softwareOutput.FramePresented += OnSoftwareFramePresented;
+        _surface.Children.Add(_softwareOutput);
 #if !ANDROID
         _nativeOutput.IsVisible = false;
         _surface.Children.Add(_nativeOutput);
@@ -189,54 +184,6 @@ public sealed class MediaView : ContentControl, IAsyncDisposable, IMediaVideoOut
         }
     }
 
-    MediaRenderPreference IMediaVideoOutput.Preference => MediaRenderPreference.Software;
-
-    bool IMediaVideoOutput.Supports(MediaFramePixelFormat pixelFormat) =>
-        pixelFormat == MediaFramePixelFormat.Bgra32;
-
-    bool IMediaVideoOutput.TryPresent(IMediaFrameLease frame)
-    {
-        if (_disposed ||
-            frame.PixelFormat != MediaFramePixelFormat.Bgra32 ||
-            !frame.TryGetCpuBuffer(out _))
-        {
-            return false;
-        }
-
-        IMediaFrameLease? droppedFrame;
-        var schedule = false;
-        lock (_frameSync)
-        {
-            if (_disposed)
-            {
-                return false;
-            }
-
-            droppedFrame = _pendingFrame;
-            _pendingFrame = frame;
-            if (!_renderScheduled)
-            {
-                _renderScheduled = true;
-                schedule = true;
-            }
-        }
-
-        droppedFrame?.Dispose();
-        if (schedule)
-        {
-            try
-            {
-                Dispatcher.UIThread.Post(RenderLatestFrame, DispatcherPriority.Render);
-            }
-            catch
-            {
-                ClearPendingFrame();
-            }
-        }
-
-        return true;
-    }
-
     public async ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -300,7 +247,7 @@ public sealed class MediaView : ContentControl, IAsyncDisposable, IMediaVideoOut
         }
         else if (change.Property == StretchProperty)
         {
-            _image.Stretch = Stretch;
+            _softwareOutput.Stretch = Stretch;
 #if !ANDROID
             _nativeOutput.Stretch = Stretch;
 #endif
@@ -327,13 +274,13 @@ public sealed class MediaView : ContentControl, IAsyncDisposable, IMediaVideoOut
         _disposed = true;
         _playback.StateChanged -= OnPlayerStateChanged;
         _playback.Error -= OnPlayerError;
+        _softwareOutput.FramePresented -= OnSoftwareFramePresented;
         if (_frameReceived is not null)
         {
             _playback.FrameReceived -= OnFrameReceived;
         }
         await _playback.DisposeAsync();
-        _bitmap?.Dispose();
-        _bitmap = null;
+        _softwareOutput.Dispose();
 #if !ANDROID
         _nativeOutput.Dispose();
 #endif
@@ -350,24 +297,24 @@ public sealed class MediaView : ContentControl, IAsyncDisposable, IMediaVideoOut
         useNativeOutput &= OperatingSystem.IsWindows();
         _nativeOutput.Stretch = Stretch;
         _nativeOutput.IsVisible = useNativeOutput;
-        var output = useNativeOutput ? (IMediaVideoOutput)_nativeOutput : this;
+        var output = useNativeOutput ? (IMediaVideoOutput)_nativeOutput : _softwareOutput;
 #else
         useNativeOutput = false;
-        var output = (IMediaVideoOutput)this;
+        var output = (IMediaVideoOutput)_softwareOutput;
 #endif
-        _image.IsVisible = !useNativeOutput;
+        _softwareOutput.IsVisible = !useNativeOutput;
         ActiveRendererId = useNativeOutput ? "windows-d3d11" : "software-bitmap";
         return output;
     }
 
     private void ResetPresentation()
     {
-        ClearPendingFrame();
+        _softwareOutput.Clear();
 #if !ANDROID
         _nativeOutput.ClearPendingFrame();
         _nativeOutput.IsVisible = false;
 #endif
-        _image.IsVisible = true;
+        _softwareOutput.IsVisible = true;
     }
 
     private void OnPlayerStateChanged(object? sender, MediaPlaybackStateChangedEventArgs args) =>
@@ -389,94 +336,13 @@ public sealed class MediaView : ContentControl, IAsyncDisposable, IMediaVideoOut
         _frameReceived?.Invoke(this, frame);
     }
 
-    private unsafe void RenderLatestFrame()
+    private void OnSoftwareFramePresented(object? sender, EventArgs args)
     {
-        IMediaFrameLease? frame;
-        lock (_frameSync)
-        {
-            frame = _pendingFrame;
-            _pendingFrame = null;
-            _renderScheduled = false;
-        }
-
-        if (frame is null)
-        {
-            return;
-        }
-
-        try
-        {
-            if (_disposed ||
-                !frame.TryGetCpuBuffer(out var source) ||
-                source.Plane0 == IntPtr.Zero ||
-                source.Plane0Stride <= 0)
-            {
-                return;
-            }
-
 #if !ANDROID
-            _nativeOutput.IsVisible = false;
+        _nativeOutput.IsVisible = false;
 #endif
-            _image.IsVisible = true;
-            ActiveRendererId = "software-bitmap";
-            if (_bitmap is null ||
-                _bitmap.PixelSize.Width != frame.Width ||
-                _bitmap.PixelSize.Height != frame.Height)
-            {
-                _bitmap?.Dispose();
-                _bitmap = new WriteableBitmap(
-                    new PixelSize(frame.Width, frame.Height),
-                    new Vector(96, 96),
-                    PixelFormat.Bgra8888,
-                    AlphaFormat.Unpremul);
-                _image.Source = _bitmap;
-            }
-
-            using var framebuffer = _bitmap.Lock();
-            var rowBytes = Math.Min(
-                checked(frame.Width * 4),
-                Math.Min(source.Plane0Stride, framebuffer.RowBytes));
-            var requiredSourceBytes =
-                checked((long)source.Plane0Stride * (frame.Height - 1) + rowBytes);
-            if (source.Size < requiredSourceBytes)
-            {
-                return;
-            }
-
-            for (var row = 0; row < frame.Height; row++)
-            {
-                var sourceRow = new ReadOnlySpan<byte>(
-                    (byte*)source.Plane0 + row * source.Plane0Stride,
-                    rowBytes);
-                var destinationRow = new Span<byte>(
-                    (byte*)framebuffer.Address + row * framebuffer.RowBytes,
-                    rowBytes);
-                sourceRow.CopyTo(destinationRow);
-            }
-        }
-        catch (Exception exception)
-        {
-            System.Diagnostics.Trace.TraceError(
-                "Avalonia software presentation failed: {0}",
-                exception);
-        }
-        finally
-        {
-            frame.Dispose();
-        }
-    }
-
-    private void ClearPendingFrame()
-    {
-        IMediaFrameLease? frame;
-        lock (_frameSync)
-        {
-            frame = _pendingFrame;
-            _pendingFrame = null;
-            _renderScheduled = false;
-        }
-
-        frame?.Dispose();
+        _softwareOutput.IsVisible = true;
+        ActiveRendererId = "software-bitmap";
     }
 
     private void SetState(MediaPlaybackState state)
