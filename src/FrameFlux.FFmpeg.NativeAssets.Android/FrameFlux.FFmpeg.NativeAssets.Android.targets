@@ -1,0 +1,12 @@
+<Project>
+  <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-arm\native\*.so"
+                          Link="lib\armeabi-v7a\%(Filename)%(Extension)" />
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\*.so"
+                          Link="lib\arm64-v8a\%(Filename)%(Extension)" />
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-x86\native\*.so"
+                          Link="lib\x86\%(Filename)%(Extension)" />
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-x64\native\*.so"
+                          Link="lib\x86_64\%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

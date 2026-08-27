@@ -9,6 +9,10 @@
     <Project Path="src/FrameFlux.Abstractions/FrameFlux.Abstractions.csproj" />
     <Project Path="src/FrameFlux.Avalonia/FrameFlux.Avalonia.csproj" />
     <Project Path="src/FrameFlux.FFmpeg/FrameFlux.FFmpeg.csproj" />
+    <Project Path="src/FrameFlux.FFmpeg.NativeAssets.Android/FrameFlux.FFmpeg.NativeAssets.Android.csproj" />
+    <Project Path="src/FrameFlux.FFmpeg.NativeAssets.Linux/FrameFlux.FFmpeg.NativeAssets.Linux.csproj" />
+    <Project Path="src/FrameFlux.FFmpeg.NativeAssets.Windows/FrameFlux.FFmpeg.NativeAssets.Windows.csproj" />
+    <Project Path="src/FrameFlux.Presentation/FrameFlux.Presentation.csproj" />
     <Project Path="src/FrameFlux.Wpf/FrameFlux.Wpf.csproj" />
   </Folder>
   <Folder Name="/tests/">

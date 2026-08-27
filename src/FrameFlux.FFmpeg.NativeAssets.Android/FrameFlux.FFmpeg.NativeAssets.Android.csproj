@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <IsPackable>true</IsPackable>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <PackageId>FrameFlux.FFmpeg.NativeAssets.Android</PackageId>
+    <Description>Android native FFmpeg runtime assets for FrameFlux.</Description>
+    <PackageTags>media;ffmpeg;native;android</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="..\..\native\artifacts\runtimes\android-arm\native\*.so"
+          Pack="true"
+          PackagePath="runtimes\android-arm\native" />
+    <None Include="..\..\native\artifacts\runtimes\android-arm64\native\*.so"
+          Pack="true"
+          PackagePath="runtimes\android-arm64\native" />
+    <None Include="..\..\native\artifacts\runtimes\android-x86\native\*.so"
+          Pack="true"
+          PackagePath="runtimes\android-x86\native" />
+    <None Include="..\..\native\artifacts\runtimes\android-x64\native\*.so"
+          Pack="true"
+          PackagePath="runtimes\android-x64\native" />
+    <None Include="FrameFlux.FFmpeg.NativeAssets.Android.targets"
+          Pack="true"
+          PackagePath="buildTransitive\FrameFlux.FFmpeg.NativeAssets.Android.targets" />
+  </ItemGroup>
+</Project>
