@@ -2,16 +2,15 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using FrameFlux.Presentation;
 
 namespace FrameFlux.Wpf;
 
 internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoOutput, IDisposable
 {
-    private readonly object _frameSync = new();
-    private IMediaFrameLease? _pendingFrame;
+    private readonly LatestMediaFrameSlot _frameSlot = new();
     private WriteableBitmap? _bitmap;
     private Stretch _stretch = Stretch.Uniform;
-    private bool _renderScheduled;
     private bool _disposed;
 
     public MediaRenderPreference Preference => MediaRenderPreference.Software;
@@ -40,26 +39,12 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
             return false;
         }
 
-        IMediaFrameLease? droppedFrame;
-        var schedule = false;
-        lock (_frameSync)
+        if (!_frameSlot.TrySubmit(frame, out var schedulePresentation))
         {
-            if (_disposed)
-            {
-                return false;
-            }
-
-            droppedFrame = _pendingFrame;
-            _pendingFrame = frame;
-            if (!_renderScheduled)
-            {
-                _renderScheduled = true;
-                schedule = true;
-            }
+            return false;
         }
 
-        droppedFrame?.Dispose();
-        if (schedule)
+        if (schedulePresentation)
         {
             try
             {
@@ -91,6 +76,7 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
         }
 
         _disposed = true;
+        _frameSlot.Dispose();
         Clear();
     }
 
@@ -113,13 +99,7 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
 
     private void RenderPendingFrame()
     {
-        IMediaFrameLease? frame;
-        lock (_frameSync)
-        {
-            frame = _pendingFrame;
-            _pendingFrame = null;
-            _renderScheduled = false;
-        }
+        var frame = _frameSlot.Take();
 
         if (frame is null)
         {
@@ -201,15 +181,7 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
 
     private void ClearPendingFrame()
     {
-        IMediaFrameLease? frame;
-        lock (_frameSync)
-        {
-            frame = _pendingFrame;
-            _pendingFrame = null;
-            _renderScheduled = false;
-        }
-
-        frame?.Dispose();
+        _frameSlot.Clear();
     }
 
     private static Rect CalculateDestinationRect(

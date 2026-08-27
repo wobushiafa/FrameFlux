@@ -2,16 +2,15 @@
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Platform;
+using FrameFlux.Presentation;
 using FrameFlux.Rendering.Windows;
 
 namespace FrameFlux.Avalonia;
 
 internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOutput, IDisposable
 {
-    private readonly object _frameSync = new();
+    private readonly LatestMediaFrameSlot _frameSlot = new();
     private readonly WindowsD3D11Presenter _presenter = new();
-    private IMediaFrameLease? _pendingFrame;
-    private bool _presentScheduled;
     private Stretch _stretch = Stretch.Uniform;
     private bool _disposed;
 
@@ -34,26 +33,12 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
             return false;
         }
 
-        IMediaFrameLease? droppedFrame;
-        var schedule = false;
-        lock (_frameSync)
+        if (!_frameSlot.TrySubmit(frame, out var schedulePresentation))
         {
-            if (_disposed)
-            {
-                return false;
-            }
-
-            droppedFrame = _pendingFrame;
-            _pendingFrame = frame;
-            if (!_presentScheduled)
-            {
-                _presentScheduled = true;
-                schedule = true;
-            }
+            return false;
         }
 
-        droppedFrame?.Dispose();
-        if (schedule)
+        if (schedulePresentation)
         {
             try
             {
@@ -90,32 +75,18 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
         }
 
         _disposed = true;
-        ClearPendingFrame();
+        _frameSlot.Dispose();
         _presenter.Dispose();
     }
 
     internal void ClearPendingFrame()
     {
-        IMediaFrameLease? frame;
-        lock (_frameSync)
-        {
-            frame = _pendingFrame;
-            _pendingFrame = null;
-            _presentScheduled = false;
-        }
-
-        frame?.Dispose();
+        _frameSlot.Clear();
     }
 
     private void PresentPendingFrame()
     {
-        IMediaFrameLease? frame;
-        lock (_frameSync)
-        {
-            frame = _pendingFrame;
-            _pendingFrame = null;
-            _presentScheduled = false;
-        }
+        var frame = _frameSlot.Take();
 
         if (frame is null)
         {

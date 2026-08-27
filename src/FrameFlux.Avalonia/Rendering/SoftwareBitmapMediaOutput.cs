@@ -3,15 +3,14 @@ using Avalonia.Controls;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using FrameFlux.Presentation;
 
 namespace FrameFlux.Avalonia;
 
 internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDisposable
 {
-    private readonly object _frameSync = new();
-    private IMediaFrameLease? _pendingFrame;
+    private readonly LatestMediaFrameSlot _frameSlot = new();
     private WriteableBitmap? _bitmap;
-    private bool _renderScheduled;
     private bool _disposed;
 
     public MediaRenderPreference Preference => MediaRenderPreference.Software;
@@ -30,26 +29,12 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
             return false;
         }
 
-        IMediaFrameLease? droppedFrame;
-        var schedule = false;
-        lock (_frameSync)
+        if (!_frameSlot.TrySubmit(frame, out var schedulePresentation))
         {
-            if (_disposed)
-            {
-                return false;
-            }
-
-            droppedFrame = _pendingFrame;
-            _pendingFrame = frame;
-            if (!_renderScheduled)
-            {
-                _renderScheduled = true;
-                schedule = true;
-            }
+            return false;
         }
 
-        droppedFrame?.Dispose();
-        if (schedule)
+        if (schedulePresentation)
         {
             try
             {
@@ -80,18 +65,13 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
         }
 
         _disposed = true;
+        _frameSlot.Dispose();
         Clear();
     }
 
     private unsafe void RenderLatestFrame()
     {
-        IMediaFrameLease? frame;
-        lock (_frameSync)
-        {
-            frame = _pendingFrame;
-            _pendingFrame = null;
-            _renderScheduled = false;
-        }
+        var frame = _frameSlot.Take();
 
         if (frame is null)
         {
@@ -159,14 +139,6 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
 
     private void ClearPendingFrame()
     {
-        IMediaFrameLease? frame;
-        lock (_frameSync)
-        {
-            frame = _pendingFrame;
-            _pendingFrame = null;
-            _renderScheduled = false;
-        }
-
-        frame?.Dispose();
+        _frameSlot.Clear();
     }
 }

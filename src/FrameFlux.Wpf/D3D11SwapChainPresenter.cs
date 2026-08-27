@@ -1,18 +1,17 @@
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
+using FrameFlux.Presentation;
 using FrameFlux.Rendering.Windows;
 
 namespace FrameFlux.Wpf;
 
 internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
 {
-    private readonly object _frameSync = new();
+    private readonly LatestMediaFrameSlot _frameSlot = new();
     private readonly WindowsD3D11Presenter _presenter = new();
-    private IMediaFrameLease? _pendingFrame;
     private int _targetWidth = 1;
     private int _targetHeight = 1;
     private int _stretchMode = (int)MediaStretchMode.Uniform;
-    private bool _presentScheduled;
     private bool _disposed;
 
     internal void SetStretch(System.Windows.Media.Stretch stretch) =>
@@ -30,26 +29,12 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
             return false;
         }
 
-        IMediaFrameLease? droppedFrame;
-        var schedule = false;
-        lock (_frameSync)
+        if (!_frameSlot.TrySubmit(frame, out var schedulePresentation))
         {
-            if (_disposed)
-            {
-                return false;
-            }
-
-            droppedFrame = _pendingFrame;
-            _pendingFrame = frame;
-            if (!_presentScheduled)
-            {
-                _presentScheduled = true;
-                schedule = true;
-            }
+            return false;
         }
 
-        droppedFrame?.Dispose();
-        if (schedule)
+        if (schedulePresentation)
         {
             try
             {
@@ -68,15 +53,7 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
 
     internal void ClearPendingFrame()
     {
-        IMediaFrameLease? frame;
-        lock (_frameSync)
-        {
-            frame = _pendingFrame;
-            _pendingFrame = null;
-            _presentScheduled = false;
-        }
-
-        frame?.Dispose();
+        _frameSlot.Clear();
     }
 
     protected override HandleRef BuildWindowCore(HandleRef hwndParent) =>
@@ -105,7 +82,7 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
         if (!_disposed)
         {
             _disposed = true;
-            ClearPendingFrame();
+            _frameSlot.Dispose();
             if (disposing)
             {
                 _presenter.Dispose();
@@ -117,13 +94,7 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
 
     private void PresentPendingFrame()
     {
-        IMediaFrameLease? lease;
-        lock (_frameSync)
-        {
-            lease = _pendingFrame;
-            _pendingFrame = null;
-            _presentScheduled = false;
-        }
+        var lease = _frameSlot.Take();
 
         if (lease is null)
         {
