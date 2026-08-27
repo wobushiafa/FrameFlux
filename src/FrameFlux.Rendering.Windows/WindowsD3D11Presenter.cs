@@ -1,12 +1,18 @@
-#if !ANDROID
 using System.Runtime.InteropServices;
-using Avalonia.Media;
 using SharpGen.Runtime;
 using Vortice;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
 
-namespace FrameFlux.Avalonia;
+namespace FrameFlux.Rendering.Windows;
+
+internal enum MediaStretchMode
+{
+    None,
+    Fill,
+    Uniform,
+    UniformToFill
+}
 
 internal sealed class WindowsD3D11Presenter : IDisposable
 {
@@ -26,8 +32,7 @@ internal sealed class WindowsD3D11Presenter : IDisposable
     private int _sourceHeight;
     private int _outputWidth;
     private int _outputHeight;
-
-    internal IntPtr Window => _window;
+    private bool _disposed;
 
     internal IntPtr CreateWindow(IntPtr parent)
     {
@@ -65,10 +70,9 @@ internal sealed class WindowsD3D11Presenter : IDisposable
         MediaD3D11TextureBuffer frame,
         int outputWidth,
         int outputHeight,
-        Stretch stretch)
+        MediaStretchMode stretch)
     {
-        if (_window == IntPtr.Zero ||
-            frame.Texture == IntPtr.Zero)
+        if (_window == IntPtr.Zero || frame.Texture == IntPtr.Zero)
         {
             return;
         }
@@ -136,8 +140,6 @@ internal sealed class WindowsD3D11Presenter : IDisposable
             _window = IntPtr.Zero;
         }
     }
-
-    private bool _disposed;
 
     public void Dispose()
     {
@@ -241,9 +243,9 @@ internal sealed class WindowsD3D11Presenter : IDisposable
         int sourceHeight,
         int outputWidth,
         int outputHeight,
-        Stretch stretch)
+        MediaStretchMode stretch)
     {
-        if (stretch == Stretch.Fill)
+        if (stretch == MediaStretchMode.Fill)
         {
             return new RawRect(0, 0, outputWidth, outputHeight);
         }
@@ -252,8 +254,8 @@ internal sealed class WindowsD3D11Presenter : IDisposable
         var scaleY = outputHeight / (double)sourceHeight;
         var scale = stretch switch
         {
-            Stretch.None => 1d,
-            Stretch.UniformToFill => Math.Max(scaleX, scaleY),
+            MediaStretchMode.None => 1d,
+            MediaStretchMode.UniformToFill => Math.Max(scaleX, scaleY),
             _ => Math.Min(scaleX, scaleY)
         };
         var width = Math.Max(1, (int)Math.Round(sourceWidth * scale));
@@ -305,4 +307,3 @@ internal sealed class WindowsD3D11Presenter : IDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DestroyWindowNative(IntPtr window);
 }
-#endif

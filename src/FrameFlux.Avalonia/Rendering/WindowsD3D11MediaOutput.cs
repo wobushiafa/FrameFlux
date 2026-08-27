@@ -2,6 +2,7 @@
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Platform;
+using FrameFlux.Rendering.Windows;
 
 namespace FrameFlux.Avalonia;
 
@@ -135,7 +136,7 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
                 texture,
                 (int)Math.Ceiling(Bounds.Width * scaling),
                 (int)Math.Ceiling(Bounds.Height * scaling),
-                _stretch);
+                ToMediaStretchMode(_stretch));
         }
         catch (Exception exception)
         {
@@ -148,5 +149,13 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
             frame.Dispose();
         }
     }
+
+    private static MediaStretchMode ToMediaStretchMode(Stretch stretch) => stretch switch
+    {
+        Stretch.None => MediaStretchMode.None,
+        Stretch.Fill => MediaStretchMode.Fill,
+        Stretch.UniformToFill => MediaStretchMode.UniformToFill,
+        _ => MediaStretchMode.Uniform
+    };
 }
 #endif

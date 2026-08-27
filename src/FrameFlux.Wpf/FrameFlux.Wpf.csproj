@@ -16,6 +16,6 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
     <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
     <ProjectReference Include="..\FrameFlux.Presentation\FrameFlux.Presentation.csproj" />
-    <PackageReference Include="Vortice.Direct3D11" />
+    <ProjectReference Include="..\FrameFlux.Rendering.Windows\FrameFlux.Rendering.Windows.csproj" />
   </ItemGroup>
 </Project>

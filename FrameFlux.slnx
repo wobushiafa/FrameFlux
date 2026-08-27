@@ -13,6 +13,7 @@
     <Project Path="src/FrameFlux.FFmpeg.NativeAssets.Linux/FrameFlux.FFmpeg.NativeAssets.Linux.csproj" />
     <Project Path="src/FrameFlux.FFmpeg.NativeAssets.Windows/FrameFlux.FFmpeg.NativeAssets.Windows.csproj" />
     <Project Path="src/FrameFlux.Presentation/FrameFlux.Presentation.csproj" />
+    <Project Path="src/FrameFlux.Rendering.Windows/FrameFlux.Rendering.Windows.csproj" />
     <Project Path="src/FrameFlux.Wpf/FrameFlux.Wpf.csproj" />
   </Folder>
   <Folder Name="/tests/">
