@@ -169,6 +169,50 @@ public sealed class FfmpegMediaPlayerTests
         Assert.True(player.Capabilities.CanCaptureSnapshots);
     }
 
+    [Fact]
+    public async Task GenericPlayer_DisposesSessionWhenStopFails()
+    {
+        var factory = new FakeMediaSessionFactory();
+        await using var player = new FfmpegMediaPlayer(factory);
+        await player.OpenAsync(MediaSource.Parse("rtsp://camera/live"));
+        await player.PlayAsync();
+        var session = Assert.IsType<FakeMediaSession>(factory.LastSession);
+        var expected = new InvalidOperationException("Stop failed.");
+        session.StopException = expected;
+
+        var actual = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => player.StopAsync().AsTask());
+
+        Assert.Same(expected, actual);
+        Assert.True(session.Disposed);
+        Assert.Equal(MediaPlaybackState.Stopped, player.State);
+    }
+
+    [Fact]
+    public async Task GenericPlayer_ContinuesNotifyingAfterSubscriberFailure()
+    {
+        var factory = new FakeMediaSessionFactory();
+        await using var player = new FfmpegMediaPlayer(factory);
+        var stateNotifications = 0;
+        var frameNotifications = 0;
+        var errorNotifications = 0;
+        player.StateChanged += (_, _) => throw new InvalidOperationException("State subscriber failed.");
+        player.StateChanged += (_, _) => stateNotifications++;
+        player.FrameReceived += (_, _) => throw new InvalidOperationException("Frame subscriber failed.");
+        player.FrameReceived += (_, _) => frameNotifications++;
+        player.Error += (_, _) => throw new InvalidOperationException("Error subscriber failed.");
+        player.Error += (_, _) => errorNotifications++;
+
+        await player.OpenAsync(MediaSource.Parse("rtsp://camera/live"));
+        await player.PlayAsync();
+        var session = Assert.IsType<FakeMediaSession>(factory.LastSession);
+        session.EmitError();
+
+        Assert.True(stateNotifications > 0);
+        Assert.Equal(1, frameNotifications);
+        Assert.Equal(1, errorNotifications);
+    }
+
     [Theory]
     [InlineData(MediaFrameStorageKind.D3D11Texture, true)]
     [InlineData(MediaFrameStorageKind.CpuMemory, false)]
@@ -221,12 +265,13 @@ public sealed class FfmpegMediaPlayerTests
         public double Volume { get; set; } = volume;
         public bool IsMuted { get; set; } = isMuted;
         internal bool Disposed { get; private set; }
+        internal Exception? StopException { get; set; }
         internal int FrameSubscriberCount =>
             _frameReceived?.GetInvocationList().Length ?? 0;
         private EventHandler<MediaVideoFrame>? _frameReceived;
 
         public event EventHandler<MediaPlaybackStateChangedEventArgs>? StateChanged;
-        public event EventHandler<MediaPlaybackErrorEventArgs>? Error { add { } remove { } }
+        public event EventHandler<MediaPlaybackErrorEventArgs>? Error;
         public event EventHandler<MediaVideoFrame>? FrameReceived
         {
             add
@@ -251,8 +296,20 @@ public sealed class FfmpegMediaPlayerTests
             _frameReceived?.Invoke(this, new MediaVideoFrame(
                 new byte[16], 2, 2, 8, MediaPixelFormat.Bgra32, 1, DateTimeOffset.UtcNow));
 
+        internal void EmitError() =>
+            Error?.Invoke(this, new MediaPlaybackErrorEventArgs(new MediaPlaybackError(
+                "Test",
+                "Test error.",
+                IsRecoverable: true,
+                Exception: null)));
+
         public ValueTask StopAsync(CancellationToken cancellationToken = default)
         {
+            if (StopException is not null)
+            {
+                return ValueTask.FromException(StopException);
+            }
+
             TransitionTo(MediaPlaybackState.Stopped);
             return ValueTask.CompletedTask;
         }

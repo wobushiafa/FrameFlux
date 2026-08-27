@@ -1,10 +1,11 @@
 using System;
+
 namespace FrameFlux.FFmpeg;
 
 internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
 {
     private readonly Action<FfmpegMediaFrameLease>? _returnAction;
-    private bool _disposed;
+    private int _disposed;
 
     internal FfmpegMediaFrameLease(IntPtr buffer, int size, Action<FfmpegMediaFrameLease> returnAction)
     {
@@ -41,7 +42,8 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
 
     public bool TryGetCpuBuffer(out MediaCpuFrameBuffer buffer)
     {
-        if (PixelFormat == RtspNativePixelFormat.D3D11Texture ||
+        if (Volatile.Read(ref _disposed) != 0 ||
+            PixelFormat == RtspNativePixelFormat.D3D11Texture ||
             Plane0Pointer == IntPtr.Zero)
         {
             buffer = default;
@@ -62,7 +64,8 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
 
     public bool TryGetD3D11Texture(out MediaD3D11TextureBuffer texture)
     {
-        if (PixelFormat != RtspNativePixelFormat.D3D11Texture ||
+        if (Volatile.Read(ref _disposed) != 0 ||
+            PixelFormat != RtspNativePixelFormat.D3D11Texture ||
             D3D11Texture == IntPtr.Zero)
         {
             texture = default;
@@ -99,18 +102,17 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
 
     public void Dispose()
     {
-        if (_disposed)
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
             return;
         }
 
-        _disposed = true;
         _returnAction?.Invoke(this);
     }
 
     internal void ResetBgra(int width, int height, int stride)
     {
-        _disposed = false;
+        Volatile.Write(ref _disposed, 0);
         Width = width;
         Height = height;
         Stride = stride;
@@ -138,7 +140,7 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
         int plane1Stride,
         int plane2Stride)
     {
-        _disposed = false;
+        Volatile.Write(ref _disposed, 0);
         Width = width;
         Height = height;
         Stride = plane0Stride;
@@ -166,7 +168,7 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
         int plane1Stride,
         int plane2Stride)
     {
-        _disposed = false;
+        Volatile.Write(ref _disposed, 0);
         Width = width;
         Height = height;
         Stride = plane0Stride;
@@ -187,7 +189,7 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
 
     internal void ResetD3D11(int width, int height, IntPtr texture, int arraySlice)
     {
-        _disposed = false;
+        Volatile.Write(ref _disposed, 0);
         Width = width;
         Height = height;
         Stride = 0;

@@ -65,6 +65,22 @@ public sealed class MediaPresentationPolicyTests
     }
 
     [Fact]
+    public void Automatic_ReconfiguresOverlayWhenEffectiveModeUsesNativeSurface()
+    {
+        Assert.True(MediaPresentationPolicy.RequiresOverlayReconfiguration(
+            MediaVideoPresentationMode.Automatic,
+            MediaVideoPresentationMode.NativeSurface));
+    }
+
+    [Fact]
+    public void Automatic_DoesNotReconfigureOverlayForGpuComposition()
+    {
+        Assert.False(MediaPresentationPolicy.RequiresOverlayReconfiguration(
+            MediaVideoPresentationMode.Automatic,
+            MediaVideoPresentationMode.GpuComposition));
+    }
+
+    [Fact]
     public void PresentationFailures_RequireFallbackAfterThreeConsecutiveAttempts()
     {
         var tracker = new MediaPresentationFailureTracker();
@@ -90,5 +106,38 @@ public sealed class MediaPresentationPolicyTests
         var next = tracker.Register(new InvalidOperationException("next"));
         Assert.Equal(1, next.ConsecutiveFailureCount);
         Assert.False(next.RequiresSoftwareFallback);
+    }
+
+    [Fact]
+    public void ExhaustedFailureBudget_RequestsFallbackOnlyOnce()
+    {
+        var tracker = new MediaPresentationFailureTracker(maximumAttempts: 3);
+
+        var failures = Enumerable.Range(0, 5)
+            .Select(index => tracker.Register(
+                new InvalidOperationException(index.ToString())))
+            .ToArray();
+
+        Assert.Single(failures, failure => failure.RequiresSoftwareFallback);
+        Assert.False(failures[^1].RequiresSoftwareFallback);
+        Assert.True(tracker.IsExhausted);
+    }
+
+    [Fact]
+    public async Task ConcurrentFailures_AreCountedAtomically()
+    {
+        const int failureCount = 64;
+        var tracker = new MediaPresentationFailureTracker(failureCount);
+
+        var failures = await Task.WhenAll(
+            Enumerable.Range(0, failureCount)
+                .Select(index => Task.Run(() =>
+                    tracker.Register(new InvalidOperationException(index.ToString())))));
+
+        Assert.Equal(
+            Enumerable.Range(1, failureCount),
+            failures.Select(failure => failure.ConsecutiveFailureCount).Order());
+        Assert.Single(failures, failure => failure.RequiresSoftwareFallback);
+        Assert.True(tracker.IsExhausted);
     }
 }

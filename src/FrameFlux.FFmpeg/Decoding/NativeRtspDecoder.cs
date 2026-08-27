@@ -69,8 +69,16 @@ internal sealed class RtspDecoder : IDisposable
             MaxFramesPerSecond = options.MaxFramesPerSecond
         };
 
-        var result = FrameFluxFFmpegNative.OpenDecoder(nativeOptions, out var session);
+        var result = FrameFluxFFmpegNative.OpenDecoder(
+            nativeOptions,
+            cancellationToken,
+            out var session);
         _session = session;
+        if (cancellationToken.IsCancellationRequested)
+        {
+            session.Dispose();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
         if (result < 0 || session.IsInvalid)
         {
             var message = session.IsInvalid
@@ -118,7 +126,7 @@ internal sealed class RtspDecoder : IDisposable
             frame = null;
             if (result == NativeReadResult.Error)
             {
-                throw new ApplicationException(FrameFluxFFmpegNative.GetError(_session));
+                throw CreateRuntimeException(FrameFluxFFmpegNative.GetError(_session));
             }
 
             return false;
@@ -127,7 +135,8 @@ internal sealed class RtspDecoder : IDisposable
         if (FrameFluxFFmpegNative.GetFrameInfo(handle, out var info) < 0)
         {
             handle.Dispose();
-            throw new ApplicationException("The native RTSP decoder returned an invalid video frame.");
+            throw CreateRuntimeException(
+                "The native RTSP decoder returned an invalid video frame.");
         }
 
         frame = new NativeDecodedFrame(handle, info);
@@ -152,9 +161,13 @@ internal sealed class RtspDecoder : IDisposable
             _options.ForceOpaqueAlpha ? 1 : 0);
         if (result < 0)
         {
-            throw new ApplicationException($"Unable to convert the decoded frame to BGRA (native error {result}).");
+            throw CreateRuntimeException(
+                $"Unable to convert the decoded frame to BGRA (native error {result}).");
         }
     }
+
+    private RtspDecoderRuntimeException CreateRuntimeException(string message) =>
+        new(message, null, IsHardwareVideoDecodingActive);
 
     internal bool TryGetNativePixelFormat(
         NativeDecodedFrame frame,

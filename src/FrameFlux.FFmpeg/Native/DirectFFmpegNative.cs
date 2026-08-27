@@ -11,22 +11,28 @@ internal static class FrameFluxFFmpegNative
 
     internal static int OpenDecoder(
         in NativeRtspOptions options,
+        CancellationToken cancellationToken,
         out NativeRtspSessionHandle session) =>
-        Open(options, packetReader: false, out session);
+        Open(options, packetReader: false, cancellationToken, out session);
 
     internal static int OpenPacketReader(
         in NativeRtspOptions options,
+        CancellationToken cancellationToken,
         out NativeRtspSessionHandle session) =>
-        Open(options, packetReader: true, out session);
+        Open(options, packetReader: true, cancellationToken, out session);
 
     private static int Open(
         in NativeRtspOptions options,
         bool packetReader,
+        CancellationToken cancellationToken,
         out NativeRtspSessionHandle session)
     {
         var state = new DirectRtspSession(FFmpegApi.Instance, packetReader);
         try
         {
+            using var cancellationRegistration = cancellationToken.Register(
+                static target => ((DirectRtspSession)target!).Cancel(),
+                state);
             var result = state.Open(options);
             session = new NativeRtspSessionHandle(AllocateHandle(state));
             return result;

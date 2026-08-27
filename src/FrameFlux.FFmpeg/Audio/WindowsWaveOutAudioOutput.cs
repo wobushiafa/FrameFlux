@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace FrameFlux.FFmpeg;
 
-internal sealed class WindowsWaveOutAudioOutput : IAudioOutput
+internal sealed class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAudioOutput
 {
     private const uint Mapper = uint.MaxValue;
     private const uint HeaderDone = 0x00000001;
@@ -19,6 +19,7 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput
     private long _devicePositionWraps;
     private long _pendingFrames;
     private bool _started;
+    private int _stopping;
 
     internal WindowsWaveOutAudioOutput(
         int sampleRate,
@@ -105,39 +106,43 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput
 
     public void Write(byte[] pcm)
     {
-        if (pcm.Length == 0) return;
-        lock (_sync)
+        if (pcm.Length == 0 || Volatile.Read(ref _stopping) != 0) return;
+        while (true)
         {
-            if (_handle == IntPtr.Zero) return;
-            ReclaimCompletedBuffers();
-            while (_pendingBuffers.Count >= MaximumQueuedBuffers)
+            lock (_sync)
             {
-                Thread.Sleep(1);
+                if (_handle == IntPtr.Zero || Volatile.Read(ref _stopping) != 0) return;
                 ReclaimCompletedBuffers();
+                if (_pendingBuffers.Count < MaximumQueuedBuffers)
+                {
+                    var pending = CreatePendingBuffer(pcm);
+                    try
+                    {
+                        ThrowIfFailed(
+                            waveOutWrite(_handle, pending.HeaderPointer, Marshal.SizeOf<WaveHeader>()),
+                            "waveOutWrite");
+                    }
+                    catch
+                    {
+                        ReleaseBuffer(pending);
+                        throw;
+                    }
+
+                    _pendingBuffers.Enqueue(pending);
+                    _pendingFrames += pending.Frames;
+                    if (!_started &&
+                        (_pendingFrames >= _startBufferFrames ||
+                         _pendingBuffers.Count >= MaximumQueuedBuffers))
+                    {
+                        ThrowIfFailed(waveOutRestart(_handle), "waveOutRestart");
+                        _started = true;
+                    }
+
+                    return;
+                }
             }
 
-            var pending = CreatePendingBuffer(pcm);
-            try
-            {
-                ThrowIfFailed(
-                    waveOutWrite(_handle, pending.HeaderPointer, Marshal.SizeOf<WaveHeader>()),
-                    "waveOutWrite");
-            }
-            catch
-            {
-                ReleaseBuffer(pending);
-                throw;
-            }
-
-            _pendingBuffers.Enqueue(pending);
-            _pendingFrames += pending.Frames;
-            if (!_started &&
-                (_pendingFrames >= _startBufferFrames ||
-                 _pendingBuffers.Count >= MaximumQueuedBuffers))
-            {
-                ThrowIfFailed(waveOutRestart(_handle), "waveOutRestart");
-                _started = true;
-            }
+            Thread.Sleep(1);
         }
     }
 
@@ -145,7 +150,7 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput
     {
         lock (_sync)
         {
-            if (_handle == IntPtr.Zero)
+            if (_handle == IntPtr.Zero || Volatile.Read(ref _stopping) != 0)
             {
                 return;
             }
@@ -164,8 +169,25 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput
         }
     }
 
+    public void RequestStop()
+    {
+        if (Interlocked.Exchange(ref _stopping, 1) != 0)
+        {
+            return;
+        }
+
+        lock (_sync)
+        {
+            if (_handle != IntPtr.Zero)
+            {
+                _ = waveOutReset(_handle);
+            }
+        }
+    }
+
     public void Dispose()
     {
+        RequestStop();
         lock (_sync)
         {
             var handle = _handle;

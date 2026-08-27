@@ -1,8 +1,11 @@
 using System.Globalization;
+using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
+#if !FRAMEFLUX_PRESENTATION_API_BASELINE
 using FrameFlux.FFmpeg;
+#endif
 using Xunit;
 
 namespace FrameFlux.FFmpeg.Tests;
@@ -14,9 +17,17 @@ public sealed class PublicApiBaselineTests
     [Fact]
     public void MainAssemblies_MatchReviewedPublicApiBaseline()
     {
+#if FRAMEFLUX_PRESENTATION_API_BASELINE
+        var actual = CreateBaseline(
+            Assembly.Load("FrameFlux.Presentation"),
+            Assembly.Load("FrameFlux.Rendering.Windows"),
+            typeof(global::FrameFlux.Wpf.MediaView).Assembly,
+            typeof(global::FrameFlux.Avalonia.MediaView).Assembly);
+#else
         var actual = CreateBaseline(
             typeof(IMediaPlayer).Assembly,
             typeof(FfmpegMediaPlayer).Assembly);
+#endif
         var baselinePath = Path.Combine(AppContext.BaseDirectory, "PublicApiBaseline.txt");
         var expected = File.ReadAllText(baselinePath).ReplaceLineEndings("\n").TrimEnd();
 

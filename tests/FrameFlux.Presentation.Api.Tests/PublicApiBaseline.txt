@@ -1,0 +1,80 @@
+[FrameFlux.Avalonia]
+class FrameFlux.Avalonia.MediaView : Avalonia.Controls.Control, Avalonia.Collections.IAvaloniaListItemValidator<Avalonia.LogicalTree.ILogical>, Avalonia.Collections.IAvaloniaListItemValidator<Avalonia.Visual>, Avalonia.Controls.IResourceHost, Avalonia.Controls.IResourceNode, Avalonia.Controls.ISetInheritanceParent, Avalonia.Controls.ISetLogicalParent, Avalonia.Controls.Templates.IDataTemplateHost, Avalonia.Diagnostics.IAvaloniaObjectDebug, Avalonia.IDataContextProvider, Avalonia.INamed, Avalonia.Input.IInputElement, Avalonia.LogicalTree.ILogical, Avalonia.Rendering.IVisualBrushInitialize, Avalonia.Styling.ISetterValue, Avalonia.Styling.IStyleHost, Avalonia.Styling.IThemeVariantHost, System.ComponentModel.INotifyPropertyChanged, System.ComponentModel.ISupportInitialize, System.IAsyncDisposable
+  constructor MediaView()
+  field Avalonia.StyledProperty<System.Boolean> AutoPlayProperty
+  field Avalonia.DirectProperty<FrameFlux.Avalonia.MediaView, FrameFlux.MediaVideoPresentationMode?> EffectivePresentationModeProperty
+  field Avalonia.DirectProperty<FrameFlux.Avalonia.MediaView, System.Boolean> IsHardwareVideoDecodingActiveProperty
+  field Avalonia.StyledProperty<System.Boolean> IsMutedProperty
+  field Avalonia.StyledProperty<System.Boolean> KeepPlaybackAliveProperty
+  field Avalonia.DirectProperty<FrameFlux.Avalonia.MediaView, FrameFlux.MediaPlaybackError?> LastErrorProperty
+  field Avalonia.StyledProperty<FrameFlux.MediaOpenOptions> OpenOptionsProperty
+  field Avalonia.StyledProperty<Avalonia.Controls.Control?> OverlayProperty
+  field Avalonia.StyledProperty<FrameFlux.IMediaPlayerFactory?> PlayerFactoryProperty
+  field Avalonia.StyledProperty<FrameFlux.MediaVideoPresentationMode> PresentationModeProperty
+  field Avalonia.StyledProperty<FrameFlux.MediaSource?> SourceProperty
+  field Avalonia.DirectProperty<FrameFlux.Avalonia.MediaView, FrameFlux.MediaPlaybackState> StateProperty
+  field Avalonia.StyledProperty<Avalonia.Media.Stretch> StretchProperty
+  field Avalonia.DirectProperty<FrameFlux.Avalonia.MediaView, System.String> VideoDecoderDiagnosticsProperty
+  field Avalonia.StyledProperty<System.Double> VolumeProperty
+  property System.Boolean AutoPlay { get; set; }
+  property FrameFlux.MediaVideoPresentationMode? EffectivePresentationMode { get; }
+  property System.Boolean IsHardwareVideoDecodingActive { get; }
+  property System.Boolean IsMuted { get; set; }
+  property System.Boolean KeepPlaybackAlive { get; set; }
+  property FrameFlux.MediaPlaybackError? LastError { get; }
+  property FrameFlux.MediaOpenOptions OpenOptions { get; set; }
+  property Avalonia.Controls.Control? Overlay { get; set; }
+  property FrameFlux.IMediaPlayerFactory? PlayerFactory { get; set; }
+  property FrameFlux.MediaVideoPresentationMode PresentationMode { get; set; }
+  property FrameFlux.MediaSource? Source { get; set; }
+  property FrameFlux.MediaPlaybackState State { get; }
+  property Avalonia.Media.Stretch Stretch { get; set; }
+  property System.String VideoDecoderDiagnostics { get; }
+  property System.Double Volume { get; set; }
+  event System.EventHandler<FrameFlux.MediaVideoFrame>? FrameReceived
+  event System.EventHandler<FrameFlux.MediaPlaybackErrorEventArgs>? PlaybackError
+  event System.EventHandler<FrameFlux.MediaPlaybackStateChangedEventArgs>? PlaybackStateChanged
+  method System.Threading.Tasks.ValueTask DisposeAsync()
+  method System.Threading.Tasks.ValueTask StartAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask StopAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask<FrameFlux.MediaSnapshot?> CaptureSnapshotAsync(System.Threading.CancellationToken cancellationToken = default)
+[FrameFlux.Presentation]
+[FrameFlux.Rendering.Windows]
+[FrameFlux.Wpf]
+class FrameFlux.Wpf.MediaView : System.Windows.Controls.Grid, System.ComponentModel.ISupportInitialize, System.IAsyncDisposable, System.Windows.IFrameworkInputElement, System.Windows.IInputElement, System.Windows.Markup.IAddChild, System.Windows.Markup.IHaveResources, System.Windows.Markup.IQueryAmbient, System.Windows.Media.Animation.IAnimatable, System.Windows.Media.Composition.DUCE.IResource
+  constructor MediaView()
+  field System.Windows.DependencyProperty AutoPlayProperty
+  field System.Windows.DependencyProperty EffectivePresentationModeProperty
+  field System.Windows.DependencyProperty IsHardwareVideoDecodingActiveProperty
+  field System.Windows.DependencyProperty IsMutedProperty
+  field System.Windows.DependencyProperty KeepPlaybackAliveProperty
+  field System.Windows.DependencyProperty LastErrorProperty
+  field System.Windows.DependencyProperty OpenOptionsProperty
+  field System.Windows.DependencyProperty PlayerFactoryProperty
+  field System.Windows.DependencyProperty PresentationModeProperty
+  field System.Windows.DependencyProperty SourceProperty
+  field System.Windows.DependencyProperty StateProperty
+  field System.Windows.DependencyProperty StretchProperty
+  field System.Windows.DependencyProperty VideoDecoderDiagnosticsProperty
+  field System.Windows.DependencyProperty VolumeProperty
+  property System.Boolean AutoPlay { get; set; }
+  property FrameFlux.MediaVideoPresentationMode? EffectivePresentationMode { get; }
+  property System.Boolean IsHardwareVideoDecodingActive { get; }
+  property System.Boolean IsMuted { get; set; }
+  property System.Boolean KeepPlaybackAlive { get; set; }
+  property FrameFlux.MediaPlaybackError? LastError { get; }
+  property FrameFlux.MediaOpenOptions OpenOptions { get; set; }
+  property FrameFlux.IMediaPlayerFactory? PlayerFactory { get; set; }
+  property FrameFlux.MediaVideoPresentationMode PresentationMode { get; set; }
+  property FrameFlux.MediaSource? Source { get; set; }
+  property FrameFlux.MediaPlaybackState State { get; }
+  property System.Windows.Media.Stretch Stretch { get; set; }
+  property System.String VideoDecoderDiagnostics { get; }
+  property System.Double Volume { get; set; }
+  event System.EventHandler<FrameFlux.MediaVideoFrame>? FrameReceived
+  event System.EventHandler<FrameFlux.MediaPlaybackErrorEventArgs>? PlaybackError
+  event System.EventHandler<FrameFlux.MediaPlaybackStateChangedEventArgs>? PlaybackStateChanged
+  method System.Threading.Tasks.ValueTask DisposeAsync()
+  method System.Threading.Tasks.ValueTask StartAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask StopAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask<FrameFlux.MediaSnapshot?> CaptureSnapshotAsync(System.Threading.CancellationToken cancellationToken = default)

@@ -3,26 +3,54 @@
     <TargetFramework>net10.0-android</TargetFramework>
     <IsPackable>true</IsPackable>
     <IncludeBuildOutput>false</IncludeBuildOutput>
+    <IncludeSymbols>false</IncludeSymbols>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <PackageId>FrameFlux.FFmpeg.NativeAssets.Android</PackageId>
     <Description>Android native FFmpeg runtime assets for FrameFlux.</Description>
     <PackageTags>media;ffmpeg;native;android</PackageTags>
+    <FrameFluxValidateAndroidPageAlignment>true</FrameFluxValidateAndroidPageAlignment>
+    <FrameFluxMinimumAndroidPageAlignment>16384</FrameFluxMinimumAndroidPageAlignment>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="..\..\native\artifacts\runtimes\android-arm\native\*.so"
+    <None Include="..\..\native\artifacts\runtimes\android-arm\native\libc++_shared.so;
+                   ..\..\native\artifacts\runtimes\android-arm\native\libavcodec_neon.so;
+                   ..\..\native\artifacts\runtimes\android-arm\native\libavformat_neon.so;
+                   ..\..\native\artifacts\runtimes\android-arm\native\libavutil_neon.so;
+                   ..\..\native\artifacts\runtimes\android-arm\native\libswresample_neon.so;
+                   ..\..\native\artifacts\runtimes\android-arm\native\libswscale_neon.so"
           Pack="true"
-          PackagePath="runtimes\android-arm\native" />
-    <None Include="..\..\native\artifacts\runtimes\android-arm64\native\*.so"
+          PackagePath="runtimes\android-arm\native"
+          FrameFluxValidatePageAlignment="true" />
+    <None Include="..\..\native\artifacts\runtimes\android-arm64\native\libc++_shared.so;
+                   ..\..\native\artifacts\runtimes\android-arm64\native\libavcodec.so;
+                   ..\..\native\artifacts\runtimes\android-arm64\native\libavformat.so;
+                   ..\..\native\artifacts\runtimes\android-arm64\native\libavutil.so;
+                   ..\..\native\artifacts\runtimes\android-arm64\native\libswresample.so;
+                   ..\..\native\artifacts\runtimes\android-arm64\native\libswscale.so"
           Pack="true"
-          PackagePath="runtimes\android-arm64\native" />
-    <None Include="..\..\native\artifacts\runtimes\android-x86\native\*.so"
+          PackagePath="runtimes\android-arm64\native"
+          FrameFluxValidatePageAlignment="true" />
+    <None Include="..\..\native\artifacts\runtimes\android-x86\native\libc++_shared.so;
+                   ..\..\native\artifacts\runtimes\android-x86\native\libavcodec.so;
+                   ..\..\native\artifacts\runtimes\android-x86\native\libavformat.so;
+                   ..\..\native\artifacts\runtimes\android-x86\native\libavutil.so;
+                   ..\..\native\artifacts\runtimes\android-x86\native\libswresample.so;
+                   ..\..\native\artifacts\runtimes\android-x86\native\libswscale.so"
           Pack="true"
-          PackagePath="runtimes\android-x86\native" />
-    <None Include="..\..\native\artifacts\runtimes\android-x64\native\*.so"
+          PackagePath="runtimes\android-x86\native"
+          FrameFluxValidatePageAlignment="true" />
+    <None Include="..\..\native\artifacts\runtimes\android-x64\native\libc++_shared.so;
+                   ..\..\native\artifacts\runtimes\android-x64\native\libavcodec.so;
+                   ..\..\native\artifacts\runtimes\android-x64\native\libavformat.so;
+                   ..\..\native\artifacts\runtimes\android-x64\native\libavutil.so;
+                   ..\..\native\artifacts\runtimes\android-x64\native\libswresample.so;
+                   ..\..\native\artifacts\runtimes\android-x64\native\libswscale.so"
           Pack="true"
-          PackagePath="runtimes\android-x64\native" />
+          PackagePath="runtimes\android-x64\native"
+          FrameFluxValidatePageAlignment="true" />
     <None Include="FrameFlux.FFmpeg.NativeAssets.Android.targets"
           Pack="true"
           PackagePath="buildTransitive\FrameFlux.FFmpeg.NativeAssets.Android.targets" />
   </ItemGroup>
+
 </Project>

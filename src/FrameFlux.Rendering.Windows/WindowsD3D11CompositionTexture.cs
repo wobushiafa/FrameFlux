@@ -84,14 +84,7 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
 
         if (_keyedMutex is not null)
         {
-            try
-            {
-                _keyedMutex.AcquireSync(0, 0);
-            }
-            catch (SharpGenException)
-            {
-                return false;
-            }
+            _keyedMutex.AcquireSync(0, 0);
         }
 
         var rendered = false;

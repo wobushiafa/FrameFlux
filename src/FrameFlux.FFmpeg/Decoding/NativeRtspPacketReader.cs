@@ -51,8 +51,16 @@ internal sealed class NativeRtspPacketReader : IDisposable
             MaxFramesPerSecond = options.MaxFramesPerSecond
         };
 
-        var result = FrameFluxFFmpegNative.OpenPacketReader(nativeOptions, out var session);
+        var result = FrameFluxFFmpegNative.OpenPacketReader(
+            nativeOptions,
+            cancellationToken,
+            out var session);
         _session = session;
+        if (cancellationToken.IsCancellationRequested)
+        {
+            session.Dispose();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
         if (result < 0 || session.IsInvalid)
         {
             var message = session.IsInvalid

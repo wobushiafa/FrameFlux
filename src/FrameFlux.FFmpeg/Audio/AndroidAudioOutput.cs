@@ -3,7 +3,7 @@ using Android.Media;
 
 namespace FrameFlux.FFmpeg;
 
-internal sealed class AndroidAudioOutput : IAudioOutput
+internal sealed class AndroidAudioOutput : IAudioOutput, IInterruptibleAudioOutput
 {
     private AudioTrack? _track;
     private readonly AudioOutputConfiguration _configuration;
@@ -12,6 +12,7 @@ internal sealed class AndroidAudioOutput : IAudioOutput
     private string? _lastError;
     private uint _lastHead;
     private long _headWraps;
+    private int _stopping;
 
     internal AndroidAudioOutput(
         int sampleRate,
@@ -78,12 +79,17 @@ internal sealed class AndroidAudioOutput : IAudioOutput
     public void Write(byte[] pcm)
     {
         var track = _track;
-        if (track is null || pcm.Length == 0) return;
+        if (track is null || pcm.Length == 0 || Volatile.Read(ref _stopping) != 0) return;
         var written = OperatingSystem.IsAndroidVersionAtLeast(23)
             ? track.Write(pcm, 0, pcm.Length, WriteMode.Blocking)
             : track.Write(pcm, 0, pcm.Length);
         if (written < 0)
         {
+            if (Volatile.Read(ref _stopping) != 0)
+            {
+                return;
+            }
+
             _lastError = $"AudioTrack.Write failed with code {written}.";
             throw new InvalidOperationException(_lastError);
         }
@@ -93,7 +99,7 @@ internal sealed class AndroidAudioOutput : IAudioOutput
     public void Reset()
     {
         var track = _track;
-        if (track is null)
+        if (track is null || Volatile.Read(ref _stopping) != 0)
         {
             return;
         }
@@ -106,12 +112,41 @@ internal sealed class AndroidAudioOutput : IAudioOutput
         track.Play();
     }
 
+    public void RequestStop()
+    {
+        if (Interlocked.Exchange(ref _stopping, 1) != 0)
+        {
+            return;
+        }
+
+        var track = _track;
+        if (track is null)
+        {
+            return;
+        }
+
+        try
+        {
+            track.Stop();
+        }
+        catch (Exception)
+        {
+        }
+
+        try
+        {
+            track.Flush();
+        }
+        catch (Exception)
+        {
+        }
+    }
+
     public void Dispose()
     {
+        RequestStop();
         var track = Interlocked.Exchange(ref _track, null);
         if (track is null) return;
-        track.Stop();
-        track.Flush();
         track.Release();
         track.Dispose();
     }

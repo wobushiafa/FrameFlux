@@ -93,14 +93,17 @@ public sealed class FFmpegLibraryLoaderTests
             output: output);
 
         controller.Write(CreateAudioFrame([10000, -10000]));
+        WaitForWriteCount(output, 1);
         Assert.Equal([5000, -5000], ReadSamples(output.LastPcm));
 
         controller.SetVolume(0.25d);
         controller.Write(CreateAudioFrame([10000, -10000]));
+        WaitForWriteCount(output, 2);
         Assert.Equal([2500, -2500], ReadSamples(output.LastPcm));
 
         controller.SetMuted(true);
         controller.Write(CreateAudioFrame([10000, -10000]));
+        WaitForWriteCount(output, 3);
         Assert.Equal([0, 0], ReadSamples(output.LastPcm));
     }
 
@@ -122,6 +125,7 @@ public sealed class FFmpegLibraryLoaderTests
 
         controller.Write(frame);
 
+        WaitForWriteCount(output, 1);
         Assert.Equal(1, output.WriteCount);
     }
 
@@ -149,8 +153,49 @@ public sealed class FFmpegLibraryLoaderTests
             1,
             48000));
 
+        WaitForWriteCount(output, 2);
         Assert.Equal(1, output.ResetCount);
         Assert.Equal(1, controller.ClockResetCount);
+    }
+
+    [Fact]
+    public async Task AudioPlaybackController_DoesNotBlockProducerWhenOutputIsSlow()
+    {
+        using var output = new BlockingAudioOutput();
+        var controller = new AudioPlaybackController(
+            volume: 1d,
+            muted: false,
+            bufferDuration: TimeSpan.FromMilliseconds(40),
+            output: output);
+        var frame = new NativeAudioFrame(new byte[4], 48000, 2, 0, 1, 48000);
+
+        try
+        {
+            controller.Write(frame);
+            Assert.True(
+                await Task.Run(
+                    () => output.WriteStarted.Wait(TimeSpan.FromSeconds(2))),
+                "The background audio worker did not start.");
+
+            var producer = Task.Run(() =>
+            {
+                for (var index = 0; index < 1000; index++)
+                {
+                    controller.Write(frame);
+                }
+            });
+
+            var completed = await Task.WhenAny(
+                producer,
+                Task.Delay(TimeSpan.FromSeconds(1)));
+            Assert.Same(producer, completed);
+            await producer;
+        }
+        finally
+        {
+            output.ReleaseWrites();
+            controller.Dispose();
+        }
     }
 
     [Fact]
@@ -251,6 +296,82 @@ public sealed class FFmpegLibraryLoaderTests
             [directory.Path], "avcodec", FFmpegLibraryPlatform.Linux));
     }
 
+    [Fact]
+    public void LibrarySetValidation_AcceptsMatchingVersionedFiles()
+    {
+        var files = new Dictionary<string, string>
+        {
+            ["avcodec"] = "avcodec-61.dll",
+            ["avformat"] = "avformat-61.dll",
+            ["avutil"] = "avutil-59.dll",
+            ["swscale"] = "swscale-8.dll",
+            ["swresample"] = "swresample-5.dll"
+        };
+
+        FFmpegLibraryLoader.ValidateSelectedLibraryVersions(
+            files,
+            FFmpegLibraryPlatform.Windows);
+    }
+
+    [Fact]
+    public void LibrarySetValidation_RejectsMixedHighestFilesBeforeLoading()
+    {
+        var files = new Dictionary<string, string>
+        {
+            ["avcodec"] = "avcodec-61.dll",
+            ["avformat"] = "avformat-62.dll",
+            ["avutil"] = "avutil-59.dll",
+            ["swscale"] = "swscale-8.dll",
+            ["swresample"] = "swresample-5.dll"
+        };
+
+        var exception = Assert.Throws<NotSupportedException>(
+            () => FFmpegLibraryLoader.ValidateSelectedLibraryVersions(
+                files,
+                FFmpegLibraryPlatform.Windows));
+
+        Assert.Contains("mix incompatible ABI families", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(60, 60, 58, 7, 4)]
+    [InlineData(61, 61, 59, 8, 5)]
+    [InlineData(62, 62, 60, 9, 6)]
+    public void VersionValidation_AcceptsCompleteSupportedFamilies(
+        int codec,
+        int format,
+        int util,
+        int scale,
+        int resample)
+    {
+        FFmpegApi.ValidateVersionFamily(codec, format, util, scale, resample);
+    }
+
+    [Theory]
+    [InlineData(61, 62, 59, 8, 5)]
+    [InlineData(61, 61, 60, 8, 5)]
+    [InlineData(61, 61, 59, 9, 5)]
+    [InlineData(61, 61, 59, 8, 6)]
+    public void VersionValidation_RejectsMixedComponentFamilies(
+        int codec,
+        int format,
+        int util,
+        int scale,
+        int resample)
+    {
+        var exception = Assert.Throws<NotSupportedException>(
+            () => FFmpegApi.ValidateVersionFamily(codec, format, util, scale, resample));
+
+        Assert.Contains("one FFmpeg build", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void VersionValidation_RejectsUnsupportedCodecMajor()
+    {
+        Assert.Throws<NotSupportedException>(
+            () => FFmpegApi.ValidateVersionFamily(63, 63, 61, 10, 7));
+    }
+
     private static NativeAudioFrame CreateAudioFrame(short[] samples)
     {
         var pcm = new byte[samples.Length * sizeof(short)];
@@ -264,6 +385,15 @@ public sealed class FFmpegLibraryLoaderTests
         var samples = new short[pcm.Length / sizeof(short)];
         Buffer.BlockCopy(pcm, 0, samples, 0, pcm.Length);
         return samples;
+    }
+
+    private static void WaitForWriteCount(TestAudioOutput output, int expected)
+    {
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => output.WriteCount >= expected,
+                TimeSpan.FromSeconds(2)),
+            $"Expected {expected} audio writes, observed {output.WriteCount}.");
     }
 
     private sealed class TemporaryDirectory : IDisposable
@@ -284,13 +414,17 @@ public sealed class FFmpegLibraryLoaderTests
 
     private sealed class TestAudioOutput : IAudioOutput
     {
+        private int _writeCount;
+        private int _resetCount;
+        private byte[]? _lastPcm;
+
         public int SampleRate => 48000;
         public int Channels => 2;
         public long PlayedFrames => 0;
         public bool IsOperational { get; set; } = true;
-        public int WriteCount { get; private set; }
-        public int ResetCount { get; private set; }
-        public byte[]? LastPcm { get; private set; }
+        public int WriteCount => Volatile.Read(ref _writeCount);
+        public int ResetCount => Volatile.Read(ref _resetCount);
+        public byte[]? LastPcm => Volatile.Read(ref _lastPcm);
         public MediaAudioDiagnostics Diagnostics { get; } = new(
             "Test",
             "test-device",
@@ -305,17 +439,52 @@ public sealed class FFmpegLibraryLoaderTests
 
         public void Write(byte[] pcm)
         {
-            WriteCount++;
-            LastPcm = pcm.ToArray();
+            Volatile.Write(ref _lastPcm, pcm.ToArray());
+            Interlocked.Increment(ref _writeCount);
+        }
+
+        public void Reset() => Interlocked.Increment(ref _resetCount);
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class BlockingAudioOutput : IAudioOutput
+    {
+        private readonly ManualResetEventSlim _releaseWrites = new(false);
+        private int _disposed;
+
+        internal ManualResetEventSlim WriteStarted { get; } = new(false);
+
+        public int SampleRate => 48000;
+        public int Channels => 2;
+        public long PlayedFrames => 0;
+        public bool IsOperational => true;
+        public MediaAudioDiagnostics Diagnostics => MediaAudioDiagnostics.Empty;
+
+        public void Write(byte[] pcm)
+        {
+            WriteStarted.Set();
+            _releaseWrites.Wait();
         }
 
         public void Reset()
         {
-            ResetCount++;
         }
+
+        internal void ReleaseWrites() => _releaseWrites.Set();
 
         public void Dispose()
         {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            _releaseWrites.Set();
+            _releaseWrites.Dispose();
+            WriteStarted.Dispose();
         }
     }
 }

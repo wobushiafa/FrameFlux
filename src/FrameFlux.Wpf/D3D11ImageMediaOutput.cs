@@ -122,17 +122,21 @@ internal sealed class D3D11ImageMediaOutput :
                 return;
             }
 
-            _image.Lock();
+            if (_texture.RequiresReset(
+                    frame.Width,
+                    frame.Height,
+                    sourceTexture))
+            {
+                ResetPresentationResources();
+            }
+
+            var imageLocked = false;
             try
             {
-                if (_texture.RequiresReset(
-                        frame.Width,
-                        frame.Height,
-                        sourceTexture))
+                if (_backBufferAttached)
                 {
-                    DetachBackBufferLocked();
-                    ReleaseSharedSurface();
-                    _texture.Reset();
+                    _image.Lock();
+                    imageLocked = true;
                 }
 
                 if (!_texture.TryPresent(
@@ -147,21 +151,36 @@ internal sealed class D3D11ImageMediaOutput :
                 if (_surface is null ||
                     _generation != compositionFrame.Generation)
                 {
-                    DetachBackBufferLocked();
+                    if (imageLocked)
+                    {
+                        DetachBackBufferLocked();
+                        _image.Unlock();
+                        imageLocked = false;
+                    }
+
                     ReleaseSharedSurface();
                     OpenSharedSurface(compositionFrame);
-                    AttachBackBufferLocked();
                 }
 
                 if (_image.IsFrontBufferAvailable)
                 {
+                    if (!imageLocked)
+                    {
+                        _image.Lock();
+                        imageLocked = true;
+                    }
+
+                    AttachBackBufferLocked();
                     _image.AddDirtyRect(
                         new Int32Rect(0, 0, _width, _height));
                 }
             }
             finally
             {
-                _image.Unlock();
+                if (imageLocked)
+                {
+                    _image.Unlock();
+                }
             }
 
             _failureTracker.ReportSuccess();

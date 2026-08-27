@@ -11,9 +11,11 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
     private const int ErrorEof = -541478725;
     private const int ErrorExit = -1414092869;
     private const int ErrorNoMemory = -12;
+    private static readonly InterruptCallbackDelegate InterruptCallback = HandleInterrupt;
 
     private readonly FFmpegApi _api = api;
     private readonly bool _packetReader = packetReader;
+    private GCHandle _interruptHandle;
     private IntPtr _formatContext;
     private IntPtr _codecContext;
     private IntPtr _packet;
@@ -23,7 +25,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
     private IntPtr _codecParameters;
     private D3D11vaDecoderContext? _d3d11va;
     private int _videoStreamIndex = -1;
-    private readonly Queue<NativeAudioFrame> _audioFrames = new();
+    private readonly BoundedAudioFrameQueue _audioFrames = new();
     private IntPtr _audioCodecContext;
     private IntPtr _audioDecodeFrame;
     private IntPtr _audioStream;
@@ -53,6 +55,15 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
 
         VideoDecoderDiagnostics = options.UseHardwareAcceleration != 0 ? "D3D11VA requested" : "Disabled";
         _preserveHardwareFrames = options.PreserveHardwareFrames != 0;
+        _formatContext = _api.AvFormatAllocContext();
+        if (_formatContext == IntPtr.Zero)
+        {
+            return Fail(ErrorNoMemory, "avformat_alloc_context");
+        }
+        if (!TryInstallInterruptCallback())
+        {
+            return -1;
+        }
 
         IntPtr dictionary = IntPtr.Zero;
         try
@@ -152,6 +163,10 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
             }
 
             var result = _api.AvReadFrame(_formatContext, _packet);
+            if (Volatile.Read(ref _cancelled))
+            {
+                return NativeReadResult.End;
+            }
             if (result == ErrorEof || result == ErrorExit)
             {
                 FlushAudioDecoder();
@@ -198,6 +213,10 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         while (!Volatile.Read(ref _cancelled))
         {
             var result = _api.AvReadFrame(_formatContext, _packet);
+            if (Volatile.Read(ref _cancelled))
+            {
+                return NativeReadResult.End;
+            }
             if (result == ErrorEof || result == ErrorExit)
             {
                 FlushAudioDecoder();
@@ -330,6 +349,90 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         _d3d11va?.Dispose();
         _d3d11va = null;
         if (_formatContext != IntPtr.Zero) _api.AvFormatCloseInput(ref _formatContext);
+        if (_interruptHandle.IsAllocated) _interruptHandle.Free();
+    }
+
+    internal static int CalculateInterruptCallbackOffset(
+        int fpsProbeSizeOffset,
+        int errorRecognitionOffset,
+        int pointerSize)
+    {
+        if (pointerSize is not (4 or 8))
+        {
+            throw new ArgumentOutOfRangeException(nameof(pointerSize));
+        }
+        if (fpsProbeSizeOffset < 0 || errorRecognitionOffset != fpsProbeSizeOffset + sizeof(int))
+        {
+            throw new InvalidOperationException(
+                "The loaded FFmpeg AVFormatContext layout is not supported.");
+        }
+
+        var firstByteAfterErrorRecognition = errorRecognitionOffset + sizeof(int);
+        return (firstByteAfterErrorRecognition + pointerSize - 1) & ~(pointerSize - 1);
+    }
+
+    private bool TryInstallInterruptCallback()
+    {
+        using var fpsProbeSizeName = new NativeUtf8String("fpsprobesize");
+        using var errorRecognitionName = new NativeUtf8String("f_err_detect");
+        var fpsProbeSizeOption = _api.AvOptFind(
+            _formatContext,
+            fpsProbeSizeName.Pointer,
+            IntPtr.Zero,
+            0,
+            0);
+        var errorRecognitionOption = _api.AvOptFind(
+            _formatContext,
+            errorRecognitionName.Pointer,
+            IntPtr.Zero,
+            0,
+            0);
+        if (fpsProbeSizeOption == IntPtr.Zero || errorRecognitionOption == IntPtr.Zero)
+        {
+            Error = "Unable to locate the FFmpeg AVFormatContext interrupt callback layout.";
+            return false;
+        }
+
+        try
+        {
+            var optionOffsetField = IntPtr.Size * 2;
+            var interruptCallbackOffset = CalculateInterruptCallbackOffset(
+                Marshal.ReadInt32(fpsProbeSizeOption, optionOffsetField),
+                Marshal.ReadInt32(errorRecognitionOption, optionOffsetField),
+                IntPtr.Size);
+            _interruptHandle = GCHandle.Alloc(this, GCHandleType.Normal);
+            Marshal.WriteIntPtr(
+                _formatContext,
+                interruptCallbackOffset,
+                Marshal.GetFunctionPointerForDelegate(InterruptCallback));
+            Marshal.WriteIntPtr(
+                _formatContext,
+                interruptCallbackOffset + IntPtr.Size,
+                GCHandle.ToIntPtr(_interruptHandle));
+            return true;
+        }
+        catch (Exception exception)
+        {
+            if (_interruptHandle.IsAllocated) _interruptHandle.Free();
+            Error = $"Unable to configure FFmpeg I/O cancellation: {exception.Message}";
+            return false;
+        }
+    }
+
+    private static int HandleInterrupt(IntPtr opaque)
+    {
+        try
+        {
+            return opaque != IntPtr.Zero &&
+                   GCHandle.FromIntPtr(opaque).Target is DirectRtspSession session &&
+                   Volatile.Read(ref session._cancelled)
+                ? 1
+                : 0;
+        }
+        catch
+        {
+            return 1;
+        }
     }
 
     private NativeReadResult ReceiveFrame(out DirectVideoFrame? output)
@@ -367,6 +470,9 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
             isD3D11Frame && _preserveHardwareFrames);
         return NativeReadResult.Ok;
     }
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int InterruptCallbackDelegate(IntPtr opaque);
 
     private int OpenVideoDecoder(IntPtr decoder, in NativeRtspOptions options)
     {

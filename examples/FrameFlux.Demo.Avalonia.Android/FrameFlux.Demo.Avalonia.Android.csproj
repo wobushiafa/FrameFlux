@@ -2,12 +2,14 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-android</TargetFramework>
-    <SupportedOSPlatformVersion>23</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion>24</SupportedOSPlatformVersion>
     <ApplicationId>com.frameflux.demo</ApplicationId>
     <ApplicationVersion>1</ApplicationVersion>
     <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
     <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
+    <FrameFluxValidateAndroidPageAlignment>true</FrameFluxValidateAndroidPageAlignment>
+    <WarningsAsErrors Condition="'$(FrameFluxAllowUnsupportedAndroidPageAlignment)' != 'true'">$(WarningsAsErrors);XA0141</WarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\FrameFlux.Demo.Avalonia\FrameFlux.Demo.Avalonia.csproj" />
@@ -15,13 +17,37 @@
     <PackageReference Include="Xamarin.AndroidX.Core.SplashScreen" />
   </ItemGroup>
   <ItemGroup>
-    <AndroidNativeLibrary Include="..\..\native\artifacts\runtimes\android-arm\native\*.so"
-                          Link="lib\armeabi-v7a\%(Filename)%(Extension)" />
-    <AndroidNativeLibrary Include="..\..\native\artifacts\runtimes\android-arm64\native\*.so"
-                          Link="lib\arm64-v8a\%(Filename)%(Extension)" />
-    <AndroidNativeLibrary Include="..\..\native\artifacts\runtimes\android-x86\native\*.so"
-                          Link="lib\x86\%(Filename)%(Extension)" />
-    <AndroidNativeLibrary Include="..\..\native\artifacts\runtimes\android-x64\native\*.so"
-                          Link="lib\x86_64\%(Filename)%(Extension)" />
+    <AndroidNativeLibrary Include="..\..\native\artifacts\runtimes\android-arm\native\libc++_shared.so;
+                                   ..\..\native\artifacts\runtimes\android-arm\native\libavcodec_neon.so;
+                                   ..\..\native\artifacts\runtimes\android-arm\native\libavformat_neon.so;
+                                   ..\..\native\artifacts\runtimes\android-arm\native\libavutil_neon.so;
+                                   ..\..\native\artifacts\runtimes\android-arm\native\libswresample_neon.so;
+                                   ..\..\native\artifacts\runtimes\android-arm\native\libswscale_neon.so"
+                          Link="lib\armeabi-v7a\%(Filename)%(Extension)"
+                          FrameFluxValidatePageAlignment="true" />
+    <AndroidNativeLibrary Include="..\..\native\artifacts\runtimes\android-arm64\native\libc++_shared.so;
+                                   ..\..\native\artifacts\runtimes\android-arm64\native\libavcodec.so;
+                                   ..\..\native\artifacts\runtimes\android-arm64\native\libavformat.so;
+                                   ..\..\native\artifacts\runtimes\android-arm64\native\libavutil.so;
+                                   ..\..\native\artifacts\runtimes\android-arm64\native\libswresample.so;
+                                   ..\..\native\artifacts\runtimes\android-arm64\native\libswscale.so"
+                          Link="lib\arm64-v8a\%(Filename)%(Extension)"
+                          FrameFluxValidatePageAlignment="true" />
+    <AndroidNativeLibrary Include="..\..\native\artifacts\runtimes\android-x86\native\libc++_shared.so;
+                                   ..\..\native\artifacts\runtimes\android-x86\native\libavcodec.so;
+                                   ..\..\native\artifacts\runtimes\android-x86\native\libavformat.so;
+                                   ..\..\native\artifacts\runtimes\android-x86\native\libavutil.so;
+                                   ..\..\native\artifacts\runtimes\android-x86\native\libswresample.so;
+                                   ..\..\native\artifacts\runtimes\android-x86\native\libswscale.so"
+                          Link="lib\x86\%(Filename)%(Extension)"
+                          FrameFluxValidatePageAlignment="true" />
+    <AndroidNativeLibrary Include="..\..\native\artifacts\runtimes\android-x64\native\libc++_shared.so;
+                                   ..\..\native\artifacts\runtimes\android-x64\native\libavcodec.so;
+                                   ..\..\native\artifacts\runtimes\android-x64\native\libavformat.so;
+                                   ..\..\native\artifacts\runtimes\android-x64\native\libavutil.so;
+                                   ..\..\native\artifacts\runtimes\android-x64\native\libswresample.so;
+                                   ..\..\native\artifacts\runtimes\android-x64\native\libswscale.so"
+                          Link="lib\x86_64\%(Filename)%(Extension)"
+                          FrameFluxValidatePageAlignment="true" />
   </ItemGroup>
 </Project>

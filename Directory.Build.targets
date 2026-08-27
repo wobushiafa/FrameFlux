@@ -1,5 +1,138 @@
 <Project>
+  <PropertyGroup Condition="Exists('$(MSBuildProjectDirectory)\README.md') and
+                            '$(PackageReadmeFile)' == ''">
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <FrameFluxIncludeDefaultPackageReadme>true</FrameFluxIncludeDefaultPackageReadme>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(FrameFluxIncludeDefaultPackageReadme)' == 'true'">
+    <None Update="$(MSBuildProjectDirectory)\README.md"
+          Pack="true"
+          PackagePath=""
+          Visible="false" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(FrameFluxValidateAndroidPageAlignment)' == 'true' and
+                            '$(FrameFluxMinimumAndroidPageAlignment)' == ''">
+    <FrameFluxMinimumAndroidPageAlignment>16384</FrameFluxMinimumAndroidPageAlignment>
+  </PropertyGroup>
+
+  <UsingTask TaskName="FrameFluxValidateElfPageAlignment"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Files ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+      <MinimumAlignment ParameterType="System.Int64" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Code Type="Method" Language="cs"><![CDATA[
+        public override bool Execute()
+        {
+          foreach (var item in Files)
+          {
+              var path = item.GetMetadata("FullPath");
+              try
+              {
+                  using var stream = File.OpenRead(path);
+                  var header = new byte[64];
+                  if (stream.Read(header, 0, header.Length) != header.Length ||
+                      header[0] != 0x7f || header[1] != (byte)'E' ||
+                      header[2] != (byte)'L' || header[3] != (byte)'F')
+                  {
+                      Log.LogError($"'{path}' is not a valid ELF shared library.");
+                      continue;
+                  }
+
+                  if (header[5] != 1)
+                  {
+                      Log.LogError($"'{path}' uses an unsupported non-little-endian ELF format.");
+                      continue;
+                  }
+
+                  var is64Bit = header[4] == 2;
+                  if (!is64Bit && header[4] != 1)
+                  {
+                      Log.LogError($"'{path}' has an unsupported ELF class.");
+                      continue;
+                  }
+
+                  var programHeaderOffset = is64Bit
+                      ? checked((long)BitConverter.ToUInt64(header, 32))
+                      : BitConverter.ToUInt32(header, 28);
+                  var programHeaderSize = BitConverter.ToUInt16(header, is64Bit ? 54 : 42);
+                  var programHeaderCount = BitConverter.ToUInt16(header, is64Bit ? 56 : 44);
+                  var minimumHeaderSize = is64Bit ? 56 : 32;
+                  if (programHeaderSize < minimumHeaderSize)
+                  {
+                      Log.LogError($"'{path}' has an invalid ELF program header size.");
+                      continue;
+                  }
+
+                  var programHeader = new byte[programHeaderSize];
+                  var hasLoadSegment = false;
+                  for (var index = 0; index < programHeaderCount; index++)
+                  {
+                      stream.Position = programHeaderOffset + (long)index * programHeaderSize;
+                      if (stream.Read(programHeader, 0, programHeader.Length) != programHeader.Length)
+                      {
+                          Log.LogError($"'{path}' has a truncated ELF program header table.");
+                          break;
+                      }
+
+                      const uint loadSegment = 1;
+                      if (BitConverter.ToUInt32(programHeader, 0) != loadSegment)
+                      {
+                          continue;
+                      }
+
+                      hasLoadSegment = true;
+                      var alignment = is64Bit
+                          ? checked((long)BitConverter.ToUInt64(programHeader, 48))
+                          : BitConverter.ToUInt32(programHeader, 28);
+                      if (alignment < MinimumAlignment)
+                      {
+                          Log.LogError(
+                              $"'{path}' has a LOAD segment aligned to {alignment} bytes; " +
+                              $"Android 16 requires at least {MinimumAlignment} bytes.");
+                          break;
+                      }
+                  }
+
+                  if (!hasLoadSegment)
+                  {
+                      Log.LogError($"'{path}' does not contain an ELF LOAD segment.");
+                  }
+              }
+              catch (Exception exception)
+              {
+                  Log.LogError($"Unable to validate ELF alignment for '{path}': {exception.Message}");
+              }
+          }
+
+          return !Log.HasLoggedErrors;
+        }
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="ValidateFrameFluxAndroidPageAlignment"
+          BeforeTargets="PrepareForBuild;GenerateNuspec"
+          Condition="'$(FrameFluxValidateAndroidPageAlignment)' == 'true' and
+                     '$(FrameFluxAllowUnsupportedAndroidPageAlignment)' != 'true'">
+    <ItemGroup>
+      <_FrameFluxAndroidElf Include="@(None)"
+                           Condition="'%(None.FrameFluxValidatePageAlignment)' == 'true'" />
+      <_FrameFluxAndroidElf Include="@(AndroidNativeLibrary)"
+                           Condition="'%(AndroidNativeLibrary.FrameFluxValidatePageAlignment)' == 'true'" />
+    </ItemGroup>
+    <FrameFluxValidateElfPageAlignment Files="@(_FrameFluxAndroidElf)"
+                                       MinimumAlignment="$(FrameFluxMinimumAndroidPageAlignment)" />
+  </Target>
+
   <PropertyGroup Condition="'$(FrameFluxCopyNativeAssets)' == 'true'">
+    <FrameFluxNativeRuntimeIdentifier Condition="'$(FrameFluxNativeRuntimeIdentifier)' == '' and '$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</FrameFluxNativeRuntimeIdentifier>
     <FrameFluxNativeRuntimeIdentifier Condition="'$(FrameFluxNativeRuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</FrameFluxNativeRuntimeIdentifier>
     <FrameFluxNativeAssetsDirectory>$(MSBuildThisFileDirectory)native\artifacts\runtimes\$(FrameFluxNativeRuntimeIdentifier)\native</FrameFluxNativeAssetsDirectory>
   </PropertyGroup>
@@ -15,5 +148,17 @@
           BeforeTargets="PrepareForBuild"
           Condition="'$(FrameFluxCopyNativeAssets)' == 'true' and !Exists('$(FrameFluxNativeAssetsDirectory)')">
     <Warning Text="FrameFlux native assets were not found for '$(FrameFluxNativeRuntimeIdentifier)' at '$(FrameFluxNativeAssetsDirectory)'." />
+  </Target>
+
+  <Target Name="PinFrameFluxPackageDependencies"
+          AfterTargets="_GetProjectReferenceVersions"
+          Condition="'$(IsPackable)' == 'true' and
+                     '$(FrameFluxAllowFloatingPackageDependencies)' != 'true'">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions Update="@(_ProjectReferencesWithVersions)"
+                                      Condition="'%(_ProjectReferencesWithVersions.ProjectVersion)' != ''">
+        <ProjectVersion>[%(_ProjectReferencesWithVersions.ProjectVersion)]</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+    </ItemGroup>
   </Target>
 </Project>

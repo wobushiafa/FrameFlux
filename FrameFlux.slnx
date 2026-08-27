@@ -18,5 +18,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FrameFlux.FFmpeg.Tests/FrameFlux.FFmpeg.Tests.csproj" />
+    <Project Path="tests/FrameFlux.Presentation.Api.Tests/FrameFlux.Presentation.Api.Tests.csproj" />
   </Folder>
 </Solution>

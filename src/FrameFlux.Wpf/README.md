@@ -59,6 +59,9 @@ Explicit GPU modes throw when their requirements are not met. If
 `IsHardwareVideoDecodingActive` and `VideoDecoderDiagnostics` properties for
 runtime diagnostics.
 
+`FrameReceived` exposes managed frames when the active output delivers them.
+Subscriber exceptions are isolated so one observer cannot block the others.
+
 The WPF bitmap, `D3DImage`, and native `HwndHost` outputs own only framework
 integration and latest-frame queues. Win32 and D3D11 video processing resources
 live in the shared `FrameFlux.Rendering.Windows` package.

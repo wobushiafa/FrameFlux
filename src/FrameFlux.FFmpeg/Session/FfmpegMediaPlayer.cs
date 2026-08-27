@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.Logging;
 
 namespace FrameFlux.FFmpeg;
@@ -347,8 +349,14 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         {
             ThrowIfDisposed();
             TransitionTo(MediaPlaybackState.Stopping);
-            await StopSessionCoreAsync().ConfigureAwait(false);
-            TransitionTo(MediaPlaybackState.Stopped);
+            try
+            {
+                await StopSessionCoreAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                TransitionTo(MediaPlaybackState.Stopped);
+            }
         }
         finally
         {
@@ -430,12 +438,42 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         session.StateChanged -= OnSessionStateChanged;
         session.Error -= OnSessionError;
         session.FrameReceived -= OnFrameReceived;
-        await session.StopAsync().ConfigureAwait(false);
-        lock (_sync)
+
+        Exception? failure = null;
+        try
         {
-            _diagnostics = session.Diagnostics;
+            await session.StopAsync().ConfigureAwait(false);
         }
-        await session.DisposeAsync().ConfigureAwait(false);
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
+
+        try
+        {
+            lock (_sync)
+            {
+                _diagnostics = session.Diagnostics;
+            }
+        }
+        catch (Exception exception)
+        {
+            PreserveFirstFailure(ref failure, exception, "reading session diagnostics");
+        }
+
+        try
+        {
+            await session.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            PreserveFirstFailure(ref failure, exception, "disposing the media session");
+        }
+
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
     }
 
     private void OnSessionStateChanged(object? sender, MediaPlaybackStateChangedEventArgs args)
@@ -477,7 +515,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             subscribers = _frameReceived;
         }
 
-        subscribers?.Invoke(this, frame);
+        PublishEvent(subscribers, frame, "frame");
     }
 
     private void TransitionTo(MediaPlaybackState state)
@@ -493,7 +531,10 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             _state = state;
         }
 
-        StateChanged?.Invoke(this, new MediaPlaybackStateChangedEventArgs(oldState, state));
+        PublishEvent(
+            StateChanged,
+            new MediaPlaybackStateChangedEventArgs(oldState, state),
+            "state");
     }
 
     private void PublishError(MediaPlaybackError error)
@@ -502,7 +543,53 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         {
             _diagnostics = _diagnostics with { LastError = error.Message };
         }
-        Error?.Invoke(this, new MediaPlaybackErrorEventArgs(error));
+        PublishEvent(
+            Error,
+            new MediaPlaybackErrorEventArgs(error),
+            "error");
+    }
+
+    private void PublishEvent<TEventArgs>(
+        EventHandler<TEventArgs>? subscribers,
+        TEventArgs args,
+        string eventName)
+    {
+        if (subscribers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler<TEventArgs> subscriber in subscribers.GetInvocationList())
+        {
+            try
+            {
+                subscriber(this, args);
+            }
+            catch (Exception exception)
+            {
+                Trace.TraceWarning(
+                    "A media {0} subscriber failed: {1}",
+                    eventName,
+                    exception);
+            }
+        }
+    }
+
+    private static void PreserveFirstFailure(
+        ref Exception? failure,
+        Exception candidate,
+        string operation)
+    {
+        if (failure is null)
+        {
+            failure = candidate;
+            return;
+        }
+
+        Trace.TraceWarning(
+            "A secondary failure occurred while {0}: {1}",
+            operation,
+            candidate);
     }
 
     private void ThrowIfDisposed()

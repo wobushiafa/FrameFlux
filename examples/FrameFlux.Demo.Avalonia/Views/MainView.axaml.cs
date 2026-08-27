@@ -29,11 +29,11 @@ public sealed partial class MainView : UserControl
             },
             Video = new MediaVideoOptions
             {
-                DecodingPolicy = MediaVideoDecodingPolicy.HardwareRequired
+                DecodingPolicy = MediaVideoDecodingPolicy.HardwarePreferred
             }
         };
         Player.OpenOptions = options;
-        Player.PresentationMode = MediaVideoPresentationMode.GpuComposition;
+        Player.PresentationMode = MediaVideoPresentationMode.Automatic;
         _configuringPlaybackModes = true;
         HardwareModeComboBox.ItemsSource =
             Enum.GetValues<MediaVideoDecodingPolicy>();
@@ -48,8 +48,9 @@ public sealed partial class MainView : UserControl
     {
         try
         {
-            Player.Source = MediaSource.Parse(SourceTextBox.Text ?? string.Empty);
-            Player.AutoPlay = true;
+            var source = MediaSource.Parse(SourceTextBox.Text ?? string.Empty);
+            await Player.StopAsync();
+            Player.Source = source;
             SetStatus("Opening stream", BusyBrush);
             await Player.StartAsync();
         }

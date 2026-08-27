@@ -129,29 +129,183 @@ internal static class FFmpegLibraryLoader
             LoadOptional(directories, "libc++_shared.so");
         }
 
-        foreach (var component in LoadOrder)
+        var selectedFiles = RequiredComponents
+            .Select(component => (Component: component, File: FindBestLibraryFile(directories, component, platform)))
+            .Where(selection => selection.File is not null)
+            .ToDictionary(selection => selection.Component, selection => selection.File!, StringComparer.Ordinal);
+        if (selectedFiles.Count is > 0 and < 5)
         {
-            if (ComponentHandles.ContainsKey(component))
-            {
-                continue;
-            }
+            var missing = RequiredComponents.Where(component => !selectedFiles.ContainsKey(component));
+            throw new DllNotFoundException(
+                "A partial FFmpeg library set was found beside the application. " +
+                $"Missing: {string.Join(", ", missing)}. " +
+                "Ship all five components from one build, or rely entirely on system libraries.");
+        }
 
-            var file = FindBestLibraryFile(directories, component, platform);
-            if (file is not null)
-            {
-                ComponentHandles[component] = LoadFile(file, component);
-                continue;
-            }
+        ValidateSelectedLibraryVersions(selectedFiles, platform);
 
-            foreach (var name in GetPlatformLibraryNames(component))
+        var pendingHandles = new Dictionary<string, IntPtr>(StringComparer.Ordinal);
+        var pendingPaths = new List<string>();
+        try
+        {
+            foreach (var component in LoadOrder)
             {
-                if (NativeLibrary.TryLoad(name, out var handle))
+                if (ComponentHandles.ContainsKey(component))
                 {
-                    ComponentHandles[component] = handle;
-                    break;
+                    continue;
+                }
+
+                if (selectedFiles.TryGetValue(component, out var file))
+                {
+                    pendingHandles[component] = LoadFile(file, component);
+                    pendingPaths.Add(file);
+                    continue;
+                }
+
+                foreach (var name in GetPlatformLibraryNames(component))
+                {
+                    if (NativeLibrary.TryLoad(name, out var handle))
+                    {
+                        pendingHandles[component] = handle;
+                        break;
+                    }
                 }
             }
+
+            var missing = RequiredComponents
+                .Where(component => !ComponentHandles.ContainsKey(component) &&
+                                    !pendingHandles.ContainsKey(component))
+                .ToArray();
+            if (missing.Length > 0)
+            {
+                throw new DllNotFoundException(
+                    $"Unable to load FFmpeg components: {string.Join(", ", missing)}.");
+            }
+
+            foreach (var (component, handle) in pendingHandles)
+            {
+                ComponentHandles[component] = handle;
+            }
+
+            foreach (var path in pendingPaths)
+            {
+                LoadedPaths.Add(path);
+            }
         }
+        catch
+        {
+            foreach (var handle in pendingHandles.Values)
+            {
+                NativeLibrary.Free(handle);
+            }
+
+            throw;
+        }
+    }
+
+    internal static void ValidateSelectedLibraryVersions(
+        IReadOnlyDictionary<string, string> files,
+        FFmpegLibraryPlatform platform)
+    {
+        if (!files.TryGetValue("avcodec", out var codecFile))
+        {
+            return;
+        }
+
+        var codecMajor = GetLibraryMajorVersion(codecFile, "avcodec", platform);
+        if (codecMajor is null)
+        {
+            return;
+        }
+
+        var expected = codecMajor.Value switch
+        {
+            60 => new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["avcodec"] = 60, ["avformat"] = 60, ["avutil"] = 58,
+                ["swscale"] = 7, ["swresample"] = 4
+            },
+            61 => new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["avcodec"] = 61, ["avformat"] = 61, ["avutil"] = 59,
+                ["swscale"] = 8, ["swresample"] = 5
+            },
+            62 => new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["avcodec"] = 62, ["avformat"] = 62, ["avutil"] = 60,
+                ["swscale"] = 9, ["swresample"] = 6
+            },
+            _ => throw new NotSupportedException(
+                $"The selected avcodec library has unsupported major version {codecMajor}.")
+        };
+
+        foreach (var (component, file) in files)
+        {
+            var actualMajor = GetLibraryMajorVersion(file, component, platform);
+            if (actualMajor is not null && actualMajor != expected[component])
+            {
+                throw new NotSupportedException(
+                    $"The selected FFmpeg files mix incompatible ABI families: " +
+                    $"{Path.GetFileName(codecFile)} requires {component} major {expected[component]}, " +
+                    $"but {Path.GetFileName(file)} has major {actualMajor}.");
+            }
+        }
+    }
+
+    private static int? GetLibraryMajorVersion(
+        string path,
+        string component,
+        FFmpegLibraryPlatform platform)
+    {
+        var fileName = Path.GetFileName(path);
+        string? versionText = null;
+        if (platform == FFmpegLibraryPlatform.Windows)
+        {
+            var baseName = Path.GetFileNameWithoutExtension(fileName);
+            if (baseName.StartsWith("lib", StringComparison.OrdinalIgnoreCase))
+            {
+                baseName = baseName[3..];
+            }
+
+            var prefix = component + "-";
+            if (baseName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                versionText = baseName[prefix.Length..];
+            }
+        }
+        else if (platform == FFmpegLibraryPlatform.MacOS)
+        {
+            var prefix = $"lib{component}.";
+            if (fileName.StartsWith(prefix, StringComparison.Ordinal) &&
+                !fileName.Equals($"lib{component}.dylib", StringComparison.Ordinal))
+            {
+                versionText = fileName[prefix.Length..];
+            }
+        }
+        else
+        {
+            var marker = ".so.";
+            var markerIndex = fileName.IndexOf(marker, StringComparison.Ordinal);
+            if (markerIndex >= 0)
+            {
+                versionText = fileName[(markerIndex + marker.Length)..];
+            }
+        }
+
+        if (versionText is null)
+        {
+            return null;
+        }
+
+        var digitCount = 0;
+        while (digitCount < versionText.Length && char.IsDigit(versionText[digitCount]))
+        {
+            digitCount++;
+        }
+
+        return digitCount > 0 && int.TryParse(versionText[..digitCount], out var major)
+            ? major
+            : null;
     }
 
     private static IntPtr LoadFile(string path, string component)
@@ -163,9 +317,7 @@ internal static class FFmpegLibraryLoader
 
         try
         {
-            var handle = NativeLibrary.Load(path);
-            LoadedPaths.Add(path);
-            return handle;
+            return NativeLibrary.Load(path);
         }
         catch (Exception exception) when (exception is DllNotFoundException or BadImageFormatException)
         {

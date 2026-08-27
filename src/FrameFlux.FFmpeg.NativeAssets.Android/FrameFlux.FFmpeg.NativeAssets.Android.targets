@@ -1,12 +1,44 @@
 <Project>
+  <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">
+    <FrameFluxMinimumAndroidApiLevel>24.0</FrameFluxMinimumAndroidApiLevel>
+  </PropertyGroup>
+
   <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">
-    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-arm\native\*.so"
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-arm\native\libc++_shared.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-arm\native\libavcodec_neon.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-arm\native\libavformat_neon.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-arm\native\libavutil_neon.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-arm\native\libswresample_neon.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-arm\native\libswscale_neon.so"
                           Link="lib\armeabi-v7a\%(Filename)%(Extension)" />
-    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\*.so"
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\libc++_shared.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\libavcodec.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\libavformat.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\libavutil.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\libswresample.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-arm64\native\libswscale.so"
                           Link="lib\arm64-v8a\%(Filename)%(Extension)" />
-    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-x86\native\*.so"
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-x86\native\libc++_shared.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-x86\native\libavcodec.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-x86\native\libavformat.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-x86\native\libavutil.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-x86\native\libswresample.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-x86\native\libswscale.so"
                           Link="lib\x86\%(Filename)%(Extension)" />
-    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-x64\native\*.so"
+    <AndroidNativeLibrary Include="$(MSBuildThisFileDirectory)..\runtimes\android-x64\native\libc++_shared.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-x64\native\libavcodec.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-x64\native\libavformat.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-x64\native\libavutil.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-x64\native\libswresample.so;
+                                   $(MSBuildThisFileDirectory)..\runtimes\android-x64\native\libswscale.so"
                           Link="lib\x86_64\%(Filename)%(Extension)" />
   </ItemGroup>
+
+  <Target Name="ValidateFrameFluxAndroidMinimumApiLevel"
+          BeforeTargets="PrepareForBuild"
+          Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android' and
+                     '$(SupportedOSPlatformVersion)' != ''">
+    <Error Condition="$([MSBuild]::VersionLessThan('$(SupportedOSPlatformVersion)', '$(FrameFluxMinimumAndroidApiLevel)'))"
+           Text="FrameFlux Android native assets require API level 24 or later; the consuming project targets $(SupportedOSPlatformVersion)." />
+  </Target>
 </Project>

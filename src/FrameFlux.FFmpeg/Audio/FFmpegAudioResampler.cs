@@ -10,6 +10,7 @@ internal sealed class FFmpegAudioResampler : IDisposable
     private IntPtr _inputLayout;
     private IntPtr _outputLayout;
     private IntPtr _context;
+    private readonly ReusableUnmanagedBuffer _outputBuffer = new();
     private int _inputFormat = int.MinValue;
 
     internal FFmpegAudioResampler(FFmpegApi api, IntPtr codecContext)
@@ -55,45 +56,39 @@ internal sealed class FFmpegAudioResampler : IDisposable
             (delayed + layout.SampleCount) * (double)AudioOutputFactory.SampleRate / _inputRate));
         outputSamples = Math.Max(outputSamples, layout.SampleCount);
         var byteCount = checked(outputSamples * AudioOutputFactory.Channels * sizeof(short));
-        var outputBuffer = Marshal.AllocHGlobal(byteCount);
-        try
+        _outputBuffer.EnsureCapacity(byteCount);
+        unsafe
         {
-            unsafe
+            IntPtr* outputs = stackalloc IntPtr[1];
+            outputs[0] = _outputBuffer.Pointer;
+            var converted = _api.SwrConvert(
+                _context,
+                (IntPtr)outputs,
+                outputSamples,
+                layout.ExtendedData,
+                layout.SampleCount);
+            if (converted < 0)
             {
-                IntPtr* outputs = stackalloc IntPtr[1];
-                outputs[0] = outputBuffer;
-                var converted = _api.SwrConvert(
-                    _context,
-                    (IntPtr)outputs,
-                    outputSamples,
-                    layout.ExtendedData,
-                    layout.SampleCount);
-                if (converted < 0)
-                {
-                    throw new ApplicationException($"swr_convert: {_api.FormatError(converted)} ({converted})");
-                }
-
-                var data = GC.AllocateUninitializedArray<byte>(
-                    checked(converted * AudioOutputFactory.Channels * sizeof(short)));
-                Marshal.Copy(outputBuffer, data, 0, data.Length);
-                return new NativeAudioFrame(
-                    data,
-                    AudioOutputFactory.SampleRate,
-                    AudioOutputFactory.Channels,
-                    layout.PresentationTimestamp,
-                    timeBaseNumerator,
-                    timeBaseDenominator);
+                throw new ApplicationException($"swr_convert: {_api.FormatError(converted)} ({converted})");
             }
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(outputBuffer);
+
+            var data = GC.AllocateUninitializedArray<byte>(
+                checked(converted * AudioOutputFactory.Channels * sizeof(short)));
+            Marshal.Copy(_outputBuffer.Pointer, data, 0, data.Length);
+            return new NativeAudioFrame(
+                data,
+                AudioOutputFactory.SampleRate,
+                AudioOutputFactory.Channels,
+                layout.PresentationTimestamp,
+                timeBaseNumerator,
+                timeBaseDenominator);
         }
     }
 
     public void Dispose()
     {
         if (_context != IntPtr.Zero) _api.SwrFree(ref _context);
+        _outputBuffer.Dispose();
         ReleaseLayouts();
     }
 

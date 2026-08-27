@@ -97,7 +97,9 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            await StopPlayerCoreAsync(setStoppedState: false).ConfigureAwait(false);
+            await StopPlayerCoreAsync(
+                setStoppedState: false,
+                cancellationToken).ConfigureAwait(false);
             if (playerFactory is null)
             {
                 throw new InvalidOperationException(
@@ -144,6 +146,11 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
                 throw;
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            SetState(MediaPlaybackState.Stopped);
+            throw;
+        }
         catch (Exception exception) when (!_disposed || exception is not ObjectDisposedException)
         {
             ReportError(new MediaPlaybackError(
@@ -169,7 +176,9 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
                 return;
             }
 
-            await StopPlayerCoreAsync(setStoppedState: true).ConfigureAwait(false);
+            await StopPlayerCoreAsync(
+                setStoppedState: true,
+                cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -208,7 +217,9 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
         }
     }
 
-    private async ValueTask StopPlayerCoreAsync(bool setStoppedState)
+    private async ValueTask StopPlayerCoreAsync(
+        bool setStoppedState,
+        CancellationToken cancellationToken = default)
     {
         IMediaPlayer? player;
         lock (_eventSync)
@@ -221,24 +232,29 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
             }
         }
 
-        if (player is not null)
+        try
         {
-            player.StateChanged -= OnPlayerStateChanged;
-            player.Error -= OnPlayerError;
-            try
+            if (player is not null)
             {
-                await player.StopAsync().ConfigureAwait(false);
-            }
-            finally
-            {
-                await player.DisposeAsync().ConfigureAwait(false);
+                player.StateChanged -= OnPlayerStateChanged;
+                player.Error -= OnPlayerError;
+                try
+                {
+                    await player.StopAsync(cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    await player.DisposeAsync().ConfigureAwait(false);
+                }
             }
         }
-
-        _diagnostics = MediaDiagnostics.Empty;
-        if (setStoppedState)
+        finally
         {
-            SetState(MediaPlaybackState.Stopped);
+            _diagnostics = MediaDiagnostics.Empty;
+            if (setStoppedState)
+            {
+                SetState(MediaPlaybackState.Stopped);
+            }
         }
     }
 

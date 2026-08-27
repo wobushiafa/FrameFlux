@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Threading.Channels;
 
 namespace FrameFlux.FFmpeg;
 
@@ -11,6 +12,11 @@ internal interface IAudioOutput : IDisposable
     MediaAudioDiagnostics Diagnostics { get; }
     void Reset();
     void Write(byte[] pcm);
+}
+
+internal interface IInterruptibleAudioOutput
+{
+    void RequestStop();
 }
 
 internal static class AudioOutputFactory
@@ -60,15 +66,20 @@ internal sealed record AudioOutputConfiguration(
 internal sealed class AudioPlaybackController : IDisposable
 {
     private const double TimestampDiscontinuitySeconds = 0.5d;
+    private const double NominalFrameDurationMilliseconds = 20d;
+    private static readonly TimeSpan OutputWorkerStopTimeout = TimeSpan.FromSeconds(2);
     private readonly IAudioOutput _output;
     private readonly object _clockSync = new();
     private readonly double _gainMultiplier;
+    private readonly Channel<QueuedAudioFrame> _frames;
+    private readonly Task _outputWorker;
     private double _volume;
     private bool _muted;
     private double? _mediaStartSeconds;
     private double? _lastSubmittedEndSeconds;
     private long _outputFramesAtMediaStart;
     private int _clockResetCount;
+    private int _disposed;
 
     internal AudioPlaybackController(
         double volume,
@@ -84,6 +95,16 @@ internal sealed class AudioPlaybackController : IDisposable
         _gainMultiplier = DecibelsToAmplitude(gainDecibels);
         _volume = volume;
         _muted = muted;
+        _frames = Channel.CreateBounded<QueuedAudioFrame>(
+            new BoundedChannelOptions(CalculateQueueCapacity(
+                bufferDuration ?? TimeSpan.FromMilliseconds(100)))
+            {
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = false,
+                SingleWriter = false,
+                AllowSynchronousContinuations = false
+            });
+        _outputWorker = Task.Run(ProcessFramesAsync);
     }
 
     internal bool IsOperational => _output.IsOperational;
@@ -96,7 +117,7 @@ internal sealed class AudioPlaybackController : IDisposable
         {
             lock (_clockSync)
             {
-                return _mediaStartSeconds is { } start
+                return _output.IsOperational && _mediaStartSeconds is { } start
                     ? start + (double)(_output.PlayedFrames - _outputFramesAtMediaStart) /
                         _output.SampleRate
                     : null;
@@ -118,11 +139,143 @@ internal sealed class AudioPlaybackController : IDisposable
 
     internal void Write(NativeAudioFrame frame)
     {
-        if (frame.Data.Length == 0)
+        if (frame.Data.Length == 0 ||
+            Volatile.Read(ref _disposed) != 0)
         {
             return;
         }
 
+        _frames.Writer.TryWrite(new QueuedAudioFrame(
+            frame,
+            Volatile.Read(ref _volume),
+            Volatile.Read(ref _muted)));
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _frames.Writer.TryComplete();
+        while (_frames.Reader.TryRead(out _))
+        {
+        }
+
+        if (_output is IInterruptibleAudioOutput interruptibleOutput)
+        {
+            try
+            {
+                interruptibleOutput.RequestStop();
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Failed to interrupt audio output: {exception}");
+            }
+        }
+
+        var workerStopped = WaitForOutputWorker();
+        try
+        {
+            if (workerStopped)
+            {
+                _output.Dispose();
+            }
+            else
+            {
+                _ = DisposeOutputWhenWorkerStopsAsync(_outputWorker, _output);
+            }
+        }
+        finally
+        {
+            while (_frames.Reader.TryRead(out _))
+            {
+            }
+        }
+    }
+
+    internal static int CalculateQueueCapacity(TimeSpan bufferDuration)
+    {
+        var estimatedFrames = Math.Ceiling(
+            Math.Max(0d, bufferDuration.TotalMilliseconds) /
+            NominalFrameDurationMilliseconds);
+        return (int)Math.Clamp(estimatedFrames, 2d, 64d);
+    }
+
+    private async Task ProcessFramesAsync()
+    {
+        await foreach (var queuedFrame in
+            _frames.Reader.ReadAllAsync().ConfigureAwait(false))
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            try
+            {
+                ProcessFrame(queuedFrame);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Failed to write an audio frame: {exception}");
+            }
+        }
+    }
+
+    private bool WaitForOutputWorker()
+    {
+        try
+        {
+            if (_outputWorker.Wait(OutputWorkerStopTimeout))
+            {
+                _outputWorker.GetAwaiter().GetResult();
+                return true;
+            }
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"Audio output worker stopped with an error: {exception}");
+            return true;
+        }
+
+        System.Diagnostics.Debug.WriteLine(
+            $"Audio output worker did not stop within {OutputWorkerStopTimeout}.");
+        return false;
+    }
+
+    private static async Task DisposeOutputWhenWorkerStopsAsync(
+        Task outputWorker,
+        IAudioOutput output)
+    {
+        try
+        {
+            await outputWorker.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"Audio output worker stopped with an error: {exception}");
+        }
+
+        try
+        {
+            output.Dispose();
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"Failed to dispose audio output after its worker stopped: {exception}");
+        }
+    }
+
+    private void ProcessFrame(QueuedAudioFrame queuedFrame)
+    {
+        var frame = queuedFrame.Frame;
         if (frame.PresentationSeconds is { } presentation)
         {
             lock (_clockSync)
@@ -150,11 +303,9 @@ internal sealed class AudioPlaybackController : IDisposable
         }
 
         ApplyGainMultiplier(frame.Data, _gainMultiplier);
-        ApplyVolume(frame.Data, Volatile.Read(ref _volume), Volatile.Read(ref _muted));
+        ApplyVolume(frame.Data, queuedFrame.Volume, queuedFrame.Muted);
         _output.Write(frame.Data);
     }
-
-    public void Dispose() => _output.Dispose();
 
     internal static void ApplyGain(Span<byte> pcm, double gainDecibels) =>
         ApplyGainMultiplier(pcm, DecibelsToAmplitude(gainDecibels));
@@ -201,6 +352,11 @@ internal sealed class AudioPlaybackController : IDisposable
 
     private static double DecibelsToAmplitude(double gainDecibels) =>
         Math.Pow(10d, gainDecibels / 20d);
+
+    private readonly record struct QueuedAudioFrame(
+        NativeAudioFrame Frame,
+        double Volume,
+        bool Muted);
 }
 
 internal sealed class NullAudioOutput : IAudioOutput

@@ -133,6 +133,10 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
 
     private readonly MediaPlaybackController _playback = new();
     private readonly MediaPresentationCoordinator _presentation;
+    private EventHandler<MediaVideoFrame>? _frameReceived;
+    private CancellationTokenSource? _restartCancellation;
+    private bool _presentationReady;
+    private bool _hasOverlayChildren;
     private bool _isLoaded;
     private bool _disposed;
 
@@ -149,6 +153,8 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
             mode => SetValue(EffectivePresentationModePropertyKey, mode),
             OnPresentationFailed);
         _presentation.SetStretch(Stretch);
+        _hasOverlayChildren = _presentation.HasOverlayChildren();
+        _presentationReady = true;
     }
 
     public MediaSource? Source
@@ -221,6 +227,27 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
 
     public event EventHandler<MediaPlaybackErrorEventArgs>? PlaybackError;
 
+    public event EventHandler<MediaVideoFrame>? FrameReceived
+    {
+        add
+        {
+            if (_frameReceived is null)
+            {
+                _playback.FrameReceived += OnFrameReceived;
+            }
+
+            _frameReceived += value;
+        }
+        remove
+        {
+            _frameReceived -= value;
+            if (_frameReceived is null)
+            {
+                _playback.FrameReceived -= OnFrameReceived;
+            }
+        }
+    }
+
     public async ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
         VerifyAccess();
@@ -261,30 +288,82 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         }
 
         _disposed = true;
+        Interlocked.Exchange(ref _restartCancellation, null)?.Cancel();
         Loaded -= OnLoaded;
         Unloaded -= OnUnloaded;
         _playback.StateChanged -= OnPlayerStateChanged;
         _playback.Error -= OnPlayerError;
-        await _playback.DisposeAsync();
-        _presentation.Reset();
-        _presentation.Dispose();
+        if (_frameReceived is not null)
+        {
+            _playback.FrameReceived -= OnFrameReceived;
+        }
+
+        try
+        {
+            await _playback.DisposeAsync();
+        }
+        finally
+        {
+            try
+            {
+                _presentation.Reset();
+            }
+            finally
+            {
+                _presentation.Dispose();
+            }
+        }
+
         GC.SuppressFinalize(this);
+    }
+
+    protected override void OnVisualChildrenChanged(
+        DependencyObject visualAdded,
+        DependencyObject visualRemoved)
+    {
+        base.OnVisualChildrenChanged(visualAdded, visualRemoved);
+        if (!_presentationReady || _disposed)
+        {
+            return;
+        }
+
+        var hasOverlayChildren = _presentation.HasOverlayChildren();
+        if (_hasOverlayChildren == hasOverlayChildren)
+        {
+            return;
+        }
+
+        _hasOverlayChildren = hasOverlayChildren;
+        _presentation.ClearSoftwareFallback();
+        if (_isLoaded &&
+            MediaPresentationPolicy.RequiresOverlayReconfiguration(
+                PresentationMode,
+                EffectivePresentationMode) &&
+            (AutoPlay || _playback.HasPlayer))
+        {
+            ScheduleRestart();
+        }
     }
 
     private static void OnRestartPropertyChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
     {
         var view = (MediaView)sender;
         view._presentation.ClearSoftwareFallback();
-        if (view._isLoaded && (view.AutoPlay || view._playback.HasPlayer))
+        if (!view._disposed &&
+            view._isLoaded &&
+            (view.AutoPlay || view._playback.HasPlayer))
         {
-            _ = view.RestartSafelyAsync();
+            view.ScheduleRestart();
         }
     }
 
     private static void OnAutoPlayChanged(DependencyObject sender, DependencyPropertyChangedEventArgs args)
     {
         var view = (MediaView)sender;
-        if (view._isLoaded && (bool)args.NewValue && view.Source is not null)
+        if (!view._disposed &&
+            view._isLoaded &&
+            (bool)args.NewValue &&
+            view.Source is not null)
         {
             _ = view.StartSafelyAsync();
         }
@@ -329,12 +408,40 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         }
     }
 
-    private async Task RestartSafelyAsync()
+    private void ScheduleRestart()
     {
-        await StopSafelyAsync();
-        if (_isLoaded && Source is not null)
+        var request = new CancellationTokenSource();
+        var previous = Interlocked.Exchange(ref _restartCancellation, request);
+        previous?.Cancel();
+        _ = RestartSafelyAsync(request, request.Token);
+    }
+
+    private async Task RestartSafelyAsync(
+        CancellationTokenSource request,
+        CancellationToken cancellationToken)
+    {
+        try
         {
-            await StartSafelyAsync();
+            await Task.Yield();
+            cancellationToken.ThrowIfCancellationRequested();
+            await StopAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if ((_isLoaded || KeepPlaybackAlive) && Source is not null)
+            {
+                await StartAsync(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            ReportLifecycleFailure("RestartFailed", exception);
+        }
+        finally
+        {
+            _ = Interlocked.CompareExchange(ref _restartCancellation, null, request);
+            request.Dispose();
         }
     }
 
@@ -344,8 +451,9 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         {
             await StartAsync();
         }
-        catch
+        catch (Exception exception)
         {
+            ReportLifecycleFailure("StartFailed", exception);
         }
     }
 
@@ -387,6 +495,29 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
             {
                 ReportError(args.Error);
             }));
+
+    private void OnFrameReceived(object? sender, MediaVideoFrame frame)
+    {
+        var handlers = _frameReceived;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler<MediaVideoFrame> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(this, frame);
+            }
+            catch (Exception exception)
+            {
+                System.Diagnostics.Trace.TraceError(
+                    "WPF MediaView FrameReceived subscriber failed: {0}",
+                    exception);
+            }
+        }
+    }
 
     private void OnPresentationFailed(MediaPresentationFailure failure)
     {
@@ -437,7 +568,26 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
     private void ReportError(MediaPlaybackError error)
     {
         SetValue(LastErrorPropertyKey, error);
+        if (!error.IsRecoverable)
+        {
+            SetState(MediaPlaybackState.Faulted);
+        }
+
         PlaybackError?.Invoke(this, new MediaPlaybackErrorEventArgs(error));
+    }
+
+    private void ReportLifecycleFailure(string code, Exception exception)
+    {
+        if (_disposed || ReferenceEquals(_playback.LastError?.Exception, exception))
+        {
+            return;
+        }
+
+        ReportError(new MediaPlaybackError(
+            code,
+            exception.Message,
+            IsRecoverable: false,
+            exception));
     }
 
     private void ThrowIfDisposed()

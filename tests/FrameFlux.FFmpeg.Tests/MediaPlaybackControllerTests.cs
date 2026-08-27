@@ -90,6 +90,71 @@ public sealed class MediaPlaybackControllerTests
         Assert.False(controller.HasPlayer);
     }
 
+    [Fact]
+    public async Task StartAsync_CancellationDoesNotPublishOpenFailure()
+    {
+        var openStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var player = new TestMediaPlayer
+        {
+            OpenOperation = async cancellationToken =>
+            {
+                openStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+        };
+        await using var controller = new MediaPlaybackController();
+        var errorCount = 0;
+        controller.Error += (_, _) => errorCount++;
+        using var cancellation = new CancellationTokenSource();
+
+        var start = controller.StartAsync(
+            new TestMediaPlayerFactory(player),
+            MediaSource.Parse("rtsp://localhost/live"),
+            new MediaOpenOptions(),
+            new TestVideoOutput(),
+            cancellation.Token).AsTask();
+        await openStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start);
+        Assert.Equal(0, errorCount);
+        Assert.Null(controller.LastError);
+        Assert.Equal(MediaPlaybackState.Stopped, controller.State);
+        Assert.Equal(1, player.DisposeCount);
+    }
+
+    [Fact]
+    public async Task StopAsync_ForwardsCancellationAndStillDisposesPlayer()
+    {
+        var stopStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var player = new TestMediaPlayer
+        {
+            StopOperation = async cancellationToken =>
+            {
+                stopStarted.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+        };
+        await using var controller = new MediaPlaybackController();
+        await controller.StartAsync(
+            new TestMediaPlayerFactory(player),
+            MediaSource.Parse("rtsp://localhost/live"),
+            new MediaOpenOptions(),
+            new TestVideoOutput());
+        using var cancellation = new CancellationTokenSource();
+
+        var stop = controller.StopAsync(cancellation.Token).AsTask();
+        await stopStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stop);
+        Assert.Equal(cancellation.Token, player.LastStopCancellationToken);
+        Assert.Equal(1, player.DisposeCount);
+        Assert.Equal(MediaPlaybackState.Stopped, controller.State);
+    }
+
     private sealed class TestMediaPlayerFactory(IMediaPlayer player) : IMediaPlayerFactory
     {
         public IMediaPlayer Create() => player;
@@ -153,6 +218,12 @@ public sealed class MediaPlaybackControllerTests
 
         public bool ThrowWhenSettingVolume { get; init; }
 
+        public Func<CancellationToken, ValueTask>? OpenOperation { get; init; }
+
+        public Func<CancellationToken, ValueTask>? StopOperation { get; init; }
+
+        public CancellationToken LastStopCancellationToken { get; private set; }
+
         public event EventHandler<MediaPlaybackStateChangedEventArgs>? StateChanged;
 
         public event EventHandler<MediaPlaybackErrorEventArgs>? Error
@@ -183,6 +254,11 @@ public sealed class MediaPlaybackControllerTests
             Source = source;
             Options = options ?? new MediaOpenOptions();
             OpenCount++;
+            if (OpenOperation is not null)
+            {
+                return OpenOperation(cancellationToken);
+            }
+
             ChangeState(MediaPlaybackState.Ready);
             return ValueTask.CompletedTask;
         }
@@ -200,6 +276,12 @@ public sealed class MediaPlaybackControllerTests
         public ValueTask StopAsync(CancellationToken cancellationToken = default)
         {
             StopCount++;
+            LastStopCancellationToken = cancellationToken;
+            if (StopOperation is not null)
+            {
+                return StopOperation(cancellationToken);
+            }
+
             ChangeState(MediaPlaybackState.Stopped);
             return ValueTask.CompletedTask;
         }

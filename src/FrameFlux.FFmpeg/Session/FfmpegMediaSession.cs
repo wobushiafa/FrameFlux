@@ -32,7 +32,7 @@ internal interface IFfmpegMediaSession : IAsyncDisposable
     ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default);
 }
 
-internal sealed class FfmpegMediaSession : IFfmpegMediaSession
+internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLeaseSource
 {
     private readonly object _sync = new();
     private readonly ILogger _logger;
@@ -42,6 +42,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
     private Task? _stopTask;
     private DiagnosticActivity? _activity;
     private EventHandler<MediaVideoFrame>? _frameReceived;
+    private Action<IMediaFrameLease>? _frameLeaseConsumer;
     private MediaPlaybackState _state = MediaPlaybackState.Idle;
     private MediaSnapshot? _lastSnapshot;
     private RtspPerformanceSnapshot _lastPerformance;
@@ -174,6 +175,31 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
                 _frameReceived -= value;
                 UpdateFrameDeliveryLocked();
             }
+        }
+    }
+
+    void IMediaFrameLeaseSource.SetFrameLeaseConsumer(
+        Action<IMediaFrameLease>? consumer)
+    {
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (consumer is not null &&
+                _videoOutput is not null)
+            {
+                throw new InvalidOperationException(
+                    "A media session cannot use a video output and an internal frame consumer together.");
+            }
+            if (consumer is not null &&
+                _frameLeaseConsumer is not null &&
+                _frameLeaseConsumer != consumer)
+            {
+                throw new InvalidOperationException(
+                    "The media session already has an internal frame consumer.");
+            }
+
+            _frameLeaseConsumer = consumer;
+            UpdateFrameDeliveryLocked();
         }
     }
 
@@ -365,7 +391,10 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
             TransitionTo(MediaPlaybackState.Faulted);
         }
 
-        Error?.Invoke(this, new MediaPlaybackErrorEventArgs(error));
+        PublishEvent(
+            Error,
+            new MediaPlaybackErrorEventArgs(error),
+            "error");
     }
 
     private void OnHardwareVideoDecodingChanged(object? sender, bool isActive)
@@ -393,9 +422,11 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
         try
         {
             EventHandler<MediaVideoFrame>? subscribers;
+            Action<IMediaFrameLease>? frameLeaseConsumer;
             lock (_sync)
             {
                 subscribers = _frameReceived;
+                frameLeaseConsumer = _frameLeaseConsumer;
             }
 
             var keepLatestFrame = Options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame;
@@ -419,10 +450,17 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
                 PublishFrame(subscribers, frame);
             }
 
-            MediaFrameDelivery.Deliver(
-                _videoOutput,
-                lease,
-                exception => _logger.LogWarning(exception, "A media video output failed."));
+            if (frameLeaseConsumer is null)
+            {
+                MediaFrameDelivery.Deliver(
+                    _videoOutput,
+                    lease,
+                    exception => _logger.LogWarning(exception, "A media video output failed."));
+            }
+            else
+            {
+                frameLeaseConsumer(lease);
+            }
             deliveryCompleted = true;
         }
         catch (Exception exception)
@@ -539,13 +577,43 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
             _state = state;
         }
 
-        StateChanged?.Invoke(this, new MediaPlaybackStateChangedEventArgs(oldState, state));
+        PublishEvent(
+            StateChanged,
+            new MediaPlaybackStateChangedEventArgs(oldState, state),
+            "state");
+    }
+
+    private void PublishEvent<TEventArgs>(
+        EventHandler<TEventArgs>? subscribers,
+        TEventArgs args,
+        string eventName)
+    {
+        if (subscribers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler<TEventArgs> subscriber in subscribers.GetInvocationList())
+        {
+            try
+            {
+                subscriber(this, args);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "A media {EventName} subscriber failed.",
+                    eventName);
+            }
+        }
     }
 
     private void UpdateFrameDeliveryLocked() =>
         _client?.SetFrameDeliveryEnabled(
             Options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame ||
             _frameReceived is not null ||
+            _frameLeaseConsumer is not null ||
             _videoOutput is not null);
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);

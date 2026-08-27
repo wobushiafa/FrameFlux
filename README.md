@@ -27,7 +27,8 @@ Current playback capabilities include video and audio decoding, platform audio o
 ```powershell
 dotnet run --project examples/FrameFlux.Demo.Wpf
 dotnet run --project examples/FrameFlux.Demo.Avalonia.Desktop
-dotnet build examples/FrameFlux.Demo.Avalonia.Android -c Release
+dotnet build examples/FrameFlux.Demo.Avalonia.Android -c Release `
+  -p:FrameFluxAllowUnsupportedAndroidPageAlignment=true
 ```
 
 Desktop demo builds automatically copy the current host RID's FFmpeg files from `native/artifacts/runtimes/{rid}/native` into their output. Override `FrameFluxNativeRuntimeIdentifier` when testing a different RID. Published applications should reference the matching `FrameFlux.FFmpeg.NativeAssets.*` package; the core `FrameFlux.FFmpeg` package contains no native binaries. The Android asset package maps each ABI-specific `.so` into the Android application package.
@@ -66,10 +67,14 @@ switches to `SoftwareBitmap`; inspect `EffectivePresentationMode`,
 `IsHardwareVideoDecodingActive`, and `VideoDecoderDiagnostics` for the
 active pipeline.
 
-The current Android FFmpeg binaries are not aligned for Android 16's required
-16 KB memory page size. They work for current test targets, but must be rebuilt
-with 16 KB page-size support before publishing an Android 16-compatible
-package; this cannot be corrected by managed project settings.
+Android targets require API level 24 or later. The current bundled Android
+FFmpeg binaries use 4 KB ELF LOAD alignment and must be replaced before
+publishing to 16 KB-page-compatible devices or stores that require 16 KB page
+support; managed project settings cannot repair the binaries. The Android demo
+build and native-assets pack therefore fail by default, and a failed pack does
+not emit a `.nupkg`. Set
+`FrameFluxAllowUnsupportedAndroidPageAlignment=true` only for local managed-code
+validation; it does not make the resulting APK or package suitable for release.
 
 Applications can instead configure their own FFmpeg directory before creating a player:
 
@@ -177,9 +182,14 @@ protocol and decoder implementation types are not part of the public API.
 Build the full solution and run the deterministic test suite with:
 
 ```powershell
-dotnet build FrameFlux.slnx -c Release
+dotnet build FrameFlux.slnx -c Release `
+  -p:FrameFluxAllowUnsupportedAndroidPageAlignment=true
 dotnet test tests/FrameFlux.FFmpeg.Tests/FrameFlux.FFmpeg.Tests.csproj -c Release
 ```
+
+The full-solution build uses the temporary Android alignment override because
+the checked-in native binaries are intentionally blocked from release. Omit the
+override after replacing all Android `.so` files with 16 KB-aligned builds.
 
 The test suite includes public API drift detection, concurrent player and
 shared-session lifecycle coverage, frame-lease ownership checks, and a short

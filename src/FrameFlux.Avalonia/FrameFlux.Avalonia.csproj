@@ -21,4 +21,13 @@
     <PackageReference Include="Avalonia" />
   </ItemGroup>
 
+  <!-- Keep the generated AAR in sync when Android bindings change but no Android assets remain. -->
+  <Target Name="TrackFrameFluxAvaloniaProjectForAarGeneration"
+          BeforeTargets="_CreateAarCache"
+          Condition="'$(TargetPlatformIdentifier)' == 'Android'">
+    <ItemGroup>
+      <_CreateAarInputs Include="$(MSBuildProjectFullPath)" />
+    </ItemGroup>
+  </Target>
+
 </Project>

@@ -105,7 +105,7 @@ internal sealed class MediaPresentationCoordinator : IDisposable
         _nativePresenter.Dispose();
     }
 
-    private bool HasOverlayChildren() =>
+    internal bool HasOverlayChildren() =>
         _surface.Children.Cast<UIElement>().Any(child =>
             child != _softwareOutput &&
             child != _compositedOutput &&

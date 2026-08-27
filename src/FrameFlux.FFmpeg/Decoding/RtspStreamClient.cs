@@ -19,9 +19,7 @@ internal sealed class RtspStreamClient : IDisposable
     private TaskCompletionSource<object?> _completionSource = CreateCompletedCompletionSource();
     private volatile bool _isFrameDeliveryEnabled = true;
     private RtspConnectionState _connectionState = RtspConnectionState.Idle;
-    private readonly object _leasePoolLock = new();
-    private readonly List<FfmpegMediaFrameLease> _leasePool = [];
-    private bool _disposeReturnedLeases;
+    private readonly UnmanagedFrameBufferPool _frameBufferPool = new();
     private int _disposeSignaled;
     private string _videoDecoderDiagnostics = "N/A";
     private double _volume;
@@ -113,7 +111,7 @@ internal sealed class RtspStreamClient : IDisposable
 
         if (!_isRunning)
         {
-            _disposeReturnedLeases = true;
+            _frameBufferPool.StopAcceptingReturns();
         }
     }
 
@@ -148,10 +146,7 @@ internal sealed class RtspStreamClient : IDisposable
                 long totalDispatchTicks = 0;
                 int performanceSamples = 0;
 
-                lock (_leasePoolLock)
-                {
-                    _disposeReturnedLeases = false;
-                }
+                _frameBufferPool.StartAcceptingReturns();
 
                 try
                 {
@@ -206,7 +201,6 @@ internal sealed class RtspStreamClient : IDisposable
                     }
 
                     hasOpened = true;
-                    consecutiveFailureCount = 0;
                     _videoDecoderDiagnostics = decoder.VideoDecoderDiagnostics;
                     HardwareVideoDecodingChanged?.Invoke(this, decoder.IsHardwareVideoDecodingActive);
                     RaiseConnectionStateChanged(RtspConnectionState.Connected);
@@ -219,6 +213,7 @@ internal sealed class RtspStreamClient : IDisposable
                         var decodeElapsedTicks = Stopwatch.GetTimestamp() - decodeStart;
                         if (hasFrame && frame != null)
                         {
+                            consecutiveFailureCount = 0;
                             FfmpegMediaFrameLease? frameLease = null;
                             try
                             {
@@ -240,8 +235,6 @@ internal sealed class RtspStreamClient : IDisposable
                                 {
                                     continue;
                                 }
-
-                                consecutiveFailureCount = 0;
 
                                 var outputSize = CalculateOutputSize(
                                     frame.Info.Width,
@@ -497,60 +490,18 @@ internal sealed class RtspStreamClient : IDisposable
 
     private FfmpegMediaFrameLease RentFrameLease(int requiredSize)
     {
-        lock (_leasePoolLock)
-        {
-            for (var i = 0; i < _leasePool.Count; i++)
-            {
-                var lease = _leasePool[i];
-                if (lease.Size != requiredSize)
-                {
-                    continue;
-                }
-
-                _leasePool.RemoveAt(i);
-                return lease;
-            }
-        }
-
-        var buffer = Marshal.AllocHGlobal(requiredSize);
-        var createdLease = new FfmpegMediaFrameLease(buffer, requiredSize, ReturnFrameLease);
-        return createdLease;
+        var buffer = _frameBufferPool.Rent(requiredSize);
+        return new FfmpegMediaFrameLease(buffer, requiredSize, ReturnFrameLease);
     }
 
     private void ReturnFrameLease(FfmpegMediaFrameLease lease)
     {
-        if (lease.Buffer == IntPtr.Zero)
-        {
-            return;
-        }
-
-        lock (_leasePoolLock)
-        {
-            if (_disposeReturnedLeases)
-            {
-                Marshal.FreeHGlobal(lease.Buffer);
-                return;
-            }
-
-            _leasePool.Add(lease);
-        }
+        _frameBufferPool.Return(lease.Buffer, lease.Size);
     }
 
     private void DisposeLeasePool()
     {
-        lock (_leasePoolLock)
-        {
-            _disposeReturnedLeases = true;
-            foreach (var lease in _leasePool)
-            {
-                if (lease.Buffer != IntPtr.Zero)
-                {
-                    Marshal.FreeHGlobal(lease.Buffer);
-                }
-            }
-
-            _leasePool.Clear();
-        }
+        _frameBufferPool.StopAcceptingReturns();
     }
 
     private void RaiseConnectionStateChanged(RtspConnectionState state)

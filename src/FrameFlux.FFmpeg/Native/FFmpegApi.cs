@@ -14,6 +14,7 @@ internal sealed class FFmpegApi
         SwScaleVersion = Load<VersionDelegate>("swscale", "swscale_version");
         SwResampleVersion = Load<VersionDelegate>("swresample", "swresample_version");
         AvFormatNetworkInit = Load<NetworkInitDelegate>("avformat", "avformat_network_init");
+        AvFormatAllocContext = Load<AllocDelegate>("avformat", "avformat_alloc_context");
         AvFormatOpenInput = Load<FormatOpenInputDelegate>("avformat", "avformat_open_input");
         AvFormatFindStreamInfo = Load<FormatFindStreamInfoDelegate>("avformat", "avformat_find_stream_info");
         AvFindBestStream = Load<FindBestStreamDelegate>("avformat", "av_find_best_stream");
@@ -22,6 +23,7 @@ internal sealed class FFmpegApi
         AvDictSet = Load<DictSetDelegate>("avutil", "av_dict_set");
         AvDictFree = Load<DictFreeDelegate>("avutil", "av_dict_free");
         AvStrError = Load<StrErrorDelegate>("avutil", "av_strerror");
+        AvOptFind = Load<OptFindDelegate>("avutil", "av_opt_find");
         AvOptGetInt = Load<OptGetIntDelegate>("avutil", "av_opt_get_int");
         AvOptGetChannelLayout = Load<OptGetChannelLayoutDelegate>("avutil", "av_opt_get_chlayout");
         AvChannelLayoutDefault = Load<ChannelLayoutDefaultDelegate>("avutil", "av_channel_layout_default");
@@ -57,25 +59,33 @@ internal sealed class FFmpegApi
         SwrFree = Load<SwrFreeDelegate>("swresample", "swr_free");
 
         CodecMajorVersion = (int)(AvCodecVersion() >> 16);
+        FormatMajorVersion = (int)(AvFormatVersion() >> 16);
         UtilMajorVersion = (int)(AvUtilVersion() >> 16);
-        if (CodecMajorVersion is < 60 or > 62)
-        {
-            throw new NotSupportedException(
-                $"This FrameFlux build supports FFmpeg avcodec major versions 60, 61 and 62; found {CodecMajorVersion}.");
-        }
+        ScaleMajorVersion = (int)(SwScaleVersion() >> 16);
+        ResampleMajorVersion = (int)(SwResampleVersion() >> 16);
+        ValidateVersionFamily(
+            CodecMajorVersion,
+            FormatMajorVersion,
+            UtilMajorVersion,
+            ScaleMajorVersion,
+            ResampleMajorVersion);
 
         _ = AvFormatNetworkInit();
     }
 
     internal static FFmpegApi Instance => LazyInstance.Value;
     internal int CodecMajorVersion { get; }
+    internal int FormatMajorVersion { get; }
     internal int UtilMajorVersion { get; }
+    internal int ScaleMajorVersion { get; }
+    internal int ResampleMajorVersion { get; }
     internal VersionDelegate AvCodecVersion { get; }
     internal VersionDelegate AvFormatVersion { get; }
     internal VersionDelegate AvUtilVersion { get; }
     internal VersionDelegate SwScaleVersion { get; }
     internal VersionDelegate SwResampleVersion { get; }
     internal NetworkInitDelegate AvFormatNetworkInit { get; }
+    internal AllocDelegate AvFormatAllocContext { get; }
     internal FormatOpenInputDelegate AvFormatOpenInput { get; }
     internal FormatFindStreamInfoDelegate AvFormatFindStreamInfo { get; }
     internal FindBestStreamDelegate AvFindBestStream { get; }
@@ -84,6 +94,7 @@ internal sealed class FFmpegApi
     internal DictSetDelegate AvDictSet { get; }
     internal DictFreeDelegate AvDictFree { get; }
     internal StrErrorDelegate AvStrError { get; }
+    internal OptFindDelegate AvOptFind { get; }
     internal OptGetIntDelegate AvOptGetInt { get; }
     internal OptGetChannelLayoutDelegate AvOptGetChannelLayout { get; }
     internal ChannelLayoutDefaultDelegate AvChannelLayoutDefault { get; }
@@ -133,6 +144,38 @@ internal sealed class FFmpegApi
         }
     }
 
+    internal static void ValidateVersionFamily(
+        int codecMajor,
+        int formatMajor,
+        int utilMajor,
+        int scaleMajor,
+        int resampleMajor)
+    {
+        var expected = codecMajor switch
+        {
+            60 => (Format: 60, Util: 58, Scale: 7, Resample: 4, Release: 6),
+            61 => (Format: 61, Util: 59, Scale: 8, Resample: 5, Release: 7),
+            62 => (Format: 62, Util: 60, Scale: 9, Resample: 6, Release: 8),
+            _ => throw new NotSupportedException(
+                $"This FrameFlux build supports FFmpeg avcodec major versions 60, 61 and 62; found {codecMajor}.")
+        };
+
+        if (formatMajor == expected.Format &&
+            utilMajor == expected.Util &&
+            scaleMajor == expected.Scale &&
+            resampleMajor == expected.Resample)
+        {
+            return;
+        }
+
+        throw new NotSupportedException(
+            $"The loaded FFmpeg components do not form a supported FFmpeg {expected.Release} ABI family. " +
+            $"Expected avcodec/avformat/avutil/swscale/swresample " +
+            $"{codecMajor}/{expected.Format}/{expected.Util}/{expected.Scale}/{expected.Resample}, " +
+            $"but found {codecMajor}/{formatMajor}/{utilMajor}/{scaleMajor}/{resampleMajor}. " +
+            "Use all shared libraries from one FFmpeg build.");
+    }
+
     private static T Load<T>(string component, string exportName) where T : Delegate =>
         Marshal.GetDelegateForFunctionPointer<T>(FFmpegLibraryLoader.GetExport(component, exportName));
 
@@ -146,6 +189,7 @@ internal sealed class FFmpegApi
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int DictSetDelegate(ref IntPtr dictionary, IntPtr key, IntPtr value, int flags);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void DictFreeDelegate(ref IntPtr dictionary);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int StrErrorDelegate(int error, IntPtr buffer, nuint bufferSize);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr OptFindDelegate(IntPtr value, IntPtr name, IntPtr unit, int optionFlags, int searchFlags);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int OptGetIntDelegate(IntPtr value, IntPtr name, int searchFlags, out long result);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int OptGetChannelLayoutDelegate(IntPtr value, IntPtr name, int searchFlags, IntPtr layout);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void ChannelLayoutDefaultDelegate(IntPtr layout, int channels);

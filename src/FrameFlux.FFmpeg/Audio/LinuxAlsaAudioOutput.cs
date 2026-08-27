@@ -2,13 +2,14 @@ using System.Runtime.InteropServices;
 
 namespace FrameFlux.FFmpeg;
 
-internal sealed class LinuxAlsaAudioOutput : IAudioOutput
+internal sealed class LinuxAlsaAudioOutput : IAudioOutput, IInterruptibleAudioOutput
 {
     private IntPtr _handle;
     private long _submittedFrames;
     private readonly AudioOutputConfiguration _configuration;
     private readonly string _deviceName;
     private string? _lastError;
+    private int _stopping;
 
     internal LinuxAlsaAudioOutput(
         int sampleRate,
@@ -79,7 +80,8 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
 
     public void Write(byte[] pcm)
     {
-        if (_handle == IntPtr.Zero || pcm.Length == 0) return;
+        var handle = _handle;
+        if (handle == IntPtr.Zero || pcm.Length == 0 || Volatile.Read(ref _stopping) != 0) return;
         var frameSize = Channels * sizeof(short);
         var remainingFrames = pcm.Length / frameSize;
         var offset = 0;
@@ -88,10 +90,20 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
         {
             while (remainingFrames > 0)
             {
-                var result = snd_pcm_writei(_handle, pinned.AddrOfPinnedObject() + offset, (nuint)remainingFrames);
+                if (Volatile.Read(ref _stopping) != 0)
+                {
+                    return;
+                }
+
+                var result = snd_pcm_writei(handle, pinned.AddrOfPinnedObject() + offset, (nuint)remainingFrames);
+                if (Volatile.Read(ref _stopping) != 0)
+                {
+                    return;
+                }
+
                 if (result < 0)
                 {
-                    result = snd_pcm_recover(_handle, (int)result, 1);
+                    result = snd_pcm_recover(handle, (int)result, 1);
                     if (result < 0)
                     {
                         _lastError = $"snd_pcm_writei failed with ALSA code {result}.";
@@ -113,7 +125,7 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
 
     public void Reset()
     {
-        if (_handle == IntPtr.Zero)
+        if (_handle == IntPtr.Zero || Volatile.Read(ref _stopping) != 0)
         {
             return;
         }
@@ -121,6 +133,37 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
         ThrowIfFailed(snd_pcm_drop(_handle), "snd_pcm_drop");
         ThrowIfFailed(snd_pcm_prepare(_handle), "snd_pcm_prepare");
         Interlocked.Exchange(ref _submittedFrames, 0);
+    }
+
+    public void RequestStop()
+    {
+        if (Interlocked.Exchange(ref _stopping, 1) != 0)
+        {
+            return;
+        }
+
+        var handle = _handle;
+        if (handle != IntPtr.Zero)
+        {
+            var aborted = false;
+            try
+            {
+                aborted = snd_pcm_abort(handle) >= 0;
+            }
+            catch (EntryPointNotFoundException)
+            {
+            }
+
+            if (!aborted)
+            {
+                var dropResult = snd_pcm_drop(handle);
+                if (dropResult < 0)
+                {
+                    _lastError =
+                        $"Unable to interrupt ALSA playback; snd_pcm_drop returned {dropResult}.";
+                }
+            }
+        }
     }
 
     private long GetQueuedFrames()
@@ -132,6 +175,7 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
 
     public void Dispose()
     {
+        RequestStop();
         var handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);
         if (handle == IntPtr.Zero) return;
         _ = snd_pcm_drop(handle);
@@ -148,6 +192,7 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
     [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)] private static extern nint snd_pcm_writei(IntPtr pcm, IntPtr buffer, nuint frames);
     [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)] private static extern int snd_pcm_recover(IntPtr pcm, int error, int silent);
     [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)] private static extern int snd_pcm_delay(IntPtr pcm, out long delay);
+    [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)] private static extern int snd_pcm_abort(IntPtr pcm);
     [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)] private static extern int snd_pcm_drop(IntPtr pcm);
     [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)] private static extern int snd_pcm_prepare(IntPtr pcm);
     [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)] private static extern int snd_pcm_close(IntPtr pcm);

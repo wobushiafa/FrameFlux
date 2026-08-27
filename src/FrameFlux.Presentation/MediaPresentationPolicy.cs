@@ -7,6 +7,12 @@ internal readonly record struct MediaPresentationPlan(
 
 internal static class MediaPresentationPolicy
 {
+    internal static bool RequiresOverlayReconfiguration(
+        MediaVideoPresentationMode requestedMode,
+        MediaVideoPresentationMode? effectiveMode) =>
+        requestedMode == MediaVideoPresentationMode.NativeSurface ||
+        effectiveMode == MediaVideoPresentationMode.NativeSurface;
+
     internal static MediaPresentationPlan Resolve(
         MediaVideoPresentationMode requestedMode,
         MediaOpenOptions options,
@@ -82,19 +88,22 @@ internal sealed class MediaPresentationFailureTracker(int maximumAttempts = 3)
 {
     private int _consecutiveFailureCount;
 
-    internal bool IsExhausted => _consecutiveFailureCount >= maximumAttempts;
+    internal bool IsExhausted =>
+        Volatile.Read(ref _consecutiveFailureCount) >= maximumAttempts;
 
     internal MediaPresentationFailure Register(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
-        _consecutiveFailureCount++;
+        var failureCount = Interlocked.Increment(ref _consecutiveFailureCount);
         return new MediaPresentationFailure(
             exception,
-            _consecutiveFailureCount,
-            IsExhausted);
+            failureCount,
+            failureCount == maximumAttempts);
     }
 
-    internal void ReportSuccess() => _consecutiveFailureCount = 0;
+    internal void ReportSuccess() =>
+        Interlocked.Exchange(ref _consecutiveFailureCount, 0);
 
-    internal void Reset() => _consecutiveFailureCount = 0;
+    internal void Reset() =>
+        Interlocked.Exchange(ref _consecutiveFailureCount, 0);
 }
