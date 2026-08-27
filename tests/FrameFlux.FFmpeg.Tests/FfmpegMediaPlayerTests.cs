@@ -92,6 +92,52 @@ public sealed class FfmpegMediaPlayerTests
         Assert.Throws<InvalidOperationException>(() => player.VideoOutput = null);
     }
 
+    [Fact]
+    public async Task GenericPlayer_DisablesCpuSnapshotsForCompositedGpuOutput()
+    {
+        await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory())
+        {
+            VideoOutput = new FakeVideoOutput(MediaRenderPreference.CompositedGpu)
+        };
+
+        await player.OpenAsync(
+            MediaSource.Parse("rtsp://camera/live"),
+            new MediaOpenOptions { RenderPreference = MediaRenderPreference.CompositedGpu });
+
+        Assert.False(player.Capabilities.CanCaptureSnapshots);
+    }
+
+    [Fact]
+    public async Task GenericPlayer_KeepsSnapshotsWhenRequestedGpuModeFallsBackToSoftware()
+    {
+        await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory())
+        {
+            VideoOutput = new FakeVideoOutput(MediaRenderPreference.Software)
+        };
+
+        await player.OpenAsync(
+            MediaSource.Parse("rtsp://camera/live"),
+            new MediaOpenOptions { RenderPreference = MediaRenderPreference.CompositedGpu });
+
+        Assert.True(player.Capabilities.CanCaptureSnapshots);
+    }
+
+    [Theory]
+    [InlineData(MediaRenderPreference.NativeSurface, true)]
+    [InlineData(MediaRenderPreference.CompositedGpu, true)]
+    [InlineData(MediaRenderPreference.Software, false)]
+    public void Session_ResolvesOutputPreferenceToDecoderRenderMode(
+        MediaRenderPreference preference,
+        bool expectsNativeFrames)
+    {
+        var renderMode = FfmpegMediaSession.ResolveRenderMode(
+            new FakeVideoOutput(preference));
+
+        Assert.Equal(
+            expectsNativeFrames,
+            renderMode == RtspRenderMode.NativeSurface);
+    }
+
     private sealed class FakeMediaSessionFactory : IFfmpegMediaSessionFactory
     {
         internal IFfmpegMediaSession? LastSession { get; private set; }
@@ -169,7 +215,15 @@ public sealed class FfmpegMediaPlayerTests
 
     private sealed class FakeVideoOutput : IMediaVideoOutput
     {
-        public MediaRenderPreference Preference => MediaRenderPreference.NativeSurface;
+        private readonly MediaRenderPreference _preference;
+
+        internal FakeVideoOutput(
+            MediaRenderPreference preference = MediaRenderPreference.NativeSurface)
+        {
+            _preference = preference;
+        }
+
+        public MediaRenderPreference Preference => _preference;
         public bool Supports(MediaFramePixelFormat pixelFormat) => true;
         public bool TryPresent(IMediaFrameLease frame)
         {

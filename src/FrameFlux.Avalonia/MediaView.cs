@@ -33,6 +33,9 @@ public sealed class MediaView : Control, IAsyncDisposable
     public static readonly StyledProperty<Stretch> StretchProperty =
         AvaloniaProperty.Register<MediaView, Stretch>(nameof(Stretch), Stretch.Uniform);
 
+    public static readonly StyledProperty<Control?> OverlayProperty =
+        AvaloniaProperty.Register<MediaView, Control?>(nameof(Overlay));
+
     public static readonly DirectProperty<MediaView, MediaPlaybackState> StateProperty =
         AvaloniaProperty.RegisterDirect<MediaView, MediaPlaybackState>(nameof(State), view => view.State);
 
@@ -56,6 +59,7 @@ public sealed class MediaView : Control, IAsyncDisposable
     private readonly Grid _surface = new();
     private readonly SoftwareBitmapMediaOutput _softwareOutput = new();
 #if !ANDROID
+    private readonly WindowsD3D11CompositionMediaOutput _compositedOutput = new();
     private readonly WindowsD3D11MediaOutput _nativeOutput = new();
 #endif
     private EventHandler<MediaVideoFrame>? _frameReceived;
@@ -64,6 +68,7 @@ public sealed class MediaView : Control, IAsyncDisposable
     private bool _isHardwareAccelerationActive;
     private string _hardwareDiagnostics = "Not started";
     private string? _activeRendererId;
+    private Control? _attachedOverlay;
     private bool _attached;
     private bool _disposed;
 
@@ -75,6 +80,11 @@ public sealed class MediaView : Control, IAsyncDisposable
         _softwareOutput.FramePresented += OnSoftwareFramePresented;
         _surface.Children.Add(_softwareOutput);
 #if !ANDROID
+        _compositedOutput.IsVisible = false;
+        _compositedOutput.Stretch = Stretch;
+        _compositedOutput.FramePresented += OnCompositedFramePresented;
+        _compositedOutput.PresentationFailed += OnCompositedPresentationFailed;
+        _surface.Children.Add(_compositedOutput);
         _nativeOutput.IsVisible = false;
         _surface.Children.Add(_nativeOutput);
 #endif
@@ -128,6 +138,12 @@ public sealed class MediaView : Control, IAsyncDisposable
     {
         get => GetValue(StretchProperty);
         set => SetValue(StretchProperty, value);
+    }
+
+    public Control? Overlay
+    {
+        get => GetValue(OverlayProperty);
+        set => SetValue(OverlayProperty, value);
     }
 
     public MediaPlaybackState State
@@ -262,8 +278,13 @@ public sealed class MediaView : Control, IAsyncDisposable
         {
             _softwareOutput.Stretch = Stretch;
 #if !ANDROID
+            _compositedOutput.Stretch = Stretch;
             _nativeOutput.Stretch = Stretch;
 #endif
+        }
+        else if (change.Property == OverlayProperty)
+        {
+            AttachOverlay();
         }
         else if (change.Property == IsPlaybackEnabledProperty)
         {
@@ -295,6 +316,9 @@ public sealed class MediaView : Control, IAsyncDisposable
         await _playback.DisposeAsync();
         _softwareOutput.Dispose();
 #if !ANDROID
+        _compositedOutput.FramePresented -= OnCompositedFramePresented;
+        _compositedOutput.PresentationFailed -= OnCompositedPresentationFailed;
+        await _compositedOutput.DisposeAsync();
         _nativeOutput.Dispose();
 #endif
         GC.SuppressFinalize(this);
@@ -302,28 +326,67 @@ public sealed class MediaView : Control, IAsyncDisposable
 
     private IMediaVideoOutput ConfigureVideoOutput(MediaOpenOptions options)
     {
+        if (Overlay is not null &&
+            options.RenderPreference == MediaRenderPreference.NativeSurface)
+        {
+            throw new InvalidOperationException(
+                "Overlay content requires Software or CompositedGpu rendering.");
+        }
+
         var useNativeOutput =
             options.StreamSharing == MediaStreamSharingMode.Dedicated &&
             options.RenderPreference == MediaRenderPreference.NativeSurface &&
             options.HardwareAcceleration != MediaHardwareAcceleration.Disabled;
+        var useCompositedOutput =
+            options.StreamSharing == MediaStreamSharingMode.Dedicated &&
+            options.RenderPreference == MediaRenderPreference.CompositedGpu &&
+            options.HardwareAcceleration != MediaHardwareAcceleration.Disabled;
 #if !ANDROID
         useNativeOutput &= OperatingSystem.IsWindows();
+        useCompositedOutput &= OperatingSystem.IsWindows();
+        _compositedOutput.Stretch = Stretch;
+        _compositedOutput.IsVisible = useCompositedOutput;
         _nativeOutput.Stretch = Stretch;
         _nativeOutput.IsVisible = useNativeOutput;
-        var output = useNativeOutput ? (IMediaVideoOutput)_nativeOutput : _softwareOutput;
+        var output = useNativeOutput
+            ? (IMediaVideoOutput)_nativeOutput
+            : useCompositedOutput
+                ? _compositedOutput
+                : _softwareOutput;
 #else
         useNativeOutput = false;
+        useCompositedOutput = false;
         var output = (IMediaVideoOutput)_softwareOutput;
 #endif
-        _softwareOutput.IsVisible = !useNativeOutput;
-        ActiveRendererId = useNativeOutput ? "windows-d3d11" : "software-bitmap";
+        _softwareOutput.IsVisible = !useNativeOutput && !useCompositedOutput;
+        ActiveRendererId = useNativeOutput
+            ? "windows-d3d11"
+            : useCompositedOutput
+                ? "windows-d3d11-composited"
+                : "software-bitmap";
         return output;
+    }
+
+    private void AttachOverlay()
+    {
+        if (_attachedOverlay is not null)
+        {
+            _surface.Children.Remove(_attachedOverlay);
+        }
+
+        _attachedOverlay = Overlay;
+        if (_attachedOverlay is not null)
+        {
+            _surface.Children.Add(_attachedOverlay);
+        }
     }
 
     private void ResetPresentation()
     {
         _softwareOutput.Clear();
 #if !ANDROID
+        _compositedOutput.Clear();
+        _compositedOutput.IsVisible = false;
         _nativeOutput.ClearPendingFrame();
         _nativeOutput.IsVisible = false;
 #endif
@@ -352,11 +415,29 @@ public sealed class MediaView : Control, IAsyncDisposable
     private void OnSoftwareFramePresented(object? sender, EventArgs args)
     {
 #if !ANDROID
+        _compositedOutput.IsVisible = false;
         _nativeOutput.IsVisible = false;
 #endif
         _softwareOutput.IsVisible = true;
         ActiveRendererId = "software-bitmap";
     }
+
+#if !ANDROID
+    private void OnCompositedFramePresented(object? sender, EventArgs args)
+    {
+        _nativeOutput.IsVisible = false;
+        _softwareOutput.IsVisible = false;
+        _compositedOutput.IsVisible = true;
+        ActiveRendererId = "windows-d3d11-composited";
+    }
+
+    private void OnCompositedPresentationFailed(object? sender, Exception exception) =>
+        ReportError(new MediaPlaybackError(
+            "GpuCompositionFailed",
+            exception.Message,
+            IsRecoverable: false,
+            exception));
+#endif
 
     private void SetState(MediaPlaybackState state)
     {

@@ -294,9 +294,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
                 MediaHardwareAcceleration.Enabled => RtspHardwareAccelerationMode.Enabled,
                 _ => RtspHardwareAccelerationMode.Auto
             },
-            RenderMode = _videoOutput?.Preference == MediaRenderPreference.NativeSurface
-                ? RtspRenderMode.NativeSurface
-                : RtspRenderMode.SoftwareBitmap,
+            RenderMode = ResolveRenderMode(_videoOutput),
             OpenTimeoutMilliseconds = ToMilliseconds(Options.OpenTimeout),
             EndpointProbeTimeoutMilliseconds = ToMilliseconds(Options.EndpointProbeTimeout),
             ReadTimeoutMilliseconds = ToMilliseconds(Options.ReadTimeout),
@@ -311,6 +309,13 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
             Volume = _volume,
             IsMuted = _isMuted
         };
+
+    internal static RtspRenderMode ResolveRenderMode(IMediaVideoOutput? output) =>
+        output?.Preference is
+            MediaRenderPreference.NativeSurface or
+            MediaRenderPreference.CompositedGpu
+            ? RtspRenderMode.NativeSurface
+            : RtspRenderMode.SoftwareBitmap;
 
     private static int ToMilliseconds(TimeSpan value) =>
         checked((int)Math.Min(value.TotalMilliseconds, int.MaxValue));

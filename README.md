@@ -32,7 +32,14 @@ dotnet build examples/FrameFlux.Demo.Avalonia.Android -c Release
 
 Desktop demo builds automatically copy the current host RID's FFmpeg files from `native/artifacts/runtimes/{rid}/native` into their output. Override `FrameFluxNativeRuntimeIdentifier` when testing a different RID. Published applications should reference the matching `FrameFlux.FFmpeg.NativeAssets.*` package; the core `FrameFlux.FFmpeg` package contains no native binaries. The Android asset package maps each ABI-specific `.so` into the Android application package.
 
-On Windows, `MediaRenderPreference.NativeSurface` with hardware acceleration enabled uses FFmpeg D3D11VA frames directly in a D3D11 video processor and DXGI swap chain. This path does not read frames back to the CPU. Avalonia on Linux and Android currently uses software frame delivery; native output on those platforms can be added behind the same `IMediaVideoOutput` contract.
+On Windows, `MediaRenderPreference.NativeSurface` with hardware acceleration
+enabled uses FFmpeg D3D11VA frames directly in a D3D11 video processor and DXGI
+swap chain. This minimum-latency path does not read frames back to the CPU.
+Avalonia also supports `MediaRenderPreference.CompositedGpu` for dedicated
+playback. It converts the decoder texture to a shared BGRA texture and imports
+it into the Avalonia compositor, allowing controls supplied through
+`MediaView.Overlay` to render above the video. Linux and Android currently use
+software frame delivery.
 
 The current Android FFmpeg binaries are not aligned for Android 16's required
 16 KB memory page size. They work for current test targets, but must be rebuilt

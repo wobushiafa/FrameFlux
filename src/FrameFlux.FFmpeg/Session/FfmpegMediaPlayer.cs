@@ -197,15 +197,16 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
 
             lock (_sync)
             {
+                var usesGpuFrames = _videoOutput?.Preference is
+                    MediaRenderPreference.NativeSurface or
+                    MediaRenderPreference.CompositedGpu;
                 _source = source;
                 _options = resolvedOptions;
                 _capabilities = new MediaCapabilities(
                     IsLive: true,
                     CanPause: false,
                     CanSeek: false,
-                    CanCaptureSnapshots:
-                        resolvedOptions.CaptureSnapshots &&
-                        resolvedOptions.RenderPreference != MediaRenderPreference.NativeSurface);
+                    CanCaptureSnapshots: resolvedOptions.CaptureSnapshots && !usesGpuFrames);
                 _diagnostics = MediaDiagnostics.Empty;
             }
             TransitionTo(MediaPlaybackState.Ready);

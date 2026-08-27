@@ -131,7 +131,8 @@ public enum MediaRenderPreference
 {
     Auto,
     Software,
-    NativeSurface
+    NativeSurface,
+    CompositedGpu
 }
 
 public sealed record MediaCapabilities(
