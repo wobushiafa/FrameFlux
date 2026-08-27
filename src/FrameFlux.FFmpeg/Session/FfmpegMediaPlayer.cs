@@ -16,6 +16,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
     private double _volume = 1d;
     private bool _isMuted;
     private IMediaVideoOutput? _videoOutput;
+    private EventHandler<MediaVideoFrame>? _frameReceived;
     private bool _disposed;
 
     public FfmpegMediaPlayer(ILoggerFactory? loggerFactory = null)
@@ -171,7 +172,34 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
 
     public event EventHandler<MediaPlaybackErrorEventArgs>? Error;
 
-    public event EventHandler<MediaVideoFrame>? FrameReceived;
+    public event EventHandler<MediaVideoFrame>? FrameReceived
+    {
+        add
+        {
+            lock (_sync)
+            {
+                var subscribe = _frameReceived is null;
+                _frameReceived += value;
+                if (subscribe &&
+                    _frameReceived is not null &&
+                    _session is not null)
+                {
+                    _session.FrameReceived += OnFrameReceived;
+                }
+            }
+        }
+        remove
+        {
+            lock (_sync)
+            {
+                _frameReceived -= value;
+                if (_frameReceived is null && _session is not null)
+                {
+                    _session.FrameReceived -= OnFrameReceived;
+                }
+            }
+        }
+    }
 
     public async ValueTask OpenAsync(
         MediaSource source,
@@ -265,9 +293,12 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             var session = _sessionFactory.Create(source, options, volume, muted, videoOutput);
             session.StateChanged += OnSessionStateChanged;
             session.Error += OnSessionError;
-            session.FrameReceived += OnFrameReceived;
             lock (_sync)
             {
+                if (_frameReceived is not null)
+                {
+                    session.FrameReceived += OnFrameReceived;
+                }
                 _session = session;
             }
 
@@ -435,15 +466,18 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
 
     private void OnFrameReceived(object? sender, MediaVideoFrame frame)
     {
+        EventHandler<MediaVideoFrame>? subscribers;
         lock (_sync)
         {
             if (!ReferenceEquals(_session, sender))
             {
                 return;
             }
+
+            subscribers = _frameReceived;
         }
 
-        FrameReceived?.Invoke(this, frame);
+        subscribers?.Invoke(this, frame);
     }
 
     private void TransitionTo(MediaPlaybackState state)

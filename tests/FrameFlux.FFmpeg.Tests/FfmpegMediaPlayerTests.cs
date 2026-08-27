@@ -101,6 +101,33 @@ public sealed class FfmpegMediaPlayerTests
     }
 
     [Fact]
+    public async Task GenericPlayer_SubscribesToFramesOnlyWhileConsumersExist()
+    {
+        var factory = new FakeMediaSessionFactory();
+        await using var player = new FfmpegMediaPlayer(factory)
+        {
+            VideoOutput = new FakeVideoOutput(MediaFrameStorageKind.CpuMemory)
+        };
+
+        await player.OpenAsync(MediaSource.Parse("rtsp://camera/live"));
+        await player.PlayAsync();
+
+        var session = Assert.IsType<FakeMediaSession>(factory.LastSession);
+        Assert.Equal(0, session.FrameSubscriberCount);
+
+        MediaVideoFrame? receivedFrame = null;
+        EventHandler<MediaVideoFrame> handler = (_, frame) => receivedFrame = frame;
+        player.FrameReceived += handler;
+        Assert.Equal(1, session.FrameSubscriberCount);
+
+        session.EmitFrame();
+        Assert.NotNull(receivedFrame);
+
+        player.FrameReceived -= handler;
+        Assert.Equal(0, session.FrameSubscriberCount);
+    }
+
+    [Fact]
     public async Task GenericPlayer_DisablesCpuSnapshotsForGpuCompositionOutput()
     {
         await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory())
@@ -194,19 +221,35 @@ public sealed class FfmpegMediaPlayerTests
         public double Volume { get; set; } = volume;
         public bool IsMuted { get; set; } = isMuted;
         internal bool Disposed { get; private set; }
+        internal int FrameSubscriberCount =>
+            _frameReceived?.GetInvocationList().Length ?? 0;
+        private EventHandler<MediaVideoFrame>? _frameReceived;
 
         public event EventHandler<MediaPlaybackStateChangedEventArgs>? StateChanged;
         public event EventHandler<MediaPlaybackErrorEventArgs>? Error { add { } remove { } }
-        public event EventHandler<MediaVideoFrame>? FrameReceived;
+        public event EventHandler<MediaVideoFrame>? FrameReceived
+        {
+            add
+            {
+                _frameReceived += value;
+            }
+            remove
+            {
+                _frameReceived -= value;
+            }
+        }
 
         public ValueTask StartAsync(CancellationToken cancellationToken = default)
         {
             TransitionTo(MediaPlaybackState.Opening);
             TransitionTo(MediaPlaybackState.Playing);
-            FrameReceived?.Invoke(this, new MediaVideoFrame(
-                new byte[16], 2, 2, 8, MediaPixelFormat.Bgra32, 1, DateTimeOffset.UtcNow));
+            EmitFrame();
             return ValueTask.CompletedTask;
         }
+
+        internal void EmitFrame() =>
+            _frameReceived?.Invoke(this, new MediaVideoFrame(
+                new byte[16], 2, 2, 8, MediaPixelFormat.Bgra32, 1, DateTimeOffset.UtcNow));
 
         public ValueTask StopAsync(CancellationToken cancellationToken = default)
         {
