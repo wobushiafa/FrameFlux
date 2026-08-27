@@ -6,10 +6,14 @@ Current playback capabilities include video and audio decoding, platform audio o
 
 | Project | Package | Purpose |
 | --- | --- | --- |
-| `src/FrameFlux.Abstractions` | `FrameFlux.Abstractions` | Protocol-neutral player, source, frame, capability, and compatibility contracts. |
-| `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | UI-independent FFmpeg media player and RTSP backend. |
-| `src/FrameFlux.Avalonia` | `FrameFlux.Avalonia` | Avalonia `MediaView`, compatibility controls, and renderers. |
+| `src/FrameFlux.Abstractions` | `FrameFlux.Abstractions` | Protocol-neutral player, source, frame, capability, and video-output contracts. |
+| `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | UI-independent FFmpeg media player and RTSP backend, without bundled native binaries. |
+| `src/FrameFlux.Presentation` | `FrameFlux.Presentation` | Shared backend-neutral playback lifecycle used by UI controls. |
+| `src/FrameFlux.Avalonia` | `FrameFlux.Avalonia` | Avalonia `MediaView` and platform rendering outputs. |
 | `src/FrameFlux.Wpf` | `FrameFlux.Wpf` | Reusable WPF media playback control and renderer. |
+| `src/FrameFlux.FFmpeg.NativeAssets.Windows` | `FrameFlux.FFmpeg.NativeAssets.Windows` | Windows x64 FFmpeg runtime assets. |
+| `src/FrameFlux.FFmpeg.NativeAssets.Linux` | `FrameFlux.FFmpeg.NativeAssets.Linux` | Linux x64 FFmpeg runtime assets. |
+| `src/FrameFlux.FFmpeg.NativeAssets.Android` | `FrameFlux.FFmpeg.NativeAssets.Android` | Android FFmpeg runtime assets for the supported ABIs. |
 
 ## Demos
 
@@ -25,22 +29,29 @@ dotnet run --project examples/FrameFlux.Demo.Avalonia.Desktop
 dotnet build examples/FrameFlux.Demo.Avalonia.Android -c Release
 ```
 
-Desktop demo builds automatically copy the current host RID's FFmpeg files from `native/artifacts/runtimes/{rid}/native` into their output. Override `FrameFluxNativeRuntimeIdentifier` when testing a different RID. The Android project packages the ABI-specific `.so` files through `FrameFlux.FFmpeg`.
+Desktop demo builds automatically copy the current host RID's FFmpeg files from `native/artifacts/runtimes/{rid}/native` into their output. Override `FrameFluxNativeRuntimeIdentifier` when testing a different RID. Published applications should reference the matching `FrameFlux.FFmpeg.NativeAssets.*` package; the core `FrameFlux.FFmpeg` package contains no native binaries. The Android asset package maps each ABI-specific `.so` into the Android application package.
 
-On Windows, `MediaRenderPreference.NativeSurface` with hardware acceleration enabled uses FFmpeg D3D11VA frames directly in a D3D11 video processor and DXGI swap chain hosted by Avalonia's `NativeControlHost`. This path does not read frames back to the CPU or upload them through OpenGL. DirectX dependencies are compiled only for the desktop target and are not included in Android builds.
+On Windows, `MediaRenderPreference.NativeSurface` with hardware acceleration enabled uses FFmpeg D3D11VA frames directly in a D3D11 video processor and DXGI swap chain. This path does not read frames back to the CPU. Avalonia on Linux and Android currently uses software frame delivery; native output on those platforms can be added behind the same `IMediaVideoOutput` contract.
 
 The current Android FFmpeg binaries are not aligned for Android 16's required
 16 KB memory page size. They work for current test targets, but must be rebuilt
 with 16 KB page-size support before publishing an Android 16-compatible
 package; this cannot be corrected by managed project settings.
 
-Applications can instead configure their own FFmpeg directory before creating a player or session:
+Applications can instead configure their own FFmpeg directory before creating a player:
 
 ```csharp
 FFmpegHelper.RegisterFFmpeg(@"C:\ffmpeg\bin");
 ```
 
-WPF applications can use the packaged control directly:
+UI packages do not depend on the FFmpeg backend. Applications reference the
+backend they want and inject its factory:
+
+```csharp
+Player.PlayerFactory = new FfmpegMediaPlayerFactory();
+```
+
+WPF applications can then use the packaged control:
 
 ```xml
 <frameFlux:MediaView
@@ -84,7 +95,12 @@ stops. A shared input has one audio output, so volume and mute are shared and
 the latest change applies. Shared playback uses software frame rendering
 because native surfaces cannot be fanned out to multiple views.
 
-`IRtspSession`, `RtspSessionOptions`, and `RtspPlayerView` remain available as compatibility APIs. New integrations should use `IMediaPlayer`, `MediaOpenOptions`, and `MediaView`.
+Frames sent to a platform renderer use `IMediaFrameLease` through
+`IMediaVideoOutput`. A successful `TryPresent` transfers ownership to the
+output; rejected or failed deliveries remain owned by the player. Software and
+native framework renderers use this same path. Applications should use
+`IMediaPlayer`, `MediaOpenOptions`, and the framework-specific `MediaView`;
+protocol and decoder implementation types are not part of the public API.
 
 ## Development
 

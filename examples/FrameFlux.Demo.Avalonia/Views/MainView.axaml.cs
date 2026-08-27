@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using FrameFlux.Avalonia;
+using FrameFlux.FFmpeg;
 
 namespace FrameFlux.Demo.Avalonia.Views;
 
@@ -16,6 +17,7 @@ public sealed partial class MainView : UserControl
     public MainView()
     {
         InitializeComponent();
+        Player.PlayerFactory = new FfmpegMediaPlayerFactory();
         Player.PropertyChanged += Player_OnPropertyChanged;
         Player.OpenOptions = new MediaOpenOptions
         {

@@ -1,5 +1,6 @@
 using System.Windows;
 using FrameFlux;
+using FrameFlux.FFmpeg;
 
 namespace FrameFlux.Demo.Wpf;
 
@@ -8,6 +9,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Player.PlayerFactory = new FfmpegMediaPlayerFactory();
         Player.OpenOptions = new MediaOpenOptions
         {
             LowLatency = true,

@@ -51,7 +51,7 @@
         <Border Grid.Row="1"
                 Margin="0,12"
                 Background="#111827">
-            <frameFlux:D3D11MediaView x:Name="Player"
+            <frameFlux:MediaView x:Name="Player"
                                  AutoPlay="False"
                                  PlaybackError="Player_PlaybackError"
                                  PlaybackStateChanged="Player_PlaybackStateChanged"
