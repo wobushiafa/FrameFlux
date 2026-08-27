@@ -55,7 +55,30 @@
                                  AutoPlay="False"
                                  PlaybackError="Player_PlaybackError"
                                  PlaybackStateChanged="Player_PlaybackStateChanged"
-                                 Stretch="Uniform" />
+                                 Stretch="Uniform">
+                <Border Margin="12"
+                        Padding="8,4"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Top"
+                        Panel.ZIndex="10"
+                        Background="#B30B0D0F"
+                        CornerRadius="3"
+                        IsHitTestVisible="False">
+                    <StackPanel Orientation="Horizontal">
+                        <Border Width="7"
+                                Height="7"
+                                Margin="0,0,6,0"
+                                VerticalAlignment="Center"
+                                Background="#EF4444"
+                                CornerRadius="4" />
+                        <TextBlock VerticalAlignment="Center"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="White"
+                                   Text="LIVE" />
+                    </StackPanel>
+                </Border>
+            </frameFlux:MediaView>
         </Border>
         <TextBlock x:Name="StatusTextBlock"
                    Grid.Row="2"

@@ -16,7 +16,7 @@ public partial class MainWindow : Window
             Transport = MediaTransport.Tcp,
             HardwareAcceleration = MediaHardwareAcceleration.Enabled,
             FallbackToSoftwareDecoding = false,
-            RenderPreference = MediaRenderPreference.NativeSurface
+            RenderPreference = MediaRenderPreference.CompositedGpu
         };
     }
 
