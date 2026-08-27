@@ -16,3 +16,7 @@ target. On Windows, dedicated playback can select
 `MediaRenderPreference.NativeSurface` for D3D11 output. Linux and Android
 currently use software output. Explicit native-surface playback does not
 advertise snapshot support because D3D11 textures are not read back to the CPU.
+
+Software bitmap delivery and the Avalonia native host are isolated outputs.
+The Win32 window, D3D11 video processor, and swap chain are provided by the
+shared `FrameFlux.Rendering.Windows` package.

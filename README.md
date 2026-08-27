@@ -9,6 +9,7 @@ Current playback capabilities include video and audio decoding, platform audio o
 | `src/FrameFlux.Abstractions` | `FrameFlux.Abstractions` | Protocol-neutral player, source, frame, capability, and video-output contracts. |
 | `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | UI-independent FFmpeg media player and RTSP backend, without bundled native binaries. |
 | `src/FrameFlux.Presentation` | `FrameFlux.Presentation` | Shared backend-neutral playback lifecycle used by UI controls. |
+| `src/FrameFlux.Rendering.Windows` | `FrameFlux.Rendering.Windows` | Shared Win32 and D3D11 video presentation used by Windows UI controls. |
 | `src/FrameFlux.Avalonia` | `FrameFlux.Avalonia` | Avalonia `MediaView` and platform rendering outputs. |
 | `src/FrameFlux.Wpf` | `FrameFlux.Wpf` | Reusable WPF media playback control and renderer. |
 | `src/FrameFlux.FFmpeg.NativeAssets.Windows` | `FrameFlux.FFmpeg.NativeAssets.Windows` | Windows x64 FFmpeg runtime assets. |

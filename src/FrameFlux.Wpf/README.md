@@ -30,3 +30,7 @@ Native-surface output supports dedicated RTSP/RTSPS playback on Windows. Use
 `MediaRenderPreference.Auto` or `Software` when portable BGRA frame delivery
 and snapshot support are required. Both software and native presentation use
 the same lease-based `IMediaVideoOutput` contract.
+
+The WPF bitmap output and native `HwndHost` own only framework integration and
+latest-frame queues. Win32, D3D11 video processing, and swap-chain resources
+live in the shared `FrameFlux.Rendering.Windows` package.
