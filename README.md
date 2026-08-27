@@ -35,11 +35,11 @@ Desktop demo builds automatically copy the current host RID's FFmpeg files from 
 On Windows, `MediaRenderPreference.NativeSurface` with hardware acceleration
 enabled uses FFmpeg D3D11VA frames directly in a D3D11 video processor and DXGI
 swap chain. This minimum-latency path does not read frames back to the CPU.
-Avalonia also supports `MediaRenderPreference.CompositedGpu` for dedicated
-playback. It converts the decoder texture to a shared BGRA texture and imports
-it into the Avalonia compositor, allowing controls supplied through
-`MediaView.Overlay` to render above the video. Linux and Android currently use
-software frame delivery.
+Avalonia and WPF also support `MediaRenderPreference.CompositedGpu` for
+dedicated playback. It converts the decoder texture to a shared BGRA texture
+and imports it into the framework compositor, allowing framework controls to
+render above the video. Linux and Android currently use software frame
+delivery.
 
 The current Android FFmpeg binaries are not aligned for Android 16's required
 16 KB memory page size. They work for current test targets, but must be rebuilt

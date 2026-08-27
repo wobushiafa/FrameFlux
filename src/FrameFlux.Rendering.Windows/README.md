@@ -4,7 +4,8 @@ Shared Windows D3D11 presentation used by the FrameFlux Avalonia and WPF
 controls. The package keeps two distinct outputs:
 
 - a Win32 child-window and DXGI swap-chain presenter for minimum latency;
-- a keyed-mutex shared BGRA texture producer for UI-framework GPU composition.
+- a shared BGRA texture producer with keyed-mutex and D3D9Ex-compatible modes
+  for UI-framework GPU composition.
 
 Both consume decoder-owned D3D11 textures without CPU readback.
 

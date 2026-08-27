@@ -121,6 +121,7 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
 
     private readonly MediaPlaybackController _playback = new();
     private readonly SoftwareBitmapMediaOutput _softwareOutput = new();
+    private readonly D3D11ImageMediaOutput _compositedOutput = new();
     private readonly D3D11SwapChainPresenter _nativePresenter = new();
     private bool _isLoaded;
     private bool _disposed;
@@ -136,6 +137,11 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         _softwareOutput.Stretch = Stretch;
         _softwareOutput.FramePresented += OnSoftwareFramePresented;
         Children.Add(_softwareOutput);
+        _compositedOutput.Stretch = Stretch;
+        _compositedOutput.Visibility = Visibility.Collapsed;
+        _compositedOutput.FramePresented += OnCompositedFramePresented;
+        _compositedOutput.PresentationFailed += OnCompositedPresentationFailed;
+        Children.Add(_compositedOutput);
         _nativePresenter.Visibility = Visibility.Collapsed;
         Children.Add(_nativePresenter);
     }
@@ -216,21 +222,43 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         {
             EnableAudio = EnableAudio
         };
+        if (options.RenderPreference == MediaRenderPreference.NativeSurface &&
+            HasOverlayChildren())
+        {
+            throw new InvalidOperationException(
+                "WPF overlay content requires Software or CompositedGpu rendering.");
+        }
+
         var useNativeOutput =
             options.StreamSharing == MediaStreamSharingMode.Dedicated &&
             options.RenderPreference == MediaRenderPreference.NativeSurface &&
             options.HardwareAcceleration != MediaHardwareAcceleration.Disabled &&
             OperatingSystem.IsWindows();
+        var useCompositedOutput =
+            options.StreamSharing == MediaStreamSharingMode.Dedicated &&
+            options.RenderPreference == MediaRenderPreference.CompositedGpu &&
+            options.HardwareAcceleration != MediaHardwareAcceleration.Disabled &&
+            OperatingSystem.IsWindows();
         _nativePresenter.SetStretch(Stretch);
         _nativePresenter.Visibility = useNativeOutput ? Visibility.Visible : Visibility.Collapsed;
-        _softwareOutput.Visibility = useNativeOutput ? Visibility.Collapsed : Visibility.Visible;
+        _compositedOutput.Stretch = Stretch;
+        _compositedOutput.Visibility =
+            useCompositedOutput ? Visibility.Visible : Visibility.Collapsed;
+        _softwareOutput.Visibility =
+            useNativeOutput || useCompositedOutput
+                ? Visibility.Collapsed
+                : Visibility.Visible;
         _playback.Volume = Volume;
         _playback.IsMuted = IsMuted;
         await _playback.StartAsync(
             PlayerFactory,
             Source,
             options,
-            useNativeOutput ? _nativePresenter : _softwareOutput,
+            useNativeOutput
+                ? _nativePresenter
+                : useCompositedOutput
+                    ? _compositedOutput
+                    : _softwareOutput,
             cancellationToken);
     }
 
@@ -258,9 +286,12 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         _playback.StateChanged -= OnPlayerStateChanged;
         _playback.Error -= OnPlayerError;
         _softwareOutput.FramePresented -= OnSoftwareFramePresented;
+        _compositedOutput.FramePresented -= OnCompositedFramePresented;
+        _compositedOutput.PresentationFailed -= OnCompositedPresentationFailed;
         await _playback.DisposeAsync();
         ResetPresentation();
         _softwareOutput.Dispose();
+        _compositedOutput.Dispose();
         _nativePresenter.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -299,6 +330,7 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
     {
         var view = (MediaView)sender;
         view._softwareOutput.Stretch = (Stretch)args.NewValue;
+        view._compositedOutput.Stretch = (Stretch)args.NewValue;
         view._nativePresenter.SetStretch((Stretch)args.NewValue);
     }
 
@@ -362,6 +394,8 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
     private void ResetPresentation()
     {
         _softwareOutput.Clear();
+        _compositedOutput.Clear();
+        _compositedOutput.Visibility = Visibility.Collapsed;
         _nativePresenter.ClearPendingFrame();
         _nativePresenter.Visibility = Visibility.Collapsed;
         _softwareOutput.Visibility = Visibility.Visible;
@@ -390,9 +424,32 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
 
     private void OnSoftwareFramePresented(object? sender, EventArgs args)
     {
+        _compositedOutput.Visibility = Visibility.Collapsed;
         _nativePresenter.Visibility = Visibility.Collapsed;
         _softwareOutput.Visibility = Visibility.Visible;
     }
+
+    private void OnCompositedFramePresented(object? sender, EventArgs args)
+    {
+        _nativePresenter.Visibility = Visibility.Collapsed;
+        _softwareOutput.Visibility = Visibility.Collapsed;
+        _compositedOutput.Visibility = Visibility.Visible;
+    }
+
+    private void OnCompositedPresentationFailed(
+        object? sender,
+        Exception exception) =>
+        ReportError(new MediaPlaybackError(
+            "GpuCompositionFailed",
+            exception.Message,
+            IsRecoverable: false,
+            exception));
+
+    private bool HasOverlayChildren() =>
+        Children.Cast<UIElement>().Any(child =>
+            child != _softwareOutput &&
+            child != _compositedOutput &&
+            child != _nativePresenter);
 
     private void SetState(MediaPlaybackState state)
     {

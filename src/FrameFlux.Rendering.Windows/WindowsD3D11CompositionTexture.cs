@@ -12,9 +12,17 @@ internal readonly record struct WindowsD3D11CompositionFrame(
     int Height,
     long Generation);
 
+internal enum WindowsD3D11CompositionSynchronization
+{
+    KeyedMutex,
+    Shared
+}
+
 internal sealed class WindowsD3D11CompositionTexture : IDisposable
 {
+    private readonly WindowsD3D11CompositionSynchronization _synchronization;
     private ID3D11Device? _device;
+    private ID3D11DeviceContext? _deviceContext;
     private ID3D11VideoDevice? _videoDevice;
     private ID3D11VideoContext? _videoContext;
     private ID3D11VideoProcessorEnumerator? _enumerator;
@@ -27,6 +35,13 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
     private int _height;
     private long _generation;
     private bool _disposed;
+
+    internal WindowsD3D11CompositionTexture(
+        WindowsD3D11CompositionSynchronization synchronization =
+            WindowsD3D11CompositionSynchronization.KeyedMutex)
+    {
+        _synchronization = synchronization;
+    }
 
     internal bool RequiresReset(
         int width,
@@ -67,13 +82,16 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         EnsureDevice(sourceTexture);
         EnsurePipeline(width, height);
 
-        try
+        if (_keyedMutex is not null)
         {
-            _keyedMutex!.AcquireSync(0, 0);
-        }
-        catch (SharpGenException)
-        {
-            return false;
+            try
+            {
+                _keyedMutex.AcquireSync(0, 0);
+            }
+            catch (SharpGenException)
+            {
+                return false;
+            }
         }
 
         var rendered = false;
@@ -116,7 +134,14 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         }
         finally
         {
-            _keyedMutex!.ReleaseSync(rendered ? 1UL : 0UL);
+            if (_keyedMutex is not null)
+            {
+                _keyedMutex.ReleaseSync(rendered ? 1UL : 0UL);
+            }
+            else if (rendered)
+            {
+                _deviceContext!.Flush();
+            }
         }
 
         compositionFrame = new WindowsD3D11CompositionFrame(
@@ -156,8 +181,8 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         DisposePipeline();
         _device = sourceDevice.QueryInterface<ID3D11Device>();
         _videoDevice = _device.QueryInterface<ID3D11VideoDevice>();
-        using var immediateContext = _device.ImmediateContext;
-        _videoContext = immediateContext.QueryInterface<ID3D11VideoContext>();
+        _deviceContext = _device.ImmediateContext;
+        _videoContext = _deviceContext.QueryInterface<ID3D11VideoContext>();
     }
 
     private void EnsurePipeline(int width, int height)
@@ -196,10 +221,17 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
             Usage = ResourceUsage.Default,
             BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
             CPUAccessFlags = CpuAccessFlags.None,
-            MiscFlags = ResourceOptionFlags.SharedKeyedMutex
+            MiscFlags = _synchronization ==
+                WindowsD3D11CompositionSynchronization.KeyedMutex
+                ? ResourceOptionFlags.SharedKeyedMutex
+                : ResourceOptionFlags.Shared
         };
         _outputTexture = _device!.CreateTexture2D(textureDescription);
-        _keyedMutex = _outputTexture.QueryInterface<IDXGIKeyedMutex>();
+        if (_synchronization ==
+            WindowsD3D11CompositionSynchronization.KeyedMutex)
+        {
+            _keyedMutex = _outputTexture.QueryInterface<IDXGIKeyedMutex>();
+        }
         using (var resource = _outputTexture.QueryInterface<IDXGIResource>())
         {
             _sharedHandle = resource.SharedHandle;
@@ -238,6 +270,8 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         DisposePresentationResources();
         _videoContext?.Dispose();
         _videoContext = null;
+        _deviceContext?.Dispose();
+        _deviceContext = null;
         _videoDevice?.Dispose();
         _videoDevice = null;
         _device?.Dispose();

@@ -17,5 +17,6 @@
     <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
     <ProjectReference Include="..\FrameFlux.Presentation\FrameFlux.Presentation.csproj" />
     <ProjectReference Include="..\FrameFlux.Rendering.Windows\FrameFlux.Rendering.Windows.csproj" />
+    <PackageReference Include="Vortice.Direct3D9" />
   </ItemGroup>
 </Project>
