@@ -18,6 +18,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
     private IntPtr _codecContext;
     private IntPtr _packet;
     private IntPtr _decodeFrame;
+    private IntPtr _scaleContext;
     private IntPtr _stream;
     private IntPtr _codecParameters;
     private D3D11vaDecoderContext? _d3d11va;
@@ -234,6 +235,77 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
 
     internal void Cancel() => Volatile.Write(ref _cancelled, true);
 
+    internal unsafe int CopyFrameToBgra(
+        DirectVideoFrame frame,
+        IntPtr destination,
+        int destinationWidth,
+        int destinationHeight,
+        int destinationStride,
+        int scaleQuality,
+        bool forceOpaqueAlpha)
+    {
+        var layout = FFmpegAbi.ReadFrame(frame.Pointer, _api.UtilMajorVersion);
+        var flags = scaleQuality == 0 ? 1 : scaleQuality == 2 ? 4 : 2;
+        _scaleContext = _api.SwsGetCachedContext(
+            _scaleContext,
+            layout.Width,
+            layout.Height,
+            layout.Format,
+            destinationWidth,
+            destinationHeight,
+            FFmpegAbi.PixelFormatBgra,
+            flags,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            IntPtr.Zero);
+        if (_scaleContext == IntPtr.Zero)
+        {
+            return -1;
+        }
+
+        IntPtr* sourceData = stackalloc IntPtr[4];
+        int* sourceStride = stackalloc int[4];
+        IntPtr* destinationData = stackalloc IntPtr[4];
+        int* destinationStrides = stackalloc int[4];
+        for (var index = 0; index < 4; index++)
+        {
+            sourceData[index] = layout.Data[index];
+            sourceStride[index] = layout.LineSize[index];
+            destinationData[index] = IntPtr.Zero;
+            destinationStrides[index] = 0;
+        }
+
+        destinationData[0] = destination;
+        destinationStrides[0] = destinationStride;
+        var result = _api.SwsScale(
+            _scaleContext,
+            (IntPtr)sourceData,
+            (IntPtr)sourceStride,
+            0,
+            layout.Height,
+            (IntPtr)destinationData,
+            (IntPtr)destinationStrides);
+        if (result < 0)
+        {
+            return result;
+        }
+
+        if (forceOpaqueAlpha)
+        {
+            var pixels = (byte*)destination;
+            for (var y = 0; y < destinationHeight; y++)
+            {
+                var row = pixels + y * destinationStride;
+                for (var x = 0; x < destinationWidth; x++)
+                {
+                    row[x * 4 + 3] = 255;
+                }
+            }
+        }
+
+        return 0;
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -245,6 +317,11 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         Volatile.Write(ref _cancelled, true);
         _audioResampler?.Dispose();
         _audioResampler = null;
+        if (_scaleContext != IntPtr.Zero)
+        {
+            _api.SwsFreeContext(_scaleContext);
+            _scaleContext = IntPtr.Zero;
+        }
         if (_audioDecodeFrame != IntPtr.Zero) _api.AvFrameFree(ref _audioDecodeFrame);
         if (_audioCodecContext != IntPtr.Zero) _api.AvCodecFreeContext(ref _audioCodecContext);
         if (_decodeFrame != IntPtr.Zero) _api.AvFrameFree(ref _decodeFrame);
@@ -522,7 +599,6 @@ internal sealed class DirectVideoFrame(
 {
     private readonly FFmpegApi _api = api;
     internal IntPtr Pointer { get; private set; } = pointer;
-    internal IntPtr ScaleContext { get; set; }
 
     internal NativeFrameInfo GetInfo()
     {
@@ -561,12 +637,6 @@ internal sealed class DirectVideoFrame(
 
     public void Dispose()
     {
-        if (ScaleContext != IntPtr.Zero)
-        {
-            _api.SwsFreeContext(ScaleContext);
-            ScaleContext = IntPtr.Zero;
-        }
-
         if (Pointer != IntPtr.Zero)
         {
             var frame = Pointer;

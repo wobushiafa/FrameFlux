@@ -142,6 +142,7 @@ internal sealed class RtspDecoder : IDisposable
         int destinationStride)
     {
         var result = FrameFluxFFmpegNative.CopyFrameToBgra(
+            _session,
             frame.Handle,
             destination,
             destinationWidth,

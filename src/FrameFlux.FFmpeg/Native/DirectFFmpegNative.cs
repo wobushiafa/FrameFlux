@@ -91,6 +91,7 @@ internal static class FrameFluxFFmpegNative
     }
 
     internal static unsafe int CopyFrameToBgra(
+        NativeRtspSessionHandle session,
         NativeVideoFrameHandle frame,
         IntPtr destination,
         int destinationWidth,
@@ -99,74 +100,24 @@ internal static class FrameFluxFFmpegNative
         int scaleQuality,
         int forceOpaqueAlpha)
     {
-        if (frame.IsInvalid || destination == IntPtr.Zero ||
+        if (session.IsInvalid ||
+            frame.IsInvalid ||
+            destination == IntPtr.Zero ||
             destinationWidth <= 0 || destinationHeight <= 0 ||
             destinationStride < destinationWidth * 4)
         {
             return -1;
         }
 
-        var nativeFrame = GetTarget<DirectVideoFrame>(frame.DangerousGetHandle());
-        var layout = FFmpegAbi.ReadFrame(nativeFrame.Pointer, FFmpegApi.Instance.UtilMajorVersion);
-        var flags = scaleQuality == 0 ? 1 : scaleQuality == 2 ? 4 : 2;
-        nativeFrame.ScaleContext = FFmpegApi.Instance.SwsGetCachedContext(
-            nativeFrame.ScaleContext,
-            layout.Width,
-            layout.Height,
-            layout.Format,
-            destinationWidth,
-            destinationHeight,
-            FFmpegAbi.PixelFormatBgra,
-            flags,
-            IntPtr.Zero,
-            IntPtr.Zero,
-            IntPtr.Zero);
-        if (nativeFrame.ScaleContext == IntPtr.Zero)
-        {
-            return -1;
-        }
-
-        IntPtr* sourceData = stackalloc IntPtr[4];
-        int* sourceStride = stackalloc int[4];
-        IntPtr* destinationData = stackalloc IntPtr[4];
-        int* destinationStrides = stackalloc int[4];
-        for (var index = 0; index < 4; index++)
-        {
-            sourceData[index] = layout.Data[index];
-            sourceStride[index] = layout.LineSize[index];
-            destinationData[index] = IntPtr.Zero;
-            destinationStrides[index] = 0;
-        }
-
-        destinationData[0] = destination;
-        destinationStrides[0] = destinationStride;
-        var result = FFmpegApi.Instance.SwsScale(
-            nativeFrame.ScaleContext,
-            (IntPtr)sourceData,
-            (IntPtr)sourceStride,
-            0,
-            layout.Height,
-            (IntPtr)destinationData,
-            (IntPtr)destinationStrides);
-        if (result < 0)
-        {
-            return result;
-        }
-
-        if (forceOpaqueAlpha != 0)
-        {
-            var pixels = (byte*)destination;
-            for (var y = 0; y < destinationHeight; y++)
-            {
-                var row = pixels + y * destinationStride;
-                for (var x = 0; x < destinationWidth; x++)
-                {
-                    row[x * 4 + 3] = 255;
-                }
-            }
-        }
-
-        return 0;
+        return GetTarget<DirectRtspSession>(session.DangerousGetHandle())
+            .CopyFrameToBgra(
+                GetTarget<DirectVideoFrame>(frame.DangerousGetHandle()),
+                destination,
+                destinationWidth,
+                destinationHeight,
+                destinationStride,
+                scaleQuality,
+                forceOpaqueAlpha != 0);
     }
 
     internal static void ReleaseFrame(IntPtr frameHandle)
