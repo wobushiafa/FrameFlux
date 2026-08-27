@@ -7,7 +7,7 @@ using FrameFlux.Presentation;
 
 namespace FrameFlux.Avalonia;
 
-public sealed class MediaView : ContentControl, IAsyncDisposable
+public sealed class MediaView : Control, IAsyncDisposable
 {
     public static readonly StyledProperty<MediaSource?> SourceProperty =
         AvaloniaProperty.Register<MediaView, MediaSource?>(nameof(Source));
@@ -78,7 +78,8 @@ public sealed class MediaView : ContentControl, IAsyncDisposable
         _nativeOutput.IsVisible = false;
         _surface.Children.Add(_nativeOutput);
 #endif
-        Content = _surface;
+        LogicalChildren.Add(_surface);
+        VisualChildren.Add(_surface);
     }
 
     public MediaSource? Source
@@ -227,6 +228,18 @@ public sealed class MediaView : ContentControl, IAsyncDisposable
         }
 
         base.OnDetachedFromVisualTree(e);
+    }
+
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        _surface.Measure(availableSize);
+        return _surface.DesiredSize;
+    }
+
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        _surface.Arrange(new Rect(finalSize));
+        return finalSize;
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)

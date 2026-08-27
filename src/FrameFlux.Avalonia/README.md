@@ -4,6 +4,12 @@ This package provides the protocol-neutral Avalonia `MediaView`. It creates an
 `IMediaPlayer`, forwards the common playback lifecycle, and consumes software
 and native frames through `IMediaVideoOutput`.
 
+`MediaView` is a media surface rather than a content host. It intentionally
+does not expose a `Content` property. The Windows native renderer uses a real
+child window, so Avalonia controls cannot be reliably composited above it due
+to native-window airspace rules. Place application UI beside the media surface
+or use software rendering when an Avalonia overlay is required.
+
 The control does not select a playback backend. Applications must reference a
 backend package and set `PlayerFactory` before playback starts:
 
