@@ -67,6 +67,14 @@ when WASAPI initialization fails. Linux maps the device ID to an ALSA PCM name.
 The effective backend, selected endpoint, queued duration, recovery count, and
 last backend error are available from `player.Diagnostics.Audio`.
 
+Audio is the playback master clock when an audio stream is present. Video
+frames that are more than 100 milliseconds late are dropped; early frames are
+delayed by at most 500 milliseconds. Audio and video timestamp discontinuities
+rebase the corresponding clock instead of leaving playback permanently stalled
+or dropping every subsequent frame. Current positions, A/V offset, delayed and
+dropped frame counts, and clock reset count are available from
+`player.Diagnostics.Synchronization`. Reconnects create a fresh synchronizer.
+
 Limit simultaneous FFmpeg open operations per factory when many players start
 together:
 

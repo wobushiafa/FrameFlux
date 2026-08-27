@@ -109,6 +109,34 @@ public sealed class FFmpegLibraryLoaderTests
     }
 
     [Fact]
+    public void AudioPlaybackController_ResetsOutputOnTimestampJump()
+    {
+        using var output = new TestAudioOutput();
+        using var controller = new AudioPlaybackController(
+            volume: 1d,
+            muted: false,
+            output: output);
+
+        controller.Write(new NativeAudioFrame(
+            new byte[4800 * 2 * sizeof(short)],
+            48000,
+            2,
+            0,
+            1,
+            48000));
+        controller.Write(new NativeAudioFrame(
+            new byte[4800 * 2 * sizeof(short)],
+            48000,
+            2,
+            96000,
+            1,
+            48000));
+
+        Assert.Equal(1, output.ResetCount);
+        Assert.Equal(1, controller.ClockResetCount);
+    }
+
+    [Fact]
     public void WasapiAudioOutput_ReportsSelectedEndpointWhenAvailable()
     {
         if (!OperatingSystem.IsWindows())
@@ -229,6 +257,7 @@ public sealed class FFmpegLibraryLoaderTests
         public long PlayedFrames => 0;
         public bool IsOperational { get; set; } = true;
         public int WriteCount { get; private set; }
+        public int ResetCount { get; private set; }
         public double Volume { get; private set; }
         public MediaAudioDiagnostics Diagnostics { get; } = new(
             "Test",
@@ -251,6 +280,11 @@ public sealed class FFmpegLibraryLoaderTests
         public void Write(byte[] pcm)
         {
             WriteCount++;
+        }
+
+        public void Reset()
+        {
+            ResetCount++;
         }
 
         public void Dispose()

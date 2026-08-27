@@ -145,7 +145,9 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
                     _lastPerformance.SampleCount,
                     _lastError)
                 {
-                    Audio = _client?.AudioDiagnostics ?? MediaAudioDiagnostics.Empty
+                    Audio = _client?.AudioDiagnostics ?? MediaAudioDiagnostics.Empty,
+                    Synchronization = _client?.SynchronizationDiagnostics ??
+                        MediaSynchronizationDiagnostics.Empty
                 };
             }
         }

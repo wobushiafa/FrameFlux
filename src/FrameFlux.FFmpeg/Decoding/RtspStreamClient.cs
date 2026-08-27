@@ -28,9 +28,13 @@ internal sealed class RtspStreamClient : IDisposable
     private bool _muted;
     private AudioPlaybackController? _audioPlayback;
     private MediaAudioDiagnostics _lastAudioDiagnostics = MediaAudioDiagnostics.Empty;
+    private MediaSynchronizationDiagnostics _synchronizationDiagnostics =
+        MediaSynchronizationDiagnostics.Empty;
     public string VideoDecoderDiagnostics => _videoDecoderDiagnostics;
     public MediaAudioDiagnostics AudioDiagnostics =>
         Volatile.Read(ref _audioPlayback)?.Diagnostics ?? _lastAudioDiagnostics;
+    public MediaSynchronizationDiagnostics SynchronizationDiagnostics =>
+        _synchronizationDiagnostics;
 
     internal delegate void FrameReceivedHandler(IntPtr buffer, int width, int height, int stride);
     internal delegate void FrameLeaseReceivedHandler(FfmpegMediaFrameLease lease);
@@ -124,6 +128,8 @@ internal sealed class RtspStreamClient : IDisposable
             {
                 RtspDecoder? decoder = null;
                 AudioPlaybackController? audioPlayback = null;
+                var clockSynchronizer = new MediaClockSynchronizer();
+                _synchronizationDiagnostics = MediaSynchronizationDiagnostics.Empty;
                 var hasOpened = false;
                 IntPtr bgraBuffer = IntPtr.Zero;
                 var bufferSize = 0;
@@ -208,13 +214,18 @@ internal sealed class RtspStreamClient : IDisposable
                         var decodeStart = Stopwatch.GetTimestamp();
                         var hasFrame = decoder.TryDecodeNextFrame(out var frame);
                         DrainAudio(decoder, audioPlayback);
+                        UpdateSynchronizationDiagnostics(clockSynchronizer, audioPlayback);
                         var decodeElapsedTicks = Stopwatch.GetTimestamp() - decodeStart;
                         if (hasFrame && frame != null)
                         {
                             FfmpegMediaFrameLease? frameLease = null;
                             try
                             {
-                                if (!SynchronizeVideo(frame, audioPlayback, cancellationToken))
+                                if (!SynchronizeVideo(
+                                        frame,
+                                        audioPlayback,
+                                        clockSynchronizer,
+                                        cancellationToken))
                                 {
                                     continue;
                                 }
@@ -400,6 +411,7 @@ internal sealed class RtspStreamClient : IDisposable
                     {
                         _lastAudioDiagnostics = audioPlayback.Diagnostics;
                     }
+                    UpdateSynchronizationDiagnostics(clockSynchronizer, audioPlayback);
                     audioPlayback?.Dispose();
                     if (openSemaphoreEntered)
                     {
@@ -605,13 +617,13 @@ internal sealed class RtspStreamClient : IDisposable
         }
     }
 
-    private static bool SynchronizeVideo(
+    private bool SynchronizeVideo(
         NativeDecodedFrame frame,
         AudioPlaybackController? audioPlayback,
+        MediaClockSynchronizer clockSynchronizer,
         CancellationToken cancellationToken)
     {
-        if (audioPlayback?.PositionSeconds is not { } audioPosition ||
-            frame.Info.PresentationTimestamp == long.MinValue ||
+        if (frame.Info.PresentationTimestamp == long.MinValue ||
             frame.Info.TimeBaseDenominator <= 0)
         {
             return true;
@@ -619,22 +631,32 @@ internal sealed class RtspStreamClient : IDisposable
 
         var videoPosition = frame.Info.PresentationTimestamp *
             (double)frame.Info.TimeBaseNumerator / frame.Info.TimeBaseDenominator;
-        var difference = videoPosition - audioPosition;
-        if (difference < -0.100d)
+        var decision = clockSynchronizer.EvaluateVideo(
+            videoPosition,
+            audioPlayback?.PositionSeconds);
+        UpdateSynchronizationDiagnostics(clockSynchronizer, audioPlayback);
+        if (decision.Action == MediaVideoSynchronizationAction.Drop)
         {
             return false;
         }
 
-        if (difference > 0.005d)
+        if (decision.Action == MediaVideoSynchronizationAction.Delay)
         {
-            var delay = TimeSpan.FromSeconds(Math.Min(difference, 0.5d));
-            if (cancellationToken.WaitHandle.WaitOne(delay))
+            if (cancellationToken.WaitHandle.WaitOne(decision.Delay))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    private void UpdateSynchronizationDiagnostics(
+        MediaClockSynchronizer clockSynchronizer,
+        AudioPlaybackController? audioPlayback)
+    {
+        _synchronizationDiagnostics = clockSynchronizer.GetDiagnostics(
+            audioPlayback?.ClockResetCount ?? 0);
     }
 
     private static (int Width, int Height) CalculateOutputSize(int sourceWidth, int sourceHeight, int maxWidth, int maxHeight)

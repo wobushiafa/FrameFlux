@@ -131,6 +131,27 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
         }
     }
 
+    public void Reset()
+    {
+        lock (_sync)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (_needsRecovery || _output is null || _provider is null)
+            {
+                Recover();
+            }
+            else
+            {
+                _provider.ClearBuffer();
+                Interlocked.Exchange(ref _submittedFrames, 0);
+            }
+        }
+    }
+
     public void Dispose()
     {
         lock (_sync)

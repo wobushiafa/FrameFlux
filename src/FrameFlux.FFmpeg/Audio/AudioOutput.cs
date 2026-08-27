@@ -10,6 +10,7 @@ internal interface IAudioOutput : IDisposable
     bool IsOperational { get; }
     MediaAudioDiagnostics Diagnostics { get; }
     bool TrySetVolume(double volume, bool muted);
+    void Reset();
     void Write(byte[] pcm);
 }
 
@@ -59,12 +60,17 @@ internal sealed record AudioOutputConfiguration(
 
 internal sealed class AudioPlaybackController : IDisposable
 {
+    private const double TimestampDiscontinuitySeconds = 0.5d;
     private readonly IAudioOutput _output;
+    private readonly object _clockSync = new();
     private readonly double _gainMultiplier;
     private double _volume;
     private bool _muted;
     private bool _outputVolumeActive;
     private double? _mediaStartSeconds;
+    private double? _lastSubmittedEndSeconds;
+    private long _outputFramesAtMediaStart;
+    private int _clockResetCount;
 
     internal AudioPlaybackController(
         double volume,
@@ -87,9 +93,21 @@ internal sealed class AudioPlaybackController : IDisposable
 
     internal MediaAudioDiagnostics Diagnostics => _output.Diagnostics;
 
-    internal double? PositionSeconds => _mediaStartSeconds is { } start
-        ? start + (double)_output.PlayedFrames / _output.SampleRate
-        : null;
+    internal double? PositionSeconds
+    {
+        get
+        {
+            lock (_clockSync)
+            {
+                return _mediaStartSeconds is { } start
+                    ? start + (double)(_output.PlayedFrames - _outputFramesAtMediaStart) /
+                        _output.SampleRate
+                    : null;
+            }
+        }
+    }
+
+    internal int ClockResetCount => Volatile.Read(ref _clockResetCount);
 
     internal void SetVolume(double volume)
     {
@@ -114,9 +132,30 @@ internal sealed class AudioPlaybackController : IDisposable
             return;
         }
 
-        if (_mediaStartSeconds is null && frame.PresentationSeconds is { } presentation)
+        if (frame.PresentationSeconds is { } presentation)
         {
-            _mediaStartSeconds = presentation;
+            lock (_clockSync)
+            {
+                if (_lastSubmittedEndSeconds is { } expected &&
+                    Math.Abs(presentation - expected) > TimestampDiscontinuitySeconds)
+                {
+                    _output.Reset();
+                    _mediaStartSeconds = presentation;
+                    _outputFramesAtMediaStart = _output.PlayedFrames;
+                    Interlocked.Increment(ref _clockResetCount);
+                }
+                else if (_mediaStartSeconds is null)
+                {
+                    _mediaStartSeconds = presentation;
+                    _outputFramesAtMediaStart = _output.PlayedFrames;
+                }
+
+                var frameDuration = frame.SampleRate > 0 && frame.Channels > 0
+                    ? (double)frame.Data.Length /
+                        (frame.SampleRate * frame.Channels * sizeof(short))
+                    : 0d;
+                _lastSubmittedEndSeconds = presentation + frameDuration;
+            }
         }
 
         ApplyGainMultiplier(frame.Data, _gainMultiplier);
@@ -209,6 +248,7 @@ internal sealed class NullAudioOutput : IAudioOutput
         0,
         _lastError);
     public bool TrySetVolume(double volume, bool muted) => false;
+    public void Reset() { }
     public void Write(byte[] pcm) { }
     public void Dispose() { }
 }

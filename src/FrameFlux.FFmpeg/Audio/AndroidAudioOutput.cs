@@ -91,6 +91,22 @@ internal sealed class AndroidAudioOutput : IAudioOutput
         Interlocked.Add(ref _submittedFrames, written / (Channels * sizeof(short)));
     }
 
+    public void Reset()
+    {
+        var track = _track;
+        if (track is null)
+        {
+            return;
+        }
+
+        track.Pause();
+        track.Flush();
+        Interlocked.Exchange(ref _submittedFrames, 0);
+        _lastHead = 0;
+        _headWraps = 0;
+        track.Play();
+    }
+
     public void Dispose()
     {
         var track = Interlocked.Exchange(ref _track, null);

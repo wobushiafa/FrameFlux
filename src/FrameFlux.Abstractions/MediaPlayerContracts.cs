@@ -333,6 +333,9 @@ public sealed record MediaDiagnostics(
 {
     public MediaAudioDiagnostics Audio { get; init; } = MediaAudioDiagnostics.Empty;
 
+    public MediaSynchronizationDiagnostics Synchronization { get; init; } =
+        MediaSynchronizationDiagnostics.Empty;
+
     public static MediaDiagnostics Empty { get; } = new(
         false,
         "N/A",
@@ -340,6 +343,23 @@ public sealed record MediaDiagnostics(
         0,
         0,
         null);
+}
+
+public sealed record MediaSynchronizationDiagnostics(
+    TimeSpan? AudioPosition,
+    TimeSpan? VideoPosition,
+    TimeSpan? AudioVideoOffset,
+    int DroppedVideoFrames,
+    int DelayedVideoFrames,
+    int ClockResetCount)
+{
+    public static MediaSynchronizationDiagnostics Empty { get; } = new(
+        null,
+        null,
+        null,
+        0,
+        0,
+        0);
 }
 
 public sealed record MediaAudioDiagnostics(

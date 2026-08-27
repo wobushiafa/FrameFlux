@@ -112,6 +112,18 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
         }
     }
 
+    public void Reset()
+    {
+        if (_handle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        ThrowIfFailed(snd_pcm_drop(_handle), "snd_pcm_drop");
+        ThrowIfFailed(snd_pcm_prepare(_handle), "snd_pcm_prepare");
+        Interlocked.Exchange(ref _submittedFrames, 0);
+    }
+
     private long GetQueuedFrames()
     {
         return _handle != IntPtr.Zero && snd_pcm_delay(_handle, out var delay) >= 0
@@ -138,5 +150,6 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput
     [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)] private static extern int snd_pcm_recover(IntPtr pcm, int error, int silent);
     [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)] private static extern int snd_pcm_delay(IntPtr pcm, out long delay);
     [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)] private static extern int snd_pcm_drop(IntPtr pcm);
+    [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)] private static extern int snd_pcm_prepare(IntPtr pcm);
     [DllImport("libasound.so.2", CallingConvention = CallingConvention.Cdecl)] private static extern int snd_pcm_close(IntPtr pcm);
 }

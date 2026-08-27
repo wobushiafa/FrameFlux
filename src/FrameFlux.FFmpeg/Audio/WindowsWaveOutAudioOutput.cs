@@ -153,6 +153,29 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput
         }
     }
 
+    public void Reset()
+    {
+        lock (_sync)
+        {
+            if (_handle == IntPtr.Zero)
+            {
+                return;
+            }
+
+            ThrowIfFailed(waveOutReset(_handle), "waveOutReset");
+            while (_pendingBuffers.TryDequeue(out var pending))
+            {
+                ReleaseBuffer(pending);
+            }
+            _completedFrames = 0;
+            _lastDevicePosition = 0;
+            _devicePositionWraps = 0;
+            _pendingFrames = 0;
+            _started = false;
+            ThrowIfFailed(waveOutPause(_handle), "waveOutPause");
+        }
+    }
+
     public void Dispose()
     {
         lock (_sync)
