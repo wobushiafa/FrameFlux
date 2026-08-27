@@ -41,6 +41,21 @@ and imports it into the framework compositor, allowing framework controls to
 render above the video. Linux and Android currently use software frame
 delivery.
 
+Decoding and rendering are configured independently:
+
+```csharp
+Player.OpenOptions = Player.OpenOptions with
+{
+    HardwareAcceleration = MediaHardwareAcceleration.Auto,
+    RenderPreference = MediaRenderPreference.CompositedGpu
+};
+```
+
+`HardwareAcceleration` accepts `Auto`, `Enabled`, or `Disabled`.
+`RenderPreference` accepts `Auto`, `Software`, `NativeSurface`, or
+`CompositedGpu`. Assigning new open options while an Avalonia or WPF player is
+active performs a controlled restart with the new pipeline.
+
 The current Android FFmpeg binaries are not aligned for Android 16's required
 16 KB memory page size. They work for current test targets, but must be rebuilt
 with 16 KB page-size support before publishing an Android 16-compatible

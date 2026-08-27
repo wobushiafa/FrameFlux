@@ -35,6 +35,13 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
             typeof(MediaView),
             new FrameworkPropertyMetadata("Not started"));
 
+    private static readonly DependencyPropertyKey ActiveRendererIdPropertyKey =
+        DependencyProperty.RegisterReadOnly(
+            nameof(ActiveRendererId),
+            typeof(string),
+            typeof(MediaView),
+            new FrameworkPropertyMetadata(null));
+
     public static readonly DependencyProperty SourceProperty =
         DependencyProperty.Register(
             nameof(Source),
@@ -118,6 +125,9 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
 
     public static readonly DependencyProperty HardwareDiagnosticsProperty =
         HardwareDiagnosticsPropertyKey.DependencyProperty;
+
+    public static readonly DependencyProperty ActiveRendererIdProperty =
+        ActiveRendererIdPropertyKey.DependencyProperty;
 
     private readonly MediaPlaybackController _playback = new();
     private readonly SoftwareBitmapMediaOutput _softwareOutput = new();
@@ -209,6 +219,8 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
 
     public string HardwareDiagnostics => (string)GetValue(HardwareDiagnosticsProperty);
 
+    public string? ActiveRendererId => (string?)GetValue(ActiveRendererIdProperty);
+
     public event EventHandler<MediaPlaybackStateChangedEventArgs>? PlaybackStateChanged;
 
     public event EventHandler<MediaPlaybackErrorEventArgs>? PlaybackError;
@@ -248,6 +260,13 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
             useNativeOutput || useCompositedOutput
                 ? Visibility.Collapsed
                 : Visibility.Visible;
+        SetValue(
+            ActiveRendererIdPropertyKey,
+            useNativeOutput
+                ? "windows-d3d11"
+                : useCompositedOutput
+                    ? "windows-d3d11-composited"
+                    : "software-bitmap");
         _playback.Volume = Volume;
         _playback.IsMuted = IsMuted;
         await _playback.StartAsync(
@@ -399,6 +418,7 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         _nativePresenter.ClearPendingFrame();
         _nativePresenter.Visibility = Visibility.Collapsed;
         _softwareOutput.Visibility = Visibility.Visible;
+        SetValue(ActiveRendererIdPropertyKey, null);
     }
 
     private void OnPlayerStateChanged(object? sender, MediaPlaybackStateChangedEventArgs args) =>
@@ -427,6 +447,7 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         _compositedOutput.Visibility = Visibility.Collapsed;
         _nativePresenter.Visibility = Visibility.Collapsed;
         _softwareOutput.Visibility = Visibility.Visible;
+        SetValue(ActiveRendererIdPropertyKey, "software-bitmap");
     }
 
     private void OnCompositedFramePresented(object? sender, EventArgs args)
@@ -434,6 +455,7 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         _nativePresenter.Visibility = Visibility.Collapsed;
         _softwareOutput.Visibility = Visibility.Collapsed;
         _compositedOutput.Visibility = Visibility.Visible;
+        SetValue(ActiveRendererIdPropertyKey, "windows-d3d11-composited");
     }
 
     private void OnCompositedPresentationFailed(

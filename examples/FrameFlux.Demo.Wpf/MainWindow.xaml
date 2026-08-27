@@ -10,6 +10,7 @@
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -48,7 +49,28 @@
                      VerticalContentAlignment="Center"
                      Text="rtsp://username:password@camera-host:554/stream" />
         </DockPanel>
-        <Border Grid.Row="1"
+        <WrapPanel Grid.Row="1"
+                   Margin="0,10,0,0"
+                   Orientation="Horizontal">
+            <StackPanel Margin="0,0,16,0"
+                        Orientation="Horizontal">
+                <TextBlock Margin="0,0,8,0"
+                           VerticalAlignment="Center"
+                           Text="Decode" />
+                <ComboBox x:Name="HardwareModeComboBox"
+                          Width="150"
+                          SelectionChanged="PlaybackMode_SelectionChanged" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Margin="0,0,8,0"
+                           VerticalAlignment="Center"
+                           Text="Render" />
+                <ComboBox x:Name="RenderModeComboBox"
+                          Width="150"
+                          SelectionChanged="PlaybackMode_SelectionChanged" />
+            </StackPanel>
+        </WrapPanel>
+        <Border Grid.Row="2"
                 Margin="0,12"
                 Background="#111827">
             <frameFlux:MediaView x:Name="Player"
@@ -56,7 +78,8 @@
                                  PlaybackError="Player_PlaybackError"
                                  PlaybackStateChanged="Player_PlaybackStateChanged"
                                  Stretch="Uniform">
-                <Border Margin="12"
+                <Border x:Name="VideoOverlay"
+                        Margin="12"
                         Padding="8,4"
                         HorizontalAlignment="Right"
                         VerticalAlignment="Top"
@@ -81,7 +104,7 @@
             </frameFlux:MediaView>
         </Border>
         <TextBlock x:Name="StatusTextBlock"
-                   Grid.Row="2"
+                   Grid.Row="3"
                    Text="Enter an RTSP URL, then start playback." />
     </Grid>
 </Window>

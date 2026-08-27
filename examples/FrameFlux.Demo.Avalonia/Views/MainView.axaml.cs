@@ -13,13 +13,14 @@ public sealed partial class MainView : UserControl
     private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.Parse("#22C55E"));
     private static readonly IBrush BusyBrush = new SolidColorBrush(Color.Parse("#F59E0B"));
     private static readonly IBrush ErrorBrush = new SolidColorBrush(Color.Parse("#EF4444"));
+    private bool _configuringPlaybackModes;
 
     public MainView()
     {
         InitializeComponent();
         Player.PlayerFactory = new FfmpegMediaPlayerFactory();
         Player.PropertyChanged += Player_OnPropertyChanged;
-        Player.OpenOptions = new MediaOpenOptions
+        var options = new MediaOpenOptions
         {
             LowLatency = true,
             Transport = MediaTransport.Tcp,
@@ -27,6 +28,15 @@ public sealed partial class MainView : UserControl
             RenderPreference = MediaRenderPreference.CompositedGpu,
             FallbackToSoftwareDecoding = false
         };
+        Player.OpenOptions = options;
+        _configuringPlaybackModes = true;
+        HardwareModeComboBox.ItemsSource =
+            Enum.GetValues<MediaHardwareAcceleration>();
+        RenderModeComboBox.ItemsSource =
+            Enum.GetValues<MediaRenderPreference>();
+        HardwareModeComboBox.SelectedItem = options.HardwareAcceleration;
+        RenderModeComboBox.SelectedItem = options.RenderPreference;
+        _configuringPlaybackModes = false;
     }
 
     private async void StartButton_OnClick(object? sender, RoutedEventArgs e)
@@ -48,6 +58,29 @@ public sealed partial class MainView : UserControl
     {
         await Player.StopAsync();
         SetStatus("Stopped", IdleBrush);
+    }
+
+    private void PlaybackMode_OnSelectionChanged(
+        object? sender,
+        SelectionChangedEventArgs e)
+    {
+        if (_configuringPlaybackModes ||
+            HardwareModeComboBox.SelectedItem is not
+                MediaHardwareAcceleration hardwareAcceleration ||
+            RenderModeComboBox.SelectedItem is not
+                MediaRenderPreference renderPreference)
+        {
+            return;
+        }
+
+        Player.Overlay = renderPreference == MediaRenderPreference.NativeSurface
+            ? null
+            : VideoOverlay;
+        Player.OpenOptions = Player.OpenOptions with
+        {
+            HardwareAcceleration = hardwareAcceleration,
+            RenderPreference = renderPreference
+        };
     }
 
     private void Player_OnPlaybackStateChanged(

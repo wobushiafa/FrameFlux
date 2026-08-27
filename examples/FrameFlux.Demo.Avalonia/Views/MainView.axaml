@@ -4,7 +4,7 @@
              x:Class="FrameFlux.Demo.Avalonia.Views.MainView"
              Background="#111315">
   <Grid Margin="16"
-        RowDefinitions="Auto,*,Auto,Auto"
+        RowDefinitions="Auto,Auto,*,Auto,Auto"
         RowSpacing="12">
     <Grid ColumnDefinitions="*,Auto,Auto"
           ColumnSpacing="8">
@@ -25,7 +25,30 @@
               AutomationProperties.Name="Stop playback" />
     </Grid>
 
-    <Border Grid.Row="1"
+    <WrapPanel Grid.Row="1"
+               Orientation="Horizontal">
+      <StackPanel Margin="0,0,16,0"
+                  Orientation="Horizontal"
+                  Spacing="8">
+        <TextBlock VerticalAlignment="Center"
+                   Text="Decode" />
+        <ComboBox x:Name="HardwareModeComboBox"
+                  Width="150"
+                  SelectionChanged="PlaybackMode_OnSelectionChanged"
+                  AutomationProperties.Name="Decode mode" />
+      </StackPanel>
+      <StackPanel Orientation="Horizontal"
+                  Spacing="8">
+        <TextBlock VerticalAlignment="Center"
+                   Text="Render" />
+        <ComboBox x:Name="RenderModeComboBox"
+                  Width="150"
+                  SelectionChanged="PlaybackMode_OnSelectionChanged"
+                  AutomationProperties.Name="Render mode" />
+      </StackPanel>
+    </WrapPanel>
+
+    <Border Grid.Row="2"
             Background="#050607"
             BorderBrush="#34383D"
             BorderThickness="1"
@@ -38,7 +61,8 @@
                            PlaybackStateChanged="Player_OnPlaybackStateChanged"
                            Stretch="Uniform">
         <frameFlux:MediaView.Overlay>
-          <Border Margin="12"
+          <Border x:Name="VideoOverlay"
+                  Margin="12"
                   Padding="8,4"
                   HorizontalAlignment="Right"
                   VerticalAlignment="Top"
@@ -63,7 +87,7 @@
       </frameFlux:MediaView>
     </Border>
 
-    <Grid Grid.Row="2"
+    <Grid Grid.Row="3"
           ColumnDefinitions="Auto,*,Auto"
           ColumnSpacing="12">
       <TextBlock VerticalAlignment="Center"
@@ -82,7 +106,7 @@
                 AutomationProperties.Name="Mute audio" />
     </Grid>
 
-    <Grid Grid.Row="3"
+    <Grid Grid.Row="4"
           ColumnDefinitions="Auto,*"
           ColumnSpacing="10">
       <Border x:Name="StateIndicator"
