@@ -4,7 +4,9 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
 {
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly object _eventSync = new();
+    private readonly object _disposeSync = new();
     private IMediaPlayer? _player;
+    private Task? _disposeTask;
     private EventHandler<MediaVideoFrame>? _frameReceived;
     private MediaPlaybackState _state = MediaPlaybackState.Idle;
     private MediaPlaybackError? _lastError;
@@ -94,6 +96,7 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             await StopPlayerCoreAsync(setStoppedState: false).ConfigureAwait(false);
             if (playerFactory is null)
             {
@@ -141,7 +144,7 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
                 throw;
             }
         }
-        catch (Exception exception)
+        catch (Exception exception) when (!_disposed || exception is not ObjectDisposedException)
         {
             ReportError(new MediaPlaybackError(
                 "OpenFailed",
@@ -161,6 +164,11 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             await StopPlayerCoreAsync(setStoppedState: true).ConfigureAwait(false);
         }
         finally
@@ -173,16 +181,31 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
         _player?.CaptureSnapshotAsync(cancellationToken) ??
         ValueTask.FromResult<MediaSnapshot?>(null);
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_disposed)
+        lock (_disposeSync)
         {
-            return;
+            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
         }
+    }
 
-        await StopAsync().ConfigureAwait(false);
-        _disposed = true;
-        _lifecycleGate.Dispose();
+    private async Task DisposeCoreAsync()
+    {
+        await _lifecycleGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            await StopPlayerCoreAsync(setStoppedState: true).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
 
     private async ValueTask StopPlayerCoreAsync(bool setStoppedState)

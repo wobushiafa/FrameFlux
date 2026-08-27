@@ -1,0 +1,238 @@
+[FrameFlux.Abstractions]
+interface FrameFlux.IMediaFrameLease : System.IDisposable
+  property System.Int32 Height { get; }
+  property FrameFlux.MediaPixelFormat PixelFormat { get; }
+  property FrameFlux.MediaFrameStorageKind StorageKind { get; }
+  property System.Int32 Width { get; }
+  method System.Boolean TryGetCpuBuffer(out FrameFlux.MediaCpuFrameBuffer buffer)
+  method System.Boolean TryGetD3D11Texture(out FrameFlux.MediaD3D11TextureBuffer texture)
+interface FrameFlux.IMediaPlayer : System.IAsyncDisposable
+  property FrameFlux.MediaCapabilities Capabilities { get; }
+  property FrameFlux.MediaDiagnostics Diagnostics { get; }
+  property System.TimeSpan? Duration { get; }
+  property System.Boolean IsMuted { get; set; }
+  property FrameFlux.MediaOpenOptions Options { get; }
+  property System.TimeSpan Position { get; }
+  property FrameFlux.MediaSource? Source { get; }
+  property FrameFlux.MediaPlaybackState State { get; }
+  property FrameFlux.IMediaVideoOutput? VideoOutput { get; set; }
+  property System.Double Volume { get; set; }
+  event System.EventHandler<FrameFlux.MediaPlaybackErrorEventArgs>? Error
+  event System.EventHandler<FrameFlux.MediaVideoFrame>? FrameReceived
+  event System.EventHandler<FrameFlux.MediaPlaybackStateChangedEventArgs>? StateChanged
+  method System.Threading.Tasks.ValueTask OpenAsync(FrameFlux.MediaSource source, FrameFlux.MediaOpenOptions? options = null, System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask PauseAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask PlayAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask SeekAsync(System.TimeSpan position, System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask StopAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask<FrameFlux.MediaSnapshot?> CaptureSnapshotAsync(System.Threading.CancellationToken cancellationToken = default)
+interface FrameFlux.IMediaPlayerFactory
+  method FrameFlux.IMediaPlayer Create()
+interface FrameFlux.IMediaVideoOutput
+  property FrameFlux.MediaFrameStorageKind PreferredFrameStorage { get; }
+  method System.Boolean Supports(FrameFlux.MediaFrameStorageKind storageKind, FrameFlux.MediaPixelFormat pixelFormat)
+  method System.Boolean TryPresent(FrameFlux.IMediaFrameLease frame)
+class FrameFlux.MediaAudioDiagnostics : System.IEquatable<FrameFlux.MediaAudioDiagnostics>
+  constructor MediaAudioDiagnostics(System.String Backend, System.String? OutputDeviceId, System.String? OutputDeviceName, System.Int32 SampleRate, System.Int32 Channels, System.TimeSpan ConfiguredBufferDuration, System.TimeSpan QueuedDuration, System.Boolean IsOperational, System.Int32 RecoveryCount, System.String? LastError)
+  property System.String Backend { get; init; }
+  property System.Int32 Channels { get; init; }
+  property System.TimeSpan ConfiguredBufferDuration { get; init; }
+  property FrameFlux.MediaAudioDiagnostics Empty { get; }
+  property System.Boolean IsOperational { get; init; }
+  property System.String? LastError { get; init; }
+  property System.String? OutputDeviceId { get; init; }
+  property System.String? OutputDeviceName { get; init; }
+  property System.TimeSpan QueuedDuration { get; init; }
+  property System.Int32 RecoveryCount { get; init; }
+  property System.Int32 SampleRate { get; init; }
+class FrameFlux.MediaAudioOptions : System.IEquatable<FrameFlux.MediaAudioOptions>
+  constructor MediaAudioOptions()
+  property System.TimeSpan BufferDuration { get; init; }
+  property System.Double GainDecibels { get; init; }
+  property System.Boolean IsEnabled { get; init; }
+  property System.String? OutputDeviceId { get; init; }
+class FrameFlux.MediaCapabilities : System.IEquatable<FrameFlux.MediaCapabilities>
+  constructor MediaCapabilities(System.Boolean IsLive, System.Boolean CanPause, System.Boolean CanSeek, System.Boolean CanCaptureSnapshots)
+  property System.Boolean CanCaptureSnapshots { get; init; }
+  property System.Boolean CanPause { get; init; }
+  property System.Boolean CanSeek { get; init; }
+  property System.Boolean IsLive { get; init; }
+  property FrameFlux.MediaCapabilities None { get; }
+struct FrameFlux.MediaCpuFrameBuffer : System.IEquatable<FrameFlux.MediaCpuFrameBuffer>
+  constructor MediaCpuFrameBuffer(System.IntPtr Buffer, System.Int32 Size, System.IntPtr Plane0, System.IntPtr Plane1, System.IntPtr Plane2, System.Int32 Plane0Stride, System.Int32 Plane1Stride, System.Int32 Plane2Stride)
+  property System.IntPtr Buffer { get; init; }
+  property System.IntPtr Plane0 { get; init; }
+  property System.Int32 Plane0Stride { get; init; }
+  property System.IntPtr Plane1 { get; init; }
+  property System.Int32 Plane1Stride { get; init; }
+  property System.IntPtr Plane2 { get; init; }
+  property System.Int32 Plane2Stride { get; init; }
+  property System.Int32 Size { get; init; }
+struct FrameFlux.MediaD3D11TextureBuffer : System.IEquatable<FrameFlux.MediaD3D11TextureBuffer>
+  constructor MediaD3D11TextureBuffer(System.IntPtr Texture, System.Int32 ArraySlice)
+  property System.Int32 ArraySlice { get; init; }
+  property System.IntPtr Texture { get; init; }
+class FrameFlux.MediaDiagnostics : System.IEquatable<FrameFlux.MediaDiagnostics>
+  constructor MediaDiagnostics(System.Boolean IsHardwareVideoDecodingActive, System.String VideoDecoderDiagnostics, System.Double ReadMilliseconds, System.Double DecodeMilliseconds, System.Int32 PerformanceSampleCount, System.String? LastError)
+  property FrameFlux.MediaAudioDiagnostics Audio { get; init; }
+  property System.Double DecodeMilliseconds { get; init; }
+  property FrameFlux.MediaDiagnostics Empty { get; }
+  property System.Boolean IsHardwareVideoDecodingActive { get; init; }
+  property System.String? LastError { get; init; }
+  property System.Int32 PerformanceSampleCount { get; init; }
+  property System.Double ReadMilliseconds { get; init; }
+  property FrameFlux.MediaSynchronizationDiagnostics Synchronization { get; init; }
+  property System.String VideoDecoderDiagnostics { get; init; }
+enum FrameFlux.MediaFrameStorageKind : System.Int32
+  CpuMemory = 0
+  D3D11Texture = 1
+enum FrameFlux.MediaLatencyMode : System.Int32
+  Default = 0
+  Low = 1
+class FrameFlux.MediaNetworkOptions : System.IEquatable<FrameFlux.MediaNetworkOptions>
+  constructor MediaNetworkOptions()
+  property System.TimeSpan? EndpointProbeTimeout { get; init; }
+  property FrameFlux.MediaLatencyMode LatencyMode { get; init; }
+  property System.TimeSpan? OpenTimeout { get; init; }
+  property System.TimeSpan? ReadTimeout { get; init; }
+  property FrameFlux.MediaReconnectOptions Reconnect { get; init; }
+  property FrameFlux.MediaTransport Transport { get; init; }
+class FrameFlux.MediaOpenOptions : System.IEquatable<FrameFlux.MediaOpenOptions>
+  constructor MediaOpenOptions()
+  property FrameFlux.MediaAudioOptions Audio { get; init; }
+  property FrameFlux.MediaNetworkOptions Network { get; init; }
+  property FrameFlux.MediaSessionSharingMode SessionSharing { get; init; }
+  property FrameFlux.MediaVideoOptions Video { get; init; }
+  method System.Void Validate()
+enum FrameFlux.MediaPixelFormat : System.Int32
+  Unknown = 0
+  Bgra32 = 1
+  Yuv420P = 2
+  Nv12 = 3
+  Nv21 = 4
+class FrameFlux.MediaPlaybackError : System.IEquatable<FrameFlux.MediaPlaybackError>
+  constructor MediaPlaybackError(System.String Code, System.String Message, System.Boolean IsRecoverable, System.Exception? Exception = null)
+  property System.String Code { get; init; }
+  property System.Exception? Exception { get; init; }
+  property System.Boolean IsRecoverable { get; init; }
+  property System.String Message { get; init; }
+class FrameFlux.MediaPlaybackErrorEventArgs : System.EventArgs
+  constructor MediaPlaybackErrorEventArgs(FrameFlux.MediaPlaybackError error)
+  property FrameFlux.MediaPlaybackError Error { get; }
+enum FrameFlux.MediaPlaybackState : System.Int32
+  Idle = 0
+  Opening = 1
+  Ready = 2
+  Playing = 3
+  Paused = 4
+  Reconnecting = 5
+  Stopping = 6
+  Stopped = 7
+  Faulted = 8
+class FrameFlux.MediaPlaybackStateChangedEventArgs : System.EventArgs
+  constructor MediaPlaybackStateChangedEventArgs(FrameFlux.MediaPlaybackState oldState, FrameFlux.MediaPlaybackState newState)
+  property FrameFlux.MediaPlaybackState NewState { get; }
+  property FrameFlux.MediaPlaybackState OldState { get; }
+class FrameFlux.MediaReconnectOptions : System.IEquatable<FrameFlux.MediaReconnectOptions>
+  constructor MediaReconnectOptions()
+  property System.TimeSpan InitialDelay { get; init; }
+  property System.Boolean IsEnabled { get; init; }
+  property System.Int32? MaximumAttempts { get; init; }
+  property System.TimeSpan MaximumDelay { get; init; }
+enum FrameFlux.MediaSessionSharingMode : System.Int32
+  Dedicated = 0
+  Shared = 1
+class FrameFlux.MediaSnapshot : System.IEquatable<FrameFlux.MediaSnapshot>
+  constructor MediaSnapshot(System.ReadOnlyMemory<System.Byte> Data, System.Int32 Width, System.Int32 Height, System.Int32 Stride, FrameFlux.MediaPixelFormat PixelFormat, System.DateTimeOffset CapturedAt)
+  property System.DateTimeOffset CapturedAt { get; init; }
+  property System.ReadOnlyMemory<System.Byte> Data { get; init; }
+  property System.Int32 Height { get; init; }
+  property FrameFlux.MediaPixelFormat PixelFormat { get; init; }
+  property System.Int32 Stride { get; init; }
+  property System.Int32 Width { get; init; }
+enum FrameFlux.MediaSnapshotPolicy : System.Int32
+  Disabled = 0
+  KeepLatestFrame = 1
+class FrameFlux.MediaSource : System.IEquatable<FrameFlux.MediaSource>
+  constructor MediaSource(System.Uri uri)
+  property System.Uri Uri { get; }
+  method FrameFlux.MediaSource FromFile(System.String path)
+  method FrameFlux.MediaSource FromUri(System.String value)
+  method FrameFlux.MediaSource FromUri(System.Uri uri)
+  method FrameFlux.MediaSource Parse(System.String value)
+class FrameFlux.MediaSourceTypeConverter : System.ComponentModel.TypeConverter
+  constructor MediaSourceTypeConverter()
+  method System.Boolean CanConvertFrom(System.ComponentModel.ITypeDescriptorContext? context, System.Type sourceType)
+  method System.Object? ConvertFrom(System.ComponentModel.ITypeDescriptorContext? context, System.Globalization.CultureInfo? culture, System.Object value)
+class FrameFlux.MediaSynchronizationDiagnostics : System.IEquatable<FrameFlux.MediaSynchronizationDiagnostics>
+  constructor MediaSynchronizationDiagnostics(System.TimeSpan? AudioPosition, System.TimeSpan? VideoPosition, System.TimeSpan? AudioVideoOffset, System.Int32 DroppedVideoFrames, System.Int32 DelayedVideoFrames, System.Int32 ClockResetCount)
+  property System.TimeSpan? AudioPosition { get; init; }
+  property System.TimeSpan? AudioVideoOffset { get; init; }
+  property System.Int32 ClockResetCount { get; init; }
+  property System.Int32 DelayedVideoFrames { get; init; }
+  property System.Int32 DroppedVideoFrames { get; init; }
+  property FrameFlux.MediaSynchronizationDiagnostics Empty { get; }
+  property System.TimeSpan? VideoPosition { get; init; }
+enum FrameFlux.MediaTransport : System.Int32
+  Automatic = 0
+  Tcp = 1
+  Udp = 2
+  HttpTunnel = 3
+  HttpsTunnel = 4
+enum FrameFlux.MediaVideoDecodingPolicy : System.Int32
+  Automatic = 0
+  SoftwareOnly = 1
+  HardwarePreferred = 2
+  HardwareRequired = 3
+class FrameFlux.MediaVideoFrame : System.IEquatable<FrameFlux.MediaVideoFrame>
+  constructor MediaVideoFrame(System.ReadOnlyMemory<System.Byte> Data, System.Int32 Width, System.Int32 Height, System.Int32 Stride, FrameFlux.MediaPixelFormat PixelFormat, System.Int64 Sequence, System.DateTimeOffset CapturedAt)
+  property System.DateTimeOffset CapturedAt { get; init; }
+  property System.ReadOnlyMemory<System.Byte> Data { get; init; }
+  property System.Int32 Height { get; init; }
+  property FrameFlux.MediaPixelFormat PixelFormat { get; init; }
+  property System.Int64 Sequence { get; init; }
+  property System.Int32 Stride { get; init; }
+  property System.Int32 Width { get; init; }
+class FrameFlux.MediaVideoOptions : System.IEquatable<FrameFlux.MediaVideoOptions>
+  constructor MediaVideoOptions()
+  property FrameFlux.MediaVideoDecodingPolicy DecodingPolicy { get; init; }
+  property System.Double? MaximumFrameRate { get; init; }
+  property System.Int32? MaximumHeight { get; init; }
+  property System.Int32? MaximumWidth { get; init; }
+  property FrameFlux.MediaSnapshotPolicy SnapshotPolicy { get; init; }
+enum FrameFlux.MediaVideoPresentationMode : System.Int32
+  Automatic = 0
+  SoftwareBitmap = 1
+  NativeSurface = 2
+  GpuComposition = 3
+[FrameFlux.FFmpeg]
+class FrameFlux.FFmpeg.FFmpegHelper
+  method System.Void RegisterFFmpeg(System.String libraryPath = "")
+class FrameFlux.FFmpeg.FfmpegMediaPlayer : FrameFlux.IMediaPlayer, System.IAsyncDisposable
+  constructor FfmpegMediaPlayer(Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
+  property FrameFlux.MediaCapabilities Capabilities { get; }
+  property FrameFlux.MediaDiagnostics Diagnostics { get; }
+  property System.TimeSpan? Duration { get; }
+  property System.Boolean IsMuted { get; set; }
+  property FrameFlux.MediaOpenOptions Options { get; }
+  property System.TimeSpan Position { get; }
+  property FrameFlux.MediaSource? Source { get; }
+  property FrameFlux.MediaPlaybackState State { get; }
+  property FrameFlux.IMediaVideoOutput? VideoOutput { get; set; }
+  property System.Double Volume { get; set; }
+  event System.EventHandler<FrameFlux.MediaPlaybackErrorEventArgs>? Error
+  event System.EventHandler<FrameFlux.MediaVideoFrame>? FrameReceived
+  event System.EventHandler<FrameFlux.MediaPlaybackStateChangedEventArgs>? StateChanged
+  method System.Threading.Tasks.ValueTask DisposeAsync()
+  method System.Threading.Tasks.ValueTask OpenAsync(FrameFlux.MediaSource source, FrameFlux.MediaOpenOptions? options = null, System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask PauseAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask PlayAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask SeekAsync(System.TimeSpan position, System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask StopAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask<FrameFlux.MediaSnapshot?> CaptureSnapshotAsync(System.Threading.CancellationToken cancellationToken = default)
+class FrameFlux.FFmpeg.FfmpegMediaPlayerFactory : FrameFlux.IMediaPlayerFactory
+  constructor FfmpegMediaPlayerFactory(FrameFlux.FFmpeg.FfmpegMediaPlayerFactoryOptions? options = null, Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
+  method FrameFlux.IMediaPlayer Create()
+class FrameFlux.FFmpeg.FfmpegMediaPlayerFactoryOptions : System.IEquatable<FrameFlux.FFmpeg.FfmpegMediaPlayerFactoryOptions>
+  constructor FfmpegMediaPlayerFactoryOptions()
+  property System.Int32? MaximumConcurrentOpenOperations { get; init; }

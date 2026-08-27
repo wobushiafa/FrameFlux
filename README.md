@@ -99,7 +99,14 @@ WPF applications can then use the packaged control:
 
 The configured directory must contain one complete, architecture-matched FFmpeg build. Audio playback requires `avcodec`, `avformat`, `avutil`, `swscale`, and `swresample` from the same FFmpeg release. FrameFlux does not require `FFmpeg.AutoGen` or `frameflux_ffmpeg.dll`.
 
-Platform audio output uses Windows `waveOut`, Linux ALSA (`libasound.so.2`), and Android `AudioTrack`. Linux applications therefore need the ALSA runtime installed on the target system.
+Platform audio output uses Windows WASAPI shared mode, Linux ALSA
+(`libasound.so.2`), and Android `AudioTrack`. Windows retains `waveOut` only
+as an automatic fallback when the default WASAPI device cannot be initialized.
+Linux applications therefore need the ALSA runtime installed on the target
+system. Configure `Audio.OutputDeviceId` and `Audio.BufferDuration` when the
+platform default device or latency is unsuitable, and inspect
+`MediaDiagnostics.Audio` for the active backend, queued audio, recovery count,
+and latest backend error.
 
 The protocol-neutral player API separates immutable open options from runtime controls:
 
@@ -146,8 +153,10 @@ the latest change applies. Shared playback uses software frame rendering
 because native surfaces cannot be fanned out to multiple views.
 
 Snapshot buffering defaults to `Disabled`. Use `KeepLatestFrame` only when
-`CaptureSnapshotAsync` is required; GPU-texture presentation does not retain
-a CPU snapshot. Applications that create many players can set
+`CaptureSnapshotAsync` is required. GPU presentation keeps its zero-readback
+path while snapshots are disabled; when `KeepLatestFrame` is enabled, the
+latest decoded frame is copied for snapshot capture before native texture
+ownership transfers to the renderer. Applications that create many players can set
 `FfmpegMediaPlayerFactoryOptions.MaximumConcurrentOpenOperations`; the
 default is 8 and `null` removes the factory-level limit.
 
@@ -165,7 +174,27 @@ protocol and decoder implementation types are not part of the public API.
 
 ## Development
 
-Build the full solution with `dotnet build FrameFlux.slnx` and run the tests with `dotnet test FrameFlux.slnx`.
+Build the full solution and run the deterministic test suite with:
+
+```powershell
+dotnet build FrameFlux.slnx -c Release
+dotnet test tests/FrameFlux.FFmpeg.Tests/FrameFlux.FFmpeg.Tests.csproj -c Release
+```
+
+The test suite includes public API drift detection, concurrent player and
+shared-session lifecycle coverage, frame-lease ownership checks, and a short
+stability loop. Increase that loop for local stress runs without changing the
+test source:
+
+```powershell
+$env:FRAMEFLUX_STABILITY_ITERATIONS = 10000
+dotnet test tests/FrameFlux.FFmpeg.Tests/FrameFlux.FFmpeg.Tests.csproj -c Release
+```
+
+These deterministic tests do not replace a real RTSP soak run. Release
+validation still needs a representative endpoint and target hardware to cover
+network loss/reconnect, audio-device recovery, GPU adapter compatibility,
+device loss, and native renderer fallback.
 
 The desktop libraries target `net8.0`, which is consumable from .NET 8, 9, and 10 applications. Android-specific assemblies target the currently supported `net10.0-android`; an extra desktop `net10.0` build is unnecessary.
 

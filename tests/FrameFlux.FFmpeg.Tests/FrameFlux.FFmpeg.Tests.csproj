@@ -15,4 +15,8 @@
     <ProjectReference Include="..\..\src\FrameFlux.FFmpeg\FrameFlux.FFmpeg.csproj" />
     <ProjectReference Include="..\..\src\FrameFlux.Presentation\FrameFlux.Presentation.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Update="PublicApiBaseline.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
