@@ -14,7 +14,7 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
     private Stretch _stretch = Stretch.Uniform;
     private bool _disposed;
 
-    public MediaRenderPreference Preference => MediaRenderPreference.NativeSurface;
+    public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.D3D11Texture;
 
     internal Stretch Stretch
     {
@@ -22,8 +22,8 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
         set => _stretch = value;
     }
 
-    public bool Supports(MediaFramePixelFormat pixelFormat) =>
-        pixelFormat == MediaFramePixelFormat.D3D11Texture;
+    public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
+        storageKind == MediaFrameStorageKind.D3D11Texture;
 
     public bool TryPresent(IMediaFrameLease frame)
     {

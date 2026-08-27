@@ -25,13 +25,18 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
 
     public RtspNativePixelFormat PixelFormat { get; internal set; } = RtspNativePixelFormat.Bgra32;
 
-    MediaFramePixelFormat IMediaFrameLease.PixelFormat => PixelFormat switch
+    public MediaFrameStorageKind StorageKind =>
+        PixelFormat == RtspNativePixelFormat.D3D11Texture
+            ? MediaFrameStorageKind.D3D11Texture
+            : MediaFrameStorageKind.CpuMemory;
+
+    MediaPixelFormat IMediaFrameLease.PixelFormat => PixelFormat switch
     {
-        RtspNativePixelFormat.Yuv420P => MediaFramePixelFormat.Yuv420P,
-        RtspNativePixelFormat.Nv12 => MediaFramePixelFormat.Nv12,
-        RtspNativePixelFormat.Nv21 => MediaFramePixelFormat.Nv21,
-        RtspNativePixelFormat.D3D11Texture => MediaFramePixelFormat.D3D11Texture,
-        _ => MediaFramePixelFormat.Bgra32
+        RtspNativePixelFormat.Yuv420P => MediaPixelFormat.Yuv420P,
+        RtspNativePixelFormat.Nv12 => MediaPixelFormat.Nv12,
+        RtspNativePixelFormat.Nv21 => MediaPixelFormat.Nv21,
+        RtspNativePixelFormat.D3D11Texture => MediaPixelFormat.Unknown,
+        _ => MediaPixelFormat.Bgra32
     };
 
     public bool TryGetCpuBuffer(out MediaCpuFrameBuffer buffer)

@@ -56,7 +56,7 @@
             ClipToBounds="True"
             MinHeight="120">
       <frameFlux:MediaView x:Name="Player"
-                           IsPlaybackEnabled="False"
+                    AutoPlay="False"
                            PlaybackError="Player_OnPlaybackError"
                            PlaybackStateChanged="Player_OnPlaybackStateChanged"
                            Stretch="Uniform">

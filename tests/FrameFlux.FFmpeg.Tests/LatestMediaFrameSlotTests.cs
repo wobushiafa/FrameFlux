@@ -129,7 +129,9 @@ public sealed class LatestMediaFrameSlotTests
 
         public int Height => 1;
 
-        public MediaFramePixelFormat PixelFormat => MediaFramePixelFormat.Bgra32;
+        public MediaFrameStorageKind StorageKind => MediaFrameStorageKind.CpuMemory;
+
+        public MediaPixelFormat PixelFormat => MediaPixelFormat.Bgra32;
 
         public int DisposeCount => Volatile.Read(ref _disposeCount);
 

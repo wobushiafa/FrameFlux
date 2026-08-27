@@ -11,7 +11,7 @@ internal static class MediaFrameDelivery
         try
         {
             accepted = output is not null &&
-                output.Supports(frame.PixelFormat) &&
+                output.Supports(frame.StorageKind, frame.PixelFormat) &&
                 output.TryPresent(frame);
         }
         catch (Exception exception)

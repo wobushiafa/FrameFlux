@@ -4,11 +4,14 @@ namespace FrameFlux.FFmpeg;
 
 internal sealed class RtspDecoderRuntimeException : Exception
 {
-    public RtspDecoderRuntimeException(string message, Exception? innerException, bool hardwareAccelerationActive)
+    public RtspDecoderRuntimeException(
+        string message,
+        Exception? innerException,
+        bool isHardwareVideoDecodingActive)
         : base(message, innerException)
     {
-        HardwareAccelerationActive = hardwareAccelerationActive;
+        IsHardwareVideoDecodingActive = isHardwareVideoDecodingActive;
     }
 
-    public bool HardwareAccelerationActive { get; }
+    public bool IsHardwareVideoDecodingActive { get; }
 }

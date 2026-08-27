@@ -22,20 +22,25 @@ public sealed partial class MainView : UserControl
         Player.PropertyChanged += Player_OnPropertyChanged;
         var options = new MediaOpenOptions
         {
-            LowLatency = true,
-            Transport = MediaTransport.Tcp,
-            HardwareAcceleration = MediaHardwareAcceleration.Enabled,
-            RenderPreference = MediaRenderPreference.CompositedGpu,
-            FallbackToSoftwareDecoding = false
+            Network = new MediaNetworkOptions
+            {
+                LatencyMode = MediaLatencyMode.Low,
+                Transport = MediaTransport.Tcp
+            },
+            Video = new MediaVideoOptions
+            {
+                DecodingPolicy = MediaVideoDecodingPolicy.HardwareRequired
+            }
         };
         Player.OpenOptions = options;
+        Player.PresentationMode = MediaVideoPresentationMode.GpuComposition;
         _configuringPlaybackModes = true;
         HardwareModeComboBox.ItemsSource =
-            Enum.GetValues<MediaHardwareAcceleration>();
+            Enum.GetValues<MediaVideoDecodingPolicy>();
         RenderModeComboBox.ItemsSource =
-            Enum.GetValues<MediaRenderPreference>();
-        HardwareModeComboBox.SelectedItem = options.HardwareAcceleration;
-        RenderModeComboBox.SelectedItem = options.RenderPreference;
+            Enum.GetValues<MediaVideoPresentationMode>();
+        HardwareModeComboBox.SelectedItem = options.Video.DecodingPolicy;
+        RenderModeComboBox.SelectedItem = Player.PresentationMode;
         _configuringPlaybackModes = false;
     }
 
@@ -44,7 +49,7 @@ public sealed partial class MainView : UserControl
         try
         {
             Player.Source = MediaSource.Parse(SourceTextBox.Text ?? string.Empty);
-            Player.IsPlaybackEnabled = true;
+            Player.AutoPlay = true;
             SetStatus("Opening stream", BusyBrush);
             await Player.StartAsync();
         }
@@ -66,43 +71,43 @@ public sealed partial class MainView : UserControl
     {
         if (_configuringPlaybackModes ||
             HardwareModeComboBox.SelectedItem is not
-                MediaHardwareAcceleration hardwareAcceleration ||
+                MediaVideoDecodingPolicy decodingPolicy ||
             RenderModeComboBox.SelectedItem is not
-                MediaRenderPreference renderPreference)
+                MediaVideoPresentationMode presentationMode)
         {
             return;
         }
 
-        var requiresGpuFrames = renderPreference is
-            MediaRenderPreference.NativeSurface or
-            MediaRenderPreference.CompositedGpu;
+        var requiresGpuFrames = presentationMode is
+            MediaVideoPresentationMode.NativeSurface or
+            MediaVideoPresentationMode.GpuComposition;
         if (sender == HardwareModeComboBox &&
-            hardwareAcceleration == MediaHardwareAcceleration.Disabled &&
+            decodingPolicy == MediaVideoDecodingPolicy.SoftwareOnly &&
             requiresGpuFrames)
         {
-            renderPreference = MediaRenderPreference.Software;
+            presentationMode = MediaVideoPresentationMode.SoftwareBitmap;
             _configuringPlaybackModes = true;
-            RenderModeComboBox.SelectedItem = renderPreference;
+            RenderModeComboBox.SelectedItem = presentationMode;
             _configuringPlaybackModes = false;
         }
         else if (sender == RenderModeComboBox &&
-                 hardwareAcceleration == MediaHardwareAcceleration.Disabled &&
+                 decodingPolicy == MediaVideoDecodingPolicy.SoftwareOnly &&
                  requiresGpuFrames)
         {
-            hardwareAcceleration = MediaHardwareAcceleration.Enabled;
+            decodingPolicy = MediaVideoDecodingPolicy.HardwareRequired;
             _configuringPlaybackModes = true;
-            HardwareModeComboBox.SelectedItem = hardwareAcceleration;
+            HardwareModeComboBox.SelectedItem = decodingPolicy;
             _configuringPlaybackModes = false;
         }
 
-        Player.Overlay = renderPreference == MediaRenderPreference.NativeSurface
+        Player.Overlay = presentationMode == MediaVideoPresentationMode.NativeSurface
             ? null
             : VideoOverlay;
         Player.OpenOptions = Player.OpenOptions with
         {
-            HardwareAcceleration = hardwareAcceleration,
-            RenderPreference = renderPreference
+            Video = Player.OpenOptions.Video with { DecodingPolicy = decodingPolicy }
         };
+        Player.PresentationMode = presentationMode;
     }
 
     private void Player_OnPlaybackStateChanged(
@@ -121,9 +126,9 @@ public sealed partial class MainView : UserControl
 
     private void Player_OnPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
     {
-        if (e.Property == MediaView.IsHardwareAccelerationActiveProperty ||
-            e.Property == MediaView.HardwareDiagnosticsProperty ||
-            e.Property == MediaView.ActiveRendererIdProperty)
+        if (e.Property == MediaView.IsHardwareVideoDecodingActiveProperty ||
+            e.Property == MediaView.VideoDecoderDiagnosticsProperty ||
+            e.Property == MediaView.EffectivePresentationModeProperty)
         {
             RefreshPlaybackStatus(Player.State, GetStateBrush(Player.State));
         }
@@ -140,9 +145,9 @@ public sealed partial class MainView : UserControl
 
     private void RefreshPlaybackStatus(MediaPlaybackState state, IBrush brush)
     {
-        var renderer = Player.ActiveRendererId ?? "none";
+        var presentation = Player.EffectivePresentationMode?.ToString() ?? "none";
         SetStatus(
-            $"{state} | Renderer: {renderer} | HW: {Player.IsHardwareAccelerationActive}",
+            $"{state} | Presentation: {presentation} | HW decode: {Player.IsHardwareVideoDecodingActive}",
             brush);
     }
 

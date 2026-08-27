@@ -197,16 +197,17 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
 
             lock (_sync)
             {
-                var usesGpuFrames = _videoOutput?.Preference is
-                    MediaRenderPreference.NativeSurface or
-                    MediaRenderPreference.CompositedGpu;
+                var usesGpuFrames =
+                    _videoOutput?.PreferredFrameStorage == MediaFrameStorageKind.D3D11Texture;
                 _source = source;
                 _options = resolvedOptions;
                 _capabilities = new MediaCapabilities(
                     IsLive: true,
                     CanPause: false,
                     CanSeek: false,
-                    CanCaptureSnapshots: resolvedOptions.CaptureSnapshots && !usesGpuFrames);
+                    CanCaptureSnapshots:
+                        resolvedOptions.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame &&
+                        !usesGpuFrames);
                 _diagnostics = MediaDiagnostics.Empty;
             }
             TransitionTo(MediaPlaybackState.Ready);
@@ -484,10 +485,28 @@ public sealed class FfmpegMediaPlayerFactory : IMediaPlayerFactory
 {
     private readonly IFfmpegMediaSessionFactory _sessionFactory;
 
-    public FfmpegMediaPlayerFactory(ILoggerFactory? loggerFactory = null)
+    public FfmpegMediaPlayerFactory(
+        FfmpegMediaPlayerFactoryOptions? options = null,
+        ILoggerFactory? loggerFactory = null)
     {
-        _sessionFactory = new FfmpegMediaSessionFactory(loggerFactory);
+        _sessionFactory = new FfmpegMediaSessionFactory(loggerFactory, options);
     }
 
     public IMediaPlayer Create() => new FfmpegMediaPlayer(_sessionFactory);
+}
+
+public sealed record FfmpegMediaPlayerFactoryOptions
+{
+    public int? MaximumConcurrentOpenOperations { get; init; } = 8;
+
+    internal void Validate()
+    {
+        if (MaximumConcurrentOpenOperations is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MaximumConcurrentOpenOperations),
+                MaximumConcurrentOpenOperations,
+                "Maximum concurrent open operations must be greater than zero.");
+        }
+    }
 }

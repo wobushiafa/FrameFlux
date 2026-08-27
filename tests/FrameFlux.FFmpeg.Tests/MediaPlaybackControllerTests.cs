@@ -97,9 +97,9 @@ public sealed class MediaPlaybackControllerTests
 
     private sealed class TestVideoOutput : IMediaVideoOutput
     {
-        public MediaRenderPreference Preference => MediaRenderPreference.Software;
+        public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.CpuMemory;
 
-        public bool Supports(MediaFramePixelFormat pixelFormat) => true;
+        public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) => true;
 
         public bool TryPresent(IMediaFrameLease frame) => false;
     }

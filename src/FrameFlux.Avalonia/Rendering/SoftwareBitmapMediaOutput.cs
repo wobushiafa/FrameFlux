@@ -13,17 +13,19 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
     private WriteableBitmap? _bitmap;
     private bool _disposed;
 
-    public MediaRenderPreference Preference => MediaRenderPreference.Software;
+    public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.CpuMemory;
 
-    public bool Supports(MediaFramePixelFormat pixelFormat) =>
-        pixelFormat == MediaFramePixelFormat.Bgra32;
+    public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
+        storageKind == MediaFrameStorageKind.CpuMemory &&
+        pixelFormat == MediaPixelFormat.Bgra32;
 
     internal event EventHandler? FramePresented;
 
     public bool TryPresent(IMediaFrameLease frame)
     {
         if (_disposed ||
-            frame.PixelFormat != MediaFramePixelFormat.Bgra32 ||
+            frame.StorageKind != MediaFrameStorageKind.CpuMemory ||
+            frame.PixelFormat != MediaPixelFormat.Bgra32 ||
             !frame.TryGetCpuBuffer(out _))
         {
             return false;

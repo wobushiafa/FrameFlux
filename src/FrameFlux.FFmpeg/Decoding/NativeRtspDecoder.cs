@@ -38,18 +38,7 @@ internal sealed class RtspDecoder : IDisposable
     private readonly CancellationTokenRegistration _cancellationRegistration;
     private bool _disposed;
 
-    public RtspDecoder(string url, bool useHardwareAcceleration = true)
-        : this(url, new RtspStreamOptions
-        {
-            UseHardwareAcceleration = useHardwareAcceleration,
-            HardwareAccelerationMode = useHardwareAcceleration
-                ? RtspHardwareAccelerationMode.Enabled
-                : RtspHardwareAccelerationMode.Disabled
-        })
-    {
-    }
-
-    public RtspDecoder(
+    internal RtspDecoder(
         string url,
         RtspStreamOptions options,
         CancellationToken cancellationToken = default)
@@ -67,11 +56,13 @@ internal sealed class RtspDecoder : IDisposable
             OpenTimeoutMilliseconds = options.OpenTimeoutMilliseconds,
             ReadTimeoutMilliseconds = options.ReadTimeoutMilliseconds,
             LowLatency = options.LowLatency ? 1 : 0,
-            UseHardwareAcceleration = options.UseHardwareAcceleration ? 1 : 0,
-            FallbackToSoftware = options.FallbackToSoftwareDecoding ? 1 : 0,
+            UseHardwareAcceleration =
+                RtspPlaybackConfiguration.UsesHardwareDecoding(options.VideoDecodingMode) ? 1 : 0,
+            FallbackToSoftware =
+                RtspPlaybackConfiguration.AllowsSoftwareFallback(options.VideoDecodingMode) ? 1 : 0,
             PreserveHardwareFrames =
                 OperatingSystem.IsWindows() &&
-                options.RenderMode == RtspRenderMode.NativeSurface
+                options.FrameDeliveryMode == RtspFrameDeliveryMode.D3D11Texture
                     ? 1
                     : 0,
             EnableAudio = options.EnableAudio ? 1 : 0,
@@ -92,15 +83,15 @@ internal sealed class RtspDecoder : IDisposable
         _cancellationRegistration = cancellationToken.Register(
             static state => FrameFluxFFmpegNative.Cancel((NativeRtspSessionHandle)state!),
             session);
-        HardwareDiagnostics = FrameFluxFFmpegNative.GetHardwareDiagnostics(session);
+        VideoDecoderDiagnostics = FrameFluxFFmpegNative.GetVideoDecoderDiagnostics(session);
     }
 
-    public bool IsHardwareAccelerationActive =>
+    public bool IsHardwareVideoDecodingActive =>
         !_disposed && FrameFluxFFmpegNative.IsHardwareActive(_session) != 0;
 
     public bool IsLinuxVaapiActive => false;
 
-    public string HardwareDiagnostics { get; }
+    public string VideoDecoderDiagnostics { get; }
 
     internal bool HasAudio => FrameFluxFFmpegNative.HasAudio(_session);
 

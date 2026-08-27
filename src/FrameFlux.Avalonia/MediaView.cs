@@ -15,14 +15,19 @@ public sealed class MediaView : Control, IAsyncDisposable
     public static readonly StyledProperty<MediaOpenOptions> OpenOptionsProperty =
         AvaloniaProperty.Register<MediaView, MediaOpenOptions>(nameof(OpenOptions), new MediaOpenOptions());
 
+    public static readonly StyledProperty<MediaVideoPresentationMode> PresentationModeProperty =
+        AvaloniaProperty.Register<MediaView, MediaVideoPresentationMode>(
+            nameof(PresentationMode),
+            MediaVideoPresentationMode.Automatic);
+
     public static readonly StyledProperty<IMediaPlayerFactory?> PlayerFactoryProperty =
         AvaloniaProperty.Register<MediaView, IMediaPlayerFactory?>(nameof(PlayerFactory));
 
-    public static readonly StyledProperty<bool> IsPlaybackEnabledProperty =
-        AvaloniaProperty.Register<MediaView, bool>(nameof(IsPlaybackEnabled), true);
+    public static readonly StyledProperty<bool> AutoPlayProperty =
+        AvaloniaProperty.Register<MediaView, bool>(nameof(AutoPlay), true);
 
-    public static readonly StyledProperty<bool> KeepPlaybackAliveWhenDetachedProperty =
-        AvaloniaProperty.Register<MediaView, bool>(nameof(KeepPlaybackAliveWhenDetached));
+    public static readonly StyledProperty<bool> KeepPlaybackAliveProperty =
+        AvaloniaProperty.Register<MediaView, bool>(nameof(KeepPlaybackAlive));
 
     public static readonly StyledProperty<double> VolumeProperty =
         AvaloniaProperty.Register<MediaView, double>(nameof(Volume), 1d);
@@ -42,18 +47,20 @@ public sealed class MediaView : Control, IAsyncDisposable
     public static readonly DirectProperty<MediaView, MediaPlaybackError?> LastErrorProperty =
         AvaloniaProperty.RegisterDirect<MediaView, MediaPlaybackError?>(nameof(LastError), view => view.LastError);
 
-    public static readonly DirectProperty<MediaView, bool> IsHardwareAccelerationActiveProperty =
+    public static readonly DirectProperty<MediaView, bool> IsHardwareVideoDecodingActiveProperty =
         AvaloniaProperty.RegisterDirect<MediaView, bool>(
-            nameof(IsHardwareAccelerationActive),
-            view => view.IsHardwareAccelerationActive);
+            nameof(IsHardwareVideoDecodingActive),
+            view => view.IsHardwareVideoDecodingActive);
 
-    public static readonly DirectProperty<MediaView, string> HardwareDiagnosticsProperty =
+    public static readonly DirectProperty<MediaView, string> VideoDecoderDiagnosticsProperty =
         AvaloniaProperty.RegisterDirect<MediaView, string>(
-            nameof(HardwareDiagnostics),
-            view => view.HardwareDiagnostics);
+            nameof(VideoDecoderDiagnostics),
+            view => view.VideoDecoderDiagnostics);
 
-    public static readonly DirectProperty<MediaView, string?> ActiveRendererIdProperty =
-        AvaloniaProperty.RegisterDirect<MediaView, string?>(nameof(ActiveRendererId), view => view.ActiveRendererId);
+    public static readonly DirectProperty<MediaView, MediaVideoPresentationMode?> EffectivePresentationModeProperty =
+        AvaloniaProperty.RegisterDirect<MediaView, MediaVideoPresentationMode?>(
+            nameof(EffectivePresentationMode),
+            view => view.EffectivePresentationMode);
 
     private readonly MediaPlaybackController _playback = new();
     private readonly Grid _surface = new();
@@ -65,9 +72,9 @@ public sealed class MediaView : Control, IAsyncDisposable
     private EventHandler<MediaVideoFrame>? _frameReceived;
     private MediaPlaybackState _state = MediaPlaybackState.Idle;
     private MediaPlaybackError? _lastError;
-    private bool _isHardwareAccelerationActive;
-    private string _hardwareDiagnostics = "Not started";
-    private string? _activeRendererId;
+    private bool _isHardwareVideoDecodingActive;
+    private string _videoDecoderDiagnostics = "Not started";
+    private MediaVideoPresentationMode? _effectivePresentationMode;
     private Control? _attachedOverlay;
     private bool _attached;
     private bool _disposed;
@@ -104,22 +111,28 @@ public sealed class MediaView : Control, IAsyncDisposable
         set => SetValue(OpenOptionsProperty, value ?? throw new ArgumentNullException(nameof(value)));
     }
 
+    public MediaVideoPresentationMode PresentationMode
+    {
+        get => GetValue(PresentationModeProperty);
+        set => SetValue(PresentationModeProperty, value);
+    }
+
     public IMediaPlayerFactory? PlayerFactory
     {
         get => GetValue(PlayerFactoryProperty);
         set => SetValue(PlayerFactoryProperty, value);
     }
 
-    public bool IsPlaybackEnabled
+    public bool AutoPlay
     {
-        get => GetValue(IsPlaybackEnabledProperty);
-        set => SetValue(IsPlaybackEnabledProperty, value);
+        get => GetValue(AutoPlayProperty);
+        set => SetValue(AutoPlayProperty, value);
     }
 
-    public bool KeepPlaybackAliveWhenDetached
+    public bool KeepPlaybackAlive
     {
-        get => GetValue(KeepPlaybackAliveWhenDetachedProperty);
-        set => SetValue(KeepPlaybackAliveWhenDetachedProperty, value);
+        get => GetValue(KeepPlaybackAliveProperty);
+        set => SetValue(KeepPlaybackAliveProperty, value);
     }
 
     public double Volume
@@ -158,22 +171,31 @@ public sealed class MediaView : Control, IAsyncDisposable
         private set => SetAndRaise(LastErrorProperty, ref _lastError, value);
     }
 
-    public bool IsHardwareAccelerationActive
+    public bool IsHardwareVideoDecodingActive
     {
-        get => _isHardwareAccelerationActive;
-        private set => SetAndRaise(IsHardwareAccelerationActiveProperty, ref _isHardwareAccelerationActive, value);
+        get => _isHardwareVideoDecodingActive;
+        private set => SetAndRaise(
+            IsHardwareVideoDecodingActiveProperty,
+            ref _isHardwareVideoDecodingActive,
+            value);
     }
 
-    public string HardwareDiagnostics
+    public string VideoDecoderDiagnostics
     {
-        get => _hardwareDiagnostics;
-        private set => SetAndRaise(HardwareDiagnosticsProperty, ref _hardwareDiagnostics, value);
+        get => _videoDecoderDiagnostics;
+        private set => SetAndRaise(
+            VideoDecoderDiagnosticsProperty,
+            ref _videoDecoderDiagnostics,
+            value);
     }
 
-    public string? ActiveRendererId
+    public MediaVideoPresentationMode? EffectivePresentationMode
     {
-        get => _activeRendererId;
-        private set => SetAndRaise(ActiveRendererIdProperty, ref _activeRendererId, value);
+        get => _effectivePresentationMode;
+        private set => SetAndRaise(
+            EffectivePresentationModeProperty,
+            ref _effectivePresentationMode,
+            value);
     }
 
     public event EventHandler<MediaPlaybackStateChangedEventArgs>? PlaybackStateChanged;
@@ -229,7 +251,7 @@ public sealed class MediaView : Control, IAsyncDisposable
     {
         base.OnAttachedToVisualTree(e);
         _attached = true;
-        if (IsPlaybackEnabled && Source is not null)
+        if (AutoPlay && Source is not null)
         {
             _ = StartSafelyAsync();
         }
@@ -238,7 +260,7 @@ public sealed class MediaView : Control, IAsyncDisposable
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         _attached = false;
-        if (!KeepPlaybackAliveWhenDetached)
+        if (!KeepPlaybackAlive)
         {
             _ = StopSafelyAsync();
         }
@@ -286,12 +308,14 @@ public sealed class MediaView : Control, IAsyncDisposable
         {
             AttachOverlay();
         }
-        else if (change.Property == IsPlaybackEnabledProperty)
+        else if (change.Property == AutoPlayProperty)
         {
-            _ = IsPlaybackEnabled ? StartSafelyAsync() : StopSafelyAsync();
+            _ = AutoPlay ? StartSafelyAsync() : StopSafelyAsync();
         }
-        else if ((change.Property == SourceProperty || change.Property == OpenOptionsProperty) &&
-                 _attached && IsPlaybackEnabled)
+        else if ((change.Property == SourceProperty ||
+                  change.Property == OpenOptionsProperty ||
+                  change.Property == PresentationModeProperty) &&
+                 _attached && AutoPlay)
         {
             _ = RestartSafelyAsync();
         }
@@ -326,44 +350,58 @@ public sealed class MediaView : Control, IAsyncDisposable
 
     private IMediaVideoOutput ConfigureVideoOutput(MediaOpenOptions options)
     {
-        if (Overlay is not null &&
-            options.RenderPreference == MediaRenderPreference.NativeSurface)
+        options.Validate();
+        if (!Enum.IsDefined(PresentationMode))
         {
-            throw new InvalidOperationException(
-                "Overlay content requires Software or CompositedGpu rendering.");
+            throw new ArgumentOutOfRangeException(
+                nameof(PresentationMode),
+                PresentationMode,
+                "Unsupported presentation mode.");
         }
 
-        var useNativeOutput =
-            options.StreamSharing == MediaStreamSharingMode.Dedicated &&
-            options.RenderPreference == MediaRenderPreference.NativeSurface &&
-            options.HardwareAcceleration != MediaHardwareAcceleration.Disabled;
-        var useCompositedOutput =
-            options.StreamSharing == MediaStreamSharingMode.Dedicated &&
-            options.RenderPreference == MediaRenderPreference.CompositedGpu &&
-            options.HardwareAcceleration != MediaHardwareAcceleration.Disabled;
+        if (Overlay is not null && PresentationMode == MediaVideoPresentationMode.NativeSurface)
+        {
+            throw new InvalidOperationException(
+                "Overlay content requires SoftwareBitmap or GpuComposition presentation.");
+        }
+
+        var gpuPresentationAvailable =
+            OperatingSystem.IsWindows() &&
+            options.SessionSharing == MediaSessionSharingMode.Dedicated &&
+            options.Video.DecodingPolicy != MediaVideoDecodingPolicy.SoftwareOnly;
+        if (!gpuPresentationAvailable &&
+            PresentationMode is MediaVideoPresentationMode.NativeSurface or
+                MediaVideoPresentationMode.GpuComposition)
+        {
+            throw new InvalidOperationException(
+                "The requested GPU presentation mode requires Windows, a dedicated session, and hardware-capable decoding.");
+        }
+
+        var effectiveMode = PresentationMode == MediaVideoPresentationMode.Automatic
+            ? gpuPresentationAvailable
+                ? MediaVideoPresentationMode.GpuComposition
+                : MediaVideoPresentationMode.SoftwareBitmap
+            : PresentationMode;
+        var useNativeOutput = effectiveMode == MediaVideoPresentationMode.NativeSurface;
+        var useCompositedOutput = effectiveMode == MediaVideoPresentationMode.GpuComposition;
 #if !ANDROID
-        useNativeOutput &= OperatingSystem.IsWindows();
-        useCompositedOutput &= OperatingSystem.IsWindows();
         _compositedOutput.Stretch = Stretch;
         _compositedOutput.IsVisible = useCompositedOutput;
         _nativeOutput.Stretch = Stretch;
         _nativeOutput.IsVisible = useNativeOutput;
-        var output = useNativeOutput
+        var primaryOutput = useNativeOutput
             ? (IMediaVideoOutput)_nativeOutput
             : useCompositedOutput
                 ? _compositedOutput
                 : _softwareOutput;
+        var output = useNativeOutput || useCompositedOutput
+            ? new AdaptiveMediaVideoOutput(primaryOutput, _softwareOutput)
+            : primaryOutput;
 #else
-        useNativeOutput = false;
-        useCompositedOutput = false;
         var output = (IMediaVideoOutput)_softwareOutput;
 #endif
         _softwareOutput.IsVisible = !useNativeOutput && !useCompositedOutput;
-        ActiveRendererId = useNativeOutput
-            ? "windows-d3d11"
-            : useCompositedOutput
-                ? "windows-d3d11-composited"
-                : "software-bitmap";
+        EffectivePresentationMode = effectiveMode;
         return output;
     }
 
@@ -399,8 +437,8 @@ public sealed class MediaView : Control, IAsyncDisposable
             {
                 SetState(args.NewState);
                 var diagnostics = _playback.Diagnostics;
-                IsHardwareAccelerationActive = diagnostics.IsHardwareAccelerationActive;
-                HardwareDiagnostics = diagnostics.HardwareDiagnostics;
+                IsHardwareVideoDecodingActive = diagnostics.IsHardwareVideoDecodingActive;
+                VideoDecoderDiagnostics = diagnostics.VideoDecoderDiagnostics;
             },
             DispatcherPriority.Normal);
 
@@ -419,7 +457,7 @@ public sealed class MediaView : Control, IAsyncDisposable
         _nativeOutput.IsVisible = false;
 #endif
         _softwareOutput.IsVisible = true;
-        ActiveRendererId = "software-bitmap";
+        EffectivePresentationMode = MediaVideoPresentationMode.SoftwareBitmap;
     }
 
 #if !ANDROID
@@ -428,7 +466,7 @@ public sealed class MediaView : Control, IAsyncDisposable
         _nativeOutput.IsVisible = false;
         _softwareOutput.IsVisible = false;
         _compositedOutput.IsVisible = true;
-        ActiveRendererId = "windows-d3d11-composited";
+        EffectivePresentationMode = MediaVideoPresentationMode.GpuComposition;
     }
 
     private void OnCompositedPresentationFailed(object? sender, Exception exception) =>
@@ -465,7 +503,7 @@ public sealed class MediaView : Control, IAsyncDisposable
     private async Task RestartSafelyAsync()
     {
         await StopSafelyAsync();
-        if (_attached && IsPlaybackEnabled && Source is not null)
+        if (_attached && AutoPlay && Source is not null)
         {
             await StartSafelyAsync();
         }
@@ -473,7 +511,7 @@ public sealed class MediaView : Control, IAsyncDisposable
 
     private async Task StartSafelyAsync()
     {
-        if (_disposed || Source is null || !IsPlaybackEnabled)
+        if (_disposed || Source is null || !AutoPlay)
         {
             return;
         }
@@ -505,4 +543,24 @@ public sealed class MediaView : Control, IAsyncDisposable
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
+
+    private sealed class AdaptiveMediaVideoOutput(
+        IMediaVideoOutput primary,
+        IMediaVideoOutput softwareFallback) : IMediaVideoOutput
+    {
+        public MediaFrameStorageKind PreferredFrameStorage => primary.PreferredFrameStorage;
+
+        public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
+            primary.Supports(storageKind, pixelFormat) ||
+            softwareFallback.Supports(storageKind, pixelFormat);
+
+        public bool TryPresent(IMediaFrameLease frame)
+        {
+            var output = primary.Supports(frame.StorageKind, frame.PixelFormat)
+                ? primary
+                : softwareFallback;
+            return output.Supports(frame.StorageKind, frame.PixelFormat) &&
+                   output.TryPresent(frame);
+        }
+    }
 }

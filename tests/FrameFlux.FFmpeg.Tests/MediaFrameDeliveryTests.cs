@@ -54,10 +54,11 @@ public sealed class MediaFrameDeliveryTests
     {
         internal IMediaFrameLease? AcceptedFrame { get; private set; }
 
-        public MediaRenderPreference Preference => MediaRenderPreference.Software;
+        public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.CpuMemory;
 
-        public bool Supports(MediaFramePixelFormat pixelFormat) =>
-            pixelFormat == MediaFramePixelFormat.Bgra32;
+        public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
+            storageKind == MediaFrameStorageKind.CpuMemory &&
+            pixelFormat == MediaPixelFormat.Bgra32;
 
         public bool TryPresent(IMediaFrameLease frame)
         {
@@ -84,7 +85,9 @@ public sealed class MediaFrameDeliveryTests
 
         public int Height => 2;
 
-        public MediaFramePixelFormat PixelFormat => MediaFramePixelFormat.Bgra32;
+        public MediaFrameStorageKind StorageKind => MediaFrameStorageKind.CpuMemory;
+
+        public MediaPixelFormat PixelFormat => MediaPixelFormat.Bgra32;
 
         public bool TryGetCpuBuffer(out MediaCpuFrameBuffer buffer)
         {

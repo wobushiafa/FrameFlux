@@ -37,14 +37,14 @@ internal sealed class D3D11ImageMediaOutput :
         _image.IsFrontBufferAvailableChanged += OnFrontBufferAvailableChanged;
     }
 
-    public MediaRenderPreference Preference => MediaRenderPreference.CompositedGpu;
+    public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.D3D11Texture;
 
     internal event EventHandler? FramePresented;
 
     internal event EventHandler<Exception>? PresentationFailed;
 
-    public bool Supports(MediaFramePixelFormat pixelFormat) =>
-        pixelFormat == MediaFramePixelFormat.D3D11Texture;
+    public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
+        storageKind == MediaFrameStorageKind.D3D11Texture;
 
     public bool TryPresent(IMediaFrameLease frame)
     {

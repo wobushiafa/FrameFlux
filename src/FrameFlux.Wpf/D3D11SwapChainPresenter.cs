@@ -17,10 +17,10 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
     internal void SetStretch(System.Windows.Media.Stretch stretch) =>
         Volatile.Write(ref _stretchMode, (int)ToMediaStretchMode(stretch));
 
-    public MediaRenderPreference Preference => MediaRenderPreference.NativeSurface;
+    public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.D3D11Texture;
 
-    public bool Supports(MediaFramePixelFormat pixelFormat) =>
-        pixelFormat == MediaFramePixelFormat.D3D11Texture;
+    public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
+        storageKind == MediaFrameStorageKind.D3D11Texture;
 
     public bool TryPresent(IMediaFrameLease frame)
     {

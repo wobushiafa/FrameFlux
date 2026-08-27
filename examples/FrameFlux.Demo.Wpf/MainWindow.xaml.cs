@@ -14,20 +14,25 @@ public partial class MainWindow : Window
         Player.PlayerFactory = new FfmpegMediaPlayerFactory();
         var options = new MediaOpenOptions
         {
-            LowLatency = true,
-            Transport = MediaTransport.Tcp,
-            HardwareAcceleration = MediaHardwareAcceleration.Enabled,
-            FallbackToSoftwareDecoding = false,
-            RenderPreference = MediaRenderPreference.CompositedGpu
+            Network = new MediaNetworkOptions
+            {
+                LatencyMode = MediaLatencyMode.Low,
+                Transport = MediaTransport.Tcp
+            },
+            Video = new MediaVideoOptions
+            {
+                DecodingPolicy = MediaVideoDecodingPolicy.HardwareRequired
+            }
         };
         Player.OpenOptions = options;
+        Player.PresentationMode = MediaVideoPresentationMode.GpuComposition;
         _configuringPlaybackModes = true;
         HardwareModeComboBox.ItemsSource =
-            Enum.GetValues<MediaHardwareAcceleration>();
+            Enum.GetValues<MediaVideoDecodingPolicy>();
         RenderModeComboBox.ItemsSource =
-            Enum.GetValues<MediaRenderPreference>();
-        HardwareModeComboBox.SelectedItem = options.HardwareAcceleration;
-        RenderModeComboBox.SelectedItem = options.RenderPreference;
+            Enum.GetValues<MediaVideoPresentationMode>();
+        HardwareModeComboBox.SelectedItem = options.Video.DecodingPolicy;
+        RenderModeComboBox.SelectedItem = Player.PresentationMode;
         _configuringPlaybackModes = false;
     }
 
@@ -52,37 +57,37 @@ public partial class MainWindow : Window
     {
         if (_configuringPlaybackModes ||
             HardwareModeComboBox.SelectedItem is not
-                MediaHardwareAcceleration hardwareAcceleration ||
+                MediaVideoDecodingPolicy decodingPolicy ||
             RenderModeComboBox.SelectedItem is not
-                MediaRenderPreference renderPreference)
+                MediaVideoPresentationMode presentationMode)
         {
             return;
         }
 
-        var requiresGpuFrames = renderPreference is
-            MediaRenderPreference.NativeSurface or
-            MediaRenderPreference.CompositedGpu;
+        var requiresGpuFrames = presentationMode is
+            MediaVideoPresentationMode.NativeSurface or
+            MediaVideoPresentationMode.GpuComposition;
         if (sender == HardwareModeComboBox &&
-            hardwareAcceleration == MediaHardwareAcceleration.Disabled &&
+            decodingPolicy == MediaVideoDecodingPolicy.SoftwareOnly &&
             requiresGpuFrames)
         {
-            renderPreference = MediaRenderPreference.Software;
+            presentationMode = MediaVideoPresentationMode.SoftwareBitmap;
             _configuringPlaybackModes = true;
-            RenderModeComboBox.SelectedItem = renderPreference;
+            RenderModeComboBox.SelectedItem = presentationMode;
             _configuringPlaybackModes = false;
         }
         else if (sender == RenderModeComboBox &&
-                 hardwareAcceleration == MediaHardwareAcceleration.Disabled &&
+                 decodingPolicy == MediaVideoDecodingPolicy.SoftwareOnly &&
                  requiresGpuFrames)
         {
-            hardwareAcceleration = MediaHardwareAcceleration.Enabled;
+            decodingPolicy = MediaVideoDecodingPolicy.HardwareRequired;
             _configuringPlaybackModes = true;
-            HardwareModeComboBox.SelectedItem = hardwareAcceleration;
+            HardwareModeComboBox.SelectedItem = decodingPolicy;
             _configuringPlaybackModes = false;
         }
 
         var overlayAttached = Player.Children.Contains(VideoOverlay);
-        if (renderPreference == MediaRenderPreference.NativeSurface)
+        if (presentationMode == MediaVideoPresentationMode.NativeSurface)
         {
             if (overlayAttached)
             {
@@ -96,14 +101,14 @@ public partial class MainWindow : Window
 
         Player.OpenOptions = Player.OpenOptions with
         {
-            HardwareAcceleration = hardwareAcceleration,
-            RenderPreference = renderPreference
+            Video = Player.OpenOptions.Video with { DecodingPolicy = decodingPolicy }
         };
+        Player.PresentationMode = presentationMode;
     }
 
     private void Player_PlaybackStateChanged(object? sender, MediaPlaybackStateChangedEventArgs eventArgs) =>
         StatusTextBlock.Text =
-            $"State: {eventArgs.NewState} | Renderer: {Player.ActiveRendererId ?? "none"} | HW: {Player.IsHardwareAccelerationActive}";
+            $"State: {eventArgs.NewState} | Presentation: {Player.EffectivePresentationMode?.ToString() ?? "none"} | HW decode: {Player.IsHardwareVideoDecodingActive}";
 
     private void Player_PlaybackError(object? sender, MediaPlaybackErrorEventArgs eventArgs) =>
         StatusTextBlock.Text = $"{eventArgs.Error.Code}: {eventArgs.Error.Message}";

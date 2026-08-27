@@ -13,10 +13,11 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
     private Stretch _stretch = Stretch.Uniform;
     private bool _disposed;
 
-    public MediaRenderPreference Preference => MediaRenderPreference.Software;
+    public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.CpuMemory;
 
-    public bool Supports(MediaFramePixelFormat pixelFormat) =>
-        pixelFormat == MediaFramePixelFormat.Bgra32;
+    public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
+        storageKind == MediaFrameStorageKind.CpuMemory &&
+        pixelFormat == MediaPixelFormat.Bgra32;
 
     internal Stretch Stretch
     {
@@ -33,7 +34,8 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
     public bool TryPresent(IMediaFrameLease frame)
     {
         if (_disposed ||
-            frame.PixelFormat != MediaFramePixelFormat.Bgra32 ||
+            frame.StorageKind != MediaFrameStorageKind.CpuMemory ||
+            frame.PixelFormat != MediaPixelFormat.Bgra32 ||
             !frame.TryGetCpuBuffer(out _))
         {
             return false;

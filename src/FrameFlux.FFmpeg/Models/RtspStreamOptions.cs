@@ -2,15 +2,9 @@ namespace FrameFlux.FFmpeg;
 
 internal sealed class RtspStreamOptions
 {
-    public static int DefaultMaxConcurrentOpenStreams { get; set; } = 8;
+    public RtspVideoDecodingMode VideoDecodingMode { get; init; } = RtspVideoDecodingMode.HardwarePreferred;
 
-    public bool UseHardwareAcceleration { get; init; } = true;
-
-    public RtspHardwareAccelerationMode HardwareAccelerationMode { get; init; } = RtspHardwareAccelerationMode.Auto;
-
-    public RtspRenderMode RenderMode { get; init; } = RtspRenderMode.Auto;
-
-    public bool FallbackToSoftwareDecoding { get; init; } = true;
+    public RtspFrameDeliveryMode FrameDeliveryMode { get; init; } = RtspFrameDeliveryMode.CpuMemory;
     
     public System.IntPtr ExternalHwDevice { get; init; }
 
@@ -22,9 +16,15 @@ internal sealed class RtspStreamOptions
 
     public int ReadTimeoutMilliseconds { get; init; } = 5000;
 
-    public int ReconnectDelayMilliseconds { get; init; } = 3000;
+    public bool ReconnectEnabled { get; init; } = true;
 
-    public int MaxConcurrentOpenStreams { get; init; } = DefaultMaxConcurrentOpenStreams;
+    public int ReconnectInitialDelayMilliseconds { get; init; } = 3000;
+
+    public int ReconnectMaximumDelayMilliseconds { get; init; } = 60000;
+
+    public int? MaximumReconnectAttempts { get; init; }
+
+    public SemaphoreSlim? OpenOperationSemaphore { get; init; }
 
     public double MaxFramesPerSecond { get; init; }
 

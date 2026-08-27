@@ -51,61 +51,121 @@ public interface IMediaPlayerFactory
 
 public sealed record MediaOpenOptions
 {
-    public MediaStreamSharingMode StreamSharing { get; init; } = MediaStreamSharingMode.Dedicated;
+    public MediaSessionSharingMode SessionSharing { get; init; } = MediaSessionSharingMode.Dedicated;
 
-    public MediaTransport Transport { get; init; } = MediaTransport.Auto;
+    public MediaNetworkOptions Network { get; init; } = new();
 
-    public MediaHardwareAcceleration HardwareAcceleration { get; init; } = MediaHardwareAcceleration.Auto;
+    public MediaVideoOptions Video { get; init; } = new();
 
-    public MediaRenderPreference RenderPreference { get; init; } = MediaRenderPreference.Auto;
-
-    public TimeSpan OpenTimeout { get; init; } = TimeSpan.FromSeconds(5);
-
-    public TimeSpan EndpointProbeTimeout { get; init; } = TimeSpan.Zero;
-
-    public TimeSpan ReadTimeout { get; init; } = TimeSpan.FromSeconds(5);
-
-    public TimeSpan ReconnectDelay { get; init; } = TimeSpan.FromSeconds(3);
-
-    public int MaxConcurrentOpenStreams { get; init; } = 8;
-
-    public double MaxFramesPerSecond { get; init; }
-
-    public int MaxVideoWidth { get; init; }
-
-    public int MaxVideoHeight { get; init; }
-
-    public bool LowLatency { get; init; }
-
-    public bool FallbackToSoftwareDecoding { get; init; } = true;
-
-    public bool CaptureSnapshots { get; init; } = true;
-
-    public bool EnableAudio { get; init; } = true;
+    public MediaAudioOptions Audio { get; init; } = new();
 
     public void Validate()
     {
-        if (OpenTimeout < TimeSpan.Zero ||
-            EndpointProbeTimeout < TimeSpan.Zero ||
-            ReadTimeout < TimeSpan.Zero ||
-            ReconnectDelay < TimeSpan.Zero)
-        {
-            throw new ArgumentOutOfRangeException(nameof(OpenTimeout), "Timeout values cannot be negative.");
-        }
-
-        if (MaxConcurrentOpenStreams < 0 ||
-            MaxVideoWidth < 0 ||
-            MaxVideoHeight < 0 ||
-            MaxFramesPerSecond < 0)
+        ArgumentNullException.ThrowIfNull(Network);
+        ArgumentNullException.ThrowIfNull(Video);
+        ArgumentNullException.ThrowIfNull(Audio);
+        if (!Enum.IsDefined(SessionSharing))
         {
             throw new ArgumentOutOfRangeException(
-                nameof(MaxConcurrentOpenStreams),
-                "Playback limits cannot be negative.");
+                nameof(SessionSharing),
+                SessionSharing,
+                "Unsupported session sharing mode.");
         }
+
+        Network.Validate();
+        Video.Validate();
     }
 }
 
-public enum MediaStreamSharingMode
+public sealed record MediaNetworkOptions
+{
+    public MediaTransport Transport { get; init; } = MediaTransport.Automatic;
+    public TimeSpan? OpenTimeout { get; init; } = TimeSpan.FromSeconds(5);
+    public TimeSpan? EndpointProbeTimeout { get; init; }
+    public TimeSpan? ReadTimeout { get; init; } = TimeSpan.FromSeconds(5);
+    public MediaReconnectOptions Reconnect { get; init; } = new();
+    public MediaLatencyMode LatencyMode { get; init; } = MediaLatencyMode.Default;
+
+    internal void Validate()
+    {
+        ValidateEnum(Transport, nameof(Transport));
+        ValidateEnum(LatencyMode, nameof(LatencyMode));
+        ValidatePositiveTimeout(OpenTimeout, nameof(OpenTimeout));
+        ValidatePositiveTimeout(EndpointProbeTimeout, nameof(EndpointProbeTimeout));
+        ValidatePositiveTimeout(ReadTimeout, nameof(ReadTimeout));
+        ArgumentNullException.ThrowIfNull(Reconnect);
+        Reconnect.Validate();
+    }
+
+    private static void ValidatePositiveTimeout(TimeSpan? value, string parameterName)
+    {
+        if (value is { } timeout && timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(parameterName, timeout, "Timeout must be greater than zero.");
+    }
+
+    private static void ValidateEnum<TEnum>(TEnum value, string parameterName) where TEnum : struct, Enum
+    {
+        if (!Enum.IsDefined(value))
+            throw new ArgumentOutOfRangeException(parameterName, value, "Unsupported enum value.");
+    }
+}
+
+public sealed record MediaReconnectOptions
+{
+    public bool IsEnabled { get; init; } = true;
+    public TimeSpan InitialDelay { get; init; } = TimeSpan.FromSeconds(3);
+    public TimeSpan MaximumDelay { get; init; } = TimeSpan.FromMinutes(1);
+    public int? MaximumAttempts { get; init; }
+
+    internal void Validate()
+    {
+        if (InitialDelay < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(InitialDelay), InitialDelay, "Delay cannot be negative.");
+        if (MaximumDelay < InitialDelay)
+            throw new ArgumentOutOfRangeException(nameof(MaximumDelay), MaximumDelay, "Maximum delay cannot be less than the initial delay.");
+        if (MaximumAttempts < 0)
+            throw new ArgumentOutOfRangeException(nameof(MaximumAttempts), MaximumAttempts, "Maximum attempts cannot be negative.");
+    }
+}
+
+public sealed record MediaVideoOptions
+{
+    public MediaVideoDecodingPolicy DecodingPolicy { get; init; } = MediaVideoDecodingPolicy.Automatic;
+    public int? MaximumWidth { get; init; }
+    public int? MaximumHeight { get; init; }
+    public double? MaximumFrameRate { get; init; }
+    public MediaSnapshotPolicy SnapshotPolicy { get; init; } = MediaSnapshotPolicy.Disabled;
+
+    internal void Validate()
+    {
+        ValidateEnum(DecodingPolicy, nameof(DecodingPolicy));
+        ValidateEnum(SnapshotPolicy, nameof(SnapshotPolicy));
+        ValidatePositive(MaximumWidth, nameof(MaximumWidth));
+        ValidatePositive(MaximumHeight, nameof(MaximumHeight));
+        if (MaximumFrameRate is { } frameRate &&
+            (frameRate <= 0 || double.IsNaN(frameRate) || double.IsInfinity(frameRate)))
+            throw new ArgumentOutOfRangeException(nameof(MaximumFrameRate), frameRate, "Maximum frame rate must be finite and greater than zero.");
+    }
+
+    private static void ValidatePositive(int? value, string parameterName)
+    {
+        if (value is <= 0)
+            throw new ArgumentOutOfRangeException(parameterName, value, "Value must be greater than zero.");
+    }
+
+    private static void ValidateEnum<TEnum>(TEnum value, string parameterName) where TEnum : struct, Enum
+    {
+        if (!Enum.IsDefined(value))
+            throw new ArgumentOutOfRangeException(parameterName, value, "Unsupported enum value.");
+    }
+}
+
+public sealed record MediaAudioOptions
+{
+    public bool IsEnabled { get; init; } = true;
+}
+
+public enum MediaSessionSharingMode
 {
     Dedicated,
     Shared
@@ -113,26 +173,39 @@ public enum MediaStreamSharingMode
 
 public enum MediaTransport
 {
-    Auto,
+    Automatic,
     Tcp,
     Udp,
-    Http,
-    Https
+    HttpTunnel,
+    HttpsTunnel
 }
 
-public enum MediaHardwareAcceleration
+public enum MediaLatencyMode
 {
-    Auto,
+    Default,
+    Low
+}
+
+public enum MediaVideoDecodingPolicy
+{
+    Automatic,
+    SoftwareOnly,
+    HardwarePreferred,
+    HardwareRequired
+}
+
+public enum MediaSnapshotPolicy
+{
     Disabled,
-    Enabled
+    KeepLatestFrame
 }
 
-public enum MediaRenderPreference
+public enum MediaVideoPresentationMode
 {
-    Auto,
-    Software,
+    Automatic,
+    SoftwareBitmap,
     NativeSurface,
-    CompositedGpu
+    GpuComposition
 }
 
 public sealed record MediaCapabilities(
@@ -144,12 +217,18 @@ public sealed record MediaCapabilities(
     public static MediaCapabilities None { get; } = new(false, false, false, false);
 }
 
-public enum MediaFramePixelFormat
+public enum MediaPixelFormat
 {
+    Unknown,
     Bgra32,
     Yuv420P,
     Nv12,
-    Nv21,
+    Nv21
+}
+
+public enum MediaFrameStorageKind
+{
+    CpuMemory,
     D3D11Texture
 }
 
@@ -173,7 +252,9 @@ public interface IMediaFrameLease : IDisposable
 
     int Height { get; }
 
-    MediaFramePixelFormat PixelFormat { get; }
+    MediaFrameStorageKind StorageKind { get; }
+
+    MediaPixelFormat PixelFormat { get; }
 
     bool TryGetCpuBuffer(out MediaCpuFrameBuffer buffer);
 
@@ -182,9 +263,9 @@ public interface IMediaFrameLease : IDisposable
 
 public interface IMediaVideoOutput
 {
-    MediaRenderPreference Preference { get; }
+    MediaFrameStorageKind PreferredFrameStorage { get; }
 
-    bool Supports(MediaFramePixelFormat pixelFormat);
+    bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat);
 
     // Return true only after accepting ownership. On false or exception, the caller retains ownership.
     bool TryPresent(IMediaFrameLease frame);
@@ -195,7 +276,7 @@ public sealed record MediaVideoFrame(
     int Width,
     int Height,
     int Stride,
-    MediaFramePixelFormat PixelFormat,
+    MediaPixelFormat PixelFormat,
     long Sequence,
     DateTimeOffset CapturedAt);
 
@@ -204,12 +285,12 @@ public sealed record MediaSnapshot(
     int Width,
     int Height,
     int Stride,
-    MediaFramePixelFormat PixelFormat,
+    MediaPixelFormat PixelFormat,
     DateTimeOffset CapturedAt);
 
 public sealed record MediaDiagnostics(
-    bool IsHardwareAccelerationActive,
-    string HardwareDiagnostics,
+    bool IsHardwareVideoDecodingActive,
+    string VideoDecoderDiagnostics,
     double ReadMilliseconds,
     double DecodeMilliseconds,
     int PerformanceSampleCount,

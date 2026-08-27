@@ -2,47 +2,23 @@ namespace FrameFlux.FFmpeg;
 
 internal static class RtspPlaybackConfiguration
 {
-    public static RtspHardwareAccelerationMode ResolveHardwareAccelerationMode(
-        RtspHardwareAccelerationMode configuredMode,
-        bool useHardwareAcceleration)
+    public static RtspVideoDecodingMode ResolveVideoDecodingMode(
+        MediaVideoDecodingPolicy policy)
     {
-        return !useHardwareAcceleration && configuredMode == RtspHardwareAccelerationMode.Auto
-            ? RtspHardwareAccelerationMode.Disabled
-            : configuredMode;
-    }
-
-    public static bool ResolveUseHardwareAcceleration(
-        RtspHardwareAccelerationMode configuredMode,
-        bool useHardwareAcceleration,
-        RtspRenderMode effectiveRenderMode)
-    {
-        return configuredMode switch
+        return policy switch
         {
-            RtspHardwareAccelerationMode.Disabled => false,
-            RtspHardwareAccelerationMode.Enabled => true,
-            _ => ResolveAutoHardwareAcceleration(useHardwareAcceleration, effectiveRenderMode)
+            MediaVideoDecodingPolicy.SoftwareOnly => RtspVideoDecodingMode.SoftwareOnly,
+            MediaVideoDecodingPolicy.HardwareRequired => RtspVideoDecodingMode.HardwareRequired,
+            MediaVideoDecodingPolicy.HardwarePreferred => RtspVideoDecodingMode.HardwarePreferred,
+            _ => OperatingSystem.IsWindows()
+                ? RtspVideoDecodingMode.HardwarePreferred
+                : RtspVideoDecodingMode.SoftwareOnly
         };
     }
 
-    public static bool IsInefficientWindowsCombination(bool useHardwareAcceleration, RtspRenderMode effectiveRenderMode)
-    {
-        return OperatingSystem.IsWindows() &&
-               useHardwareAcceleration &&
-               effectiveRenderMode == RtspRenderMode.NativeSurface;
-    }
+    public static bool UsesHardwareDecoding(RtspVideoDecodingMode mode) =>
+        mode is RtspVideoDecodingMode.HardwarePreferred or RtspVideoDecodingMode.HardwareRequired;
 
-    private static bool ResolveAutoHardwareAcceleration(bool useHardwareAcceleration, RtspRenderMode effectiveRenderMode)
-    {
-        if (!useHardwareAcceleration || effectiveRenderMode == RtspRenderMode.SoftwareBitmap)
-        {
-            return false;
-        }
-
-        if (IsInefficientWindowsCombination(true, effectiveRenderMode))
-        {
-            return false;
-        }
-
-        return true;
-    }
+    public static bool AllowsSoftwareFallback(RtspVideoDecodingMode mode) =>
+        mode == RtspVideoDecodingMode.HardwarePreferred;
 }

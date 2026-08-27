@@ -205,7 +205,7 @@ internal static class FrameFluxFFmpegNative
     }
 
     internal static int IsHardwareActive(NativeRtspSessionHandle session) =>
-        !session.IsInvalid && GetTarget<DirectRtspSession>(session.DangerousGetHandle()).IsHardwareAccelerationActive
+        !session.IsInvalid && GetTarget<DirectRtspSession>(session.DangerousGetHandle()).IsHardwareVideoDecodingActive
             ? 1
             : 0;
 
@@ -231,10 +231,10 @@ internal static class FrameFluxFFmpegNative
             .TryDequeueAudioFrame(out frame);
     }
 
-    internal static string GetHardwareDiagnostics(NativeRtspSessionHandle session) =>
+    internal static string GetVideoDecoderDiagnostics(NativeRtspSessionHandle session) =>
         session.IsInvalid
             ? "Unavailable"
-            : GetTarget<DirectRtspSession>(session.DangerousGetHandle()).HardwareDiagnostics;
+            : GetTarget<DirectRtspSession>(session.DangerousGetHandle()).VideoDecoderDiagnostics;
 
     internal static string GetError(NativeRtspSessionHandle session) =>
         session.IsInvalid

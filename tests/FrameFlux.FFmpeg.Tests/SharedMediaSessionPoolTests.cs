@@ -12,7 +12,7 @@ public sealed class SharedMediaSessionPoolTests
         var sessions = new List<TrackingSession>();
         var pool = new SharedMediaSessionPool();
         var source = MediaSource.Parse("rtsp://camera/live");
-        var options = new MediaOpenOptions { StreamSharing = MediaStreamSharingMode.Shared };
+        var options = new MediaOpenOptions { SessionSharing = MediaSessionSharingMode.Shared };
 
         IFfmpegMediaSession CreatePhysical()
         {
@@ -65,10 +65,13 @@ public sealed class SharedMediaSessionPoolTests
 
         var tcpOptions = new MediaOpenOptions
         {
-            StreamSharing = MediaStreamSharingMode.Shared,
-            Transport = MediaTransport.Tcp
+            SessionSharing = MediaSessionSharingMode.Shared,
+            Network = new MediaNetworkOptions { Transport = MediaTransport.Tcp }
         };
-        var udpOptions = tcpOptions with { Transport = MediaTransport.Udp };
+        var udpOptions = tcpOptions with
+        {
+            Network = tcpOptions.Network with { Transport = MediaTransport.Udp }
+        };
         await using var tcp = pool.Acquire(source, tcpOptions, 1d, false, () => Create(tcpOptions));
         await using var udp = pool.Acquire(source, udpOptions, 1d, false, () => Create(udpOptions));
 
@@ -80,7 +83,7 @@ public sealed class SharedMediaSessionPoolTests
     {
         var pool = new SharedMediaSessionPool();
         var source = MediaSource.Parse("rtsp://camera/live");
-        var options = new MediaOpenOptions { StreamSharing = MediaStreamSharingMode.Shared };
+        var options = new MediaOpenOptions { SessionSharing = MediaSessionSharingMode.Shared };
         var physical = new TrackingSession(source, options);
         var first = pool.Acquire(source, options, 1d, false, () => physical);
         var second = pool.Acquire(source, options, 1d, false, () => physical);
@@ -96,7 +99,7 @@ public sealed class SharedMediaSessionPoolTests
     {
         var pool = new SharedMediaSessionPool();
         var source = MediaSource.Parse("rtsp://camera/live");
-        var options = new MediaOpenOptions { StreamSharing = MediaStreamSharingMode.Shared };
+        var options = new MediaOpenOptions { SessionSharing = MediaSessionSharingMode.Shared };
         var physical = new TrackingSession(source, options);
         var firstOutput = new TrackingVideoOutput();
         var secondOutput = new TrackingVideoOutput();
@@ -180,7 +183,7 @@ public sealed class SharedMediaSessionPoolTests
 
         internal void EmitFrame() =>
             FrameReceived?.Invoke(this, new MediaVideoFrame(
-                new byte[16], 2, 2, 8, MediaFramePixelFormat.Bgra32, 1, DateTimeOffset.UtcNow));
+                new byte[16], 2, 2, 8, MediaPixelFormat.Bgra32, 1, DateTimeOffset.UtcNow));
 
         private void TransitionTo(MediaPlaybackState state)
         {
@@ -194,10 +197,11 @@ public sealed class SharedMediaSessionPoolTests
     {
         internal int FrameCount { get; private set; }
 
-        public MediaRenderPreference Preference => MediaRenderPreference.Software;
+        public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.CpuMemory;
 
-        public bool Supports(MediaFramePixelFormat pixelFormat) =>
-            pixelFormat == MediaFramePixelFormat.Bgra32;
+        public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
+            storageKind == MediaFrameStorageKind.CpuMemory &&
+            pixelFormat == MediaPixelFormat.Bgra32;
 
         public bool TryPresent(IMediaFrameLease frame)
         {

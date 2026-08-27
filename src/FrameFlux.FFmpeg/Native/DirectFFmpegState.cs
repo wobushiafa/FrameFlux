@@ -37,8 +37,8 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
     private bool _preserveHardwareFrames;
 
     internal string Error { get; private set; } = "Unknown FFmpeg error.";
-    internal string HardwareDiagnostics { get; private set; } = "Disabled";
-    internal bool IsHardwareAccelerationActive => _d3d11va is not null;
+    internal string VideoDecoderDiagnostics { get; private set; } = "Disabled";
+    internal bool IsHardwareVideoDecodingActive => _d3d11va is not null;
     internal long LastHardwareTransferTicks => _d3d11va?.LastTransferTicks ?? 0;
     internal bool HasAudio => _audioCodecContext != IntPtr.Zero;
 
@@ -50,7 +50,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
             return -1;
         }
 
-        HardwareDiagnostics = options.UseHardwareAcceleration != 0 ? "D3D11VA requested" : "Disabled";
+        VideoDecoderDiagnostics = options.UseHardwareAcceleration != 0 ? "D3D11VA requested" : "Disabled";
         _preserveHardwareFrames = options.PreserveHardwareFrames != 0;
 
         IntPtr dictionary = IntPtr.Zero;
@@ -311,7 +311,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
                 return -1;
             }
 
-            HardwareDiagnostics = $"D3D11VA unavailable: {hardwareError}; software fallback";
+            VideoDecoderDiagnostics = $"D3D11VA unavailable: {hardwareError}; software fallback";
             result = _api.AvCodecOpen2(_codecContext, decoder, IntPtr.Zero);
             return result < 0 ? Fail(result, "avcodec_open2") : 0;
         }
@@ -319,7 +319,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         result = _api.AvCodecOpen2(_codecContext, decoder, IntPtr.Zero);
         if (result >= 0)
         {
-            HardwareDiagnostics = _preserveHardwareFrames
+            VideoDecoderDiagnostics = _preserveHardwareFrames
                 ? "D3D11VA active (FFmpeg 7, zero-copy D3D11 texture output)"
                 : "D3D11VA active (FFmpeg 7, hardware frames transferred to system memory)";
             return 0;
@@ -336,7 +336,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         _api.AvCodecFreeContext(ref _codecContext);
         _d3d11va!.Dispose();
         _d3d11va = null;
-        HardwareDiagnostics = $"D3D11VA decoder initialization failed: {openError} ({result}); software fallback";
+        VideoDecoderDiagnostics = $"D3D11VA decoder initialization failed: {openError} ({result}); software fallback";
 
         result = AllocateVideoDecoder(decoder);
         if (result < 0) return result;

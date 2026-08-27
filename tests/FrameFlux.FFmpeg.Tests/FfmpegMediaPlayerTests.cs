@@ -20,9 +20,16 @@ public sealed class FfmpegMediaPlayerTests
             MediaSource.Parse("rtsp://camera/live"),
             new MediaOpenOptions
             {
-                LowLatency = true,
-                Transport = MediaTransport.Tcp,
-                StreamSharing = MediaStreamSharingMode.Shared
+                SessionSharing = MediaSessionSharingMode.Shared,
+                Network = new MediaNetworkOptions
+                {
+                    LatencyMode = MediaLatencyMode.Low,
+                    Transport = MediaTransport.Tcp
+                },
+                Video = new MediaVideoOptions
+                {
+                    SnapshotPolicy = MediaSnapshotPolicy.KeepLatestFrame
+                }
             });
 
         player.Volume = 0.25d;
@@ -32,10 +39,10 @@ public sealed class FfmpegMediaPlayerTests
         var session = Assert.IsType<FakeMediaSession>(factory.LastSession);
         Assert.Equal(0.25d, factory.LastVolume);
         Assert.True(factory.LastIsMuted);
-        Assert.Equal(MediaStreamSharingMode.Shared, factory.LastOptions?.StreamSharing);
+        Assert.Equal(MediaSessionSharingMode.Shared, factory.LastOptions?.SessionSharing);
         Assert.Equal(MediaPlaybackState.Playing, player.State);
         Assert.NotNull(receivedFrame);
-        Assert.Equal(MediaFramePixelFormat.Bgra32, receivedFrame.PixelFormat);
+        Assert.Equal(MediaPixelFormat.Bgra32, receivedFrame.PixelFormat);
 
         player.Volume = 0.5d;
         player.IsMuted = false;
@@ -67,11 +74,14 @@ public sealed class FfmpegMediaPlayerTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new MediaOpenOptions
         {
-            ReadTimeout = TimeSpan.FromMilliseconds(-1)
+            Network = new MediaNetworkOptions
+            {
+                ReadTimeout = TimeSpan.FromMilliseconds(-1)
+            }
         }.Validate());
         Assert.Throws<ArgumentOutOfRangeException>(() => new MediaOpenOptions
         {
-            MaxVideoWidth = -1
+            Video = new MediaVideoOptions { MaximumWidth = -1 }
         }.Validate());
     }
 
@@ -82,9 +92,7 @@ public sealed class FfmpegMediaPlayerTests
         var output = new FakeVideoOutput();
         await using var player = new FfmpegMediaPlayer(factory) { VideoOutput = output };
 
-        await player.OpenAsync(
-            MediaSource.Parse("rtsp://camera/live"),
-            new MediaOpenOptions { RenderPreference = MediaRenderPreference.NativeSurface });
+        await player.OpenAsync(MediaSource.Parse("rtsp://camera/live"));
         Assert.False(player.Capabilities.CanCaptureSnapshots);
         await player.PlayAsync();
 
@@ -93,16 +101,22 @@ public sealed class FfmpegMediaPlayerTests
     }
 
     [Fact]
-    public async Task GenericPlayer_DisablesCpuSnapshotsForCompositedGpuOutput()
+    public async Task GenericPlayer_DisablesCpuSnapshotsForGpuCompositionOutput()
     {
         await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory())
         {
-            VideoOutput = new FakeVideoOutput(MediaRenderPreference.CompositedGpu)
+            VideoOutput = new FakeVideoOutput(MediaFrameStorageKind.D3D11Texture)
         };
 
         await player.OpenAsync(
             MediaSource.Parse("rtsp://camera/live"),
-            new MediaOpenOptions { RenderPreference = MediaRenderPreference.CompositedGpu });
+            new MediaOpenOptions
+            {
+                Video = new MediaVideoOptions
+                {
+                    SnapshotPolicy = MediaSnapshotPolicy.KeepLatestFrame
+                }
+            });
 
         Assert.False(player.Capabilities.CanCaptureSnapshots);
     }
@@ -112,30 +126,35 @@ public sealed class FfmpegMediaPlayerTests
     {
         await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory())
         {
-            VideoOutput = new FakeVideoOutput(MediaRenderPreference.Software)
+            VideoOutput = new FakeVideoOutput(MediaFrameStorageKind.CpuMemory)
         };
 
         await player.OpenAsync(
             MediaSource.Parse("rtsp://camera/live"),
-            new MediaOpenOptions { RenderPreference = MediaRenderPreference.CompositedGpu });
+            new MediaOpenOptions
+            {
+                Video = new MediaVideoOptions
+                {
+                    SnapshotPolicy = MediaSnapshotPolicy.KeepLatestFrame
+                }
+            });
 
         Assert.True(player.Capabilities.CanCaptureSnapshots);
     }
 
     [Theory]
-    [InlineData(MediaRenderPreference.NativeSurface, true)]
-    [InlineData(MediaRenderPreference.CompositedGpu, true)]
-    [InlineData(MediaRenderPreference.Software, false)]
-    public void Session_ResolvesOutputPreferenceToDecoderRenderMode(
-        MediaRenderPreference preference,
-        bool expectsNativeFrames)
+    [InlineData(MediaFrameStorageKind.D3D11Texture, true)]
+    [InlineData(MediaFrameStorageKind.CpuMemory, false)]
+    public void Session_ResolvesOutputStorageToFrameDeliveryMode(
+        MediaFrameStorageKind storageKind,
+        bool expectsD3D11Textures)
     {
-        var renderMode = FfmpegMediaSession.ResolveRenderMode(
-            new FakeVideoOutput(preference));
+        var deliveryMode = FfmpegMediaSession.ResolveFrameDeliveryMode(
+            new FakeVideoOutput(storageKind));
 
         Assert.Equal(
-            expectsNativeFrames,
-            renderMode == RtspRenderMode.NativeSurface);
+            expectsD3D11Textures,
+            deliveryMode == RtspFrameDeliveryMode.D3D11Texture);
     }
 
     private sealed class FakeMediaSessionFactory : IFfmpegMediaSessionFactory
@@ -185,7 +204,7 @@ public sealed class FfmpegMediaPlayerTests
             TransitionTo(MediaPlaybackState.Opening);
             TransitionTo(MediaPlaybackState.Playing);
             FrameReceived?.Invoke(this, new MediaVideoFrame(
-                new byte[16], 2, 2, 8, MediaFramePixelFormat.Bgra32, 1, DateTimeOffset.UtcNow));
+                new byte[16], 2, 2, 8, MediaPixelFormat.Bgra32, 1, DateTimeOffset.UtcNow));
             return ValueTask.CompletedTask;
         }
 
@@ -197,7 +216,7 @@ public sealed class FfmpegMediaPlayerTests
 
         public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default) =>
             ValueTask.FromResult<MediaSnapshot?>(new MediaSnapshot(
-                new byte[16], 2, 2, 8, MediaFramePixelFormat.Bgra32, DateTimeOffset.UtcNow));
+                new byte[16], 2, 2, 8, MediaPixelFormat.Bgra32, DateTimeOffset.UtcNow));
 
         public ValueTask DisposeAsync()
         {
@@ -215,16 +234,14 @@ public sealed class FfmpegMediaPlayerTests
 
     private sealed class FakeVideoOutput : IMediaVideoOutput
     {
-        private readonly MediaRenderPreference _preference;
-
         internal FakeVideoOutput(
-            MediaRenderPreference preference = MediaRenderPreference.NativeSurface)
+            MediaFrameStorageKind preferredFrameStorage = MediaFrameStorageKind.D3D11Texture)
         {
-            _preference = preference;
+            PreferredFrameStorage = preferredFrameStorage;
         }
 
-        public MediaRenderPreference Preference => _preference;
-        public bool Supports(MediaFramePixelFormat pixelFormat) => true;
+        public MediaFrameStorageKind PreferredFrameStorage { get; }
+        public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) => true;
         public bool TryPresent(IMediaFrameLease frame)
         {
             frame.Dispose();

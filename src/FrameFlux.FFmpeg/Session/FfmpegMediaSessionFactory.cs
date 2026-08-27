@@ -17,18 +17,30 @@ internal sealed class FfmpegMediaSessionFactory : IFfmpegMediaSessionFactory
 {
     private readonly ILoggerFactory _loggerFactory;
     private readonly SharedMediaSessionPool _sharedPool;
+    private readonly SemaphoreSlim? _openOperationSemaphore;
 
-    internal FfmpegMediaSessionFactory(ILoggerFactory? loggerFactory = null)
-        : this(loggerFactory ?? NullLoggerFactory.Instance, new SharedMediaSessionPool())
+    internal FfmpegMediaSessionFactory(
+        ILoggerFactory? loggerFactory = null,
+        FfmpegMediaPlayerFactoryOptions? options = null)
+        : this(
+            loggerFactory ?? NullLoggerFactory.Instance,
+            new SharedMediaSessionPool(),
+            options ?? new FfmpegMediaPlayerFactoryOptions())
     {
     }
 
     internal FfmpegMediaSessionFactory(
         ILoggerFactory loggerFactory,
-        SharedMediaSessionPool sharedPool)
+        SharedMediaSessionPool sharedPool,
+        FfmpegMediaPlayerFactoryOptions? options = null)
     {
+        options ??= new FfmpegMediaPlayerFactoryOptions();
+        options.Validate();
         _loggerFactory = loggerFactory;
         _sharedPool = sharedPool;
+        _openOperationSemaphore = options.MaximumConcurrentOpenOperations is { } limit
+            ? new SemaphoreSlim(limit, limit)
+            : null;
     }
 
     public IFfmpegMediaSession Create(
@@ -42,7 +54,7 @@ internal sealed class FfmpegMediaSessionFactory : IFfmpegMediaSessionFactory
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
 
-        if (options.StreamSharing == MediaStreamSharingMode.Shared)
+        if (options.SessionSharing == MediaSessionSharingMode.Shared)
         {
             return _sharedPool.Acquire(
                 source,
@@ -68,5 +80,6 @@ internal sealed class FfmpegMediaSessionFactory : IFfmpegMediaSessionFactory
             volume,
             isMuted,
             videoOutput,
+            _openOperationSemaphore,
             _loggerFactory.CreateLogger<FfmpegMediaSession>());
 }

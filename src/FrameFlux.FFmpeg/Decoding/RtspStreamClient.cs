@@ -23,11 +23,11 @@ internal sealed class RtspStreamClient : IDisposable
     private readonly List<FfmpegMediaFrameLease> _leasePool = [];
     private bool _disposeReturnedLeases;
     private int _disposeSignaled;
-    private string _hardwareDiagnostics = "N/A";
+    private string _videoDecoderDiagnostics = "N/A";
     private double _volume;
     private bool _muted;
     private AudioPlaybackController? _audioPlayback;
-    public string HardwareDiagnostics => _hardwareDiagnostics;
+    public string VideoDecoderDiagnostics => _videoDecoderDiagnostics;
 
     internal delegate void FrameReceivedHandler(IntPtr buffer, int width, int height, int stride);
     internal delegate void FrameLeaseReceivedHandler(FfmpegMediaFrameLease lease);
@@ -35,7 +35,7 @@ internal sealed class RtspStreamClient : IDisposable
     internal event FrameLeaseReceivedHandler? OnFrameLeaseReceived;
     internal event EventHandler<RtspStreamErrorEventArgs>? StreamError;
     internal event EventHandler<RtspConnectionStateChangedEventArgs>? ConnectionStateChanged;
-    internal event EventHandler<bool>? HardwareAccelerationChanged;
+    internal event EventHandler<bool>? HardwareVideoDecodingChanged;
     internal event EventHandler<RtspPerformanceSnapshot>? PerformanceUpdated;
 
     internal Task Completion => Volatile.Read(ref _completionSource).Task;
@@ -54,18 +54,7 @@ internal sealed class RtspStreamClient : IDisposable
         Volatile.Read(ref _audioPlayback)?.SetMuted(muted);
     }
 
-    public RtspStreamClient(string url, bool useHardwareAcceleration = true)
-        : this(url, new RtspStreamOptions
-        {
-            UseHardwareAcceleration = useHardwareAcceleration,
-            HardwareAccelerationMode = useHardwareAcceleration
-                ? RtspHardwareAccelerationMode.Enabled
-                : RtspHardwareAccelerationMode.Disabled
-        })
-    {
-    }
-
-    public RtspStreamClient(string url, RtspStreamOptions options)
+    internal RtspStreamClient(string url, RtspStreamOptions options)
     {
         _url = url;
         _options = options;
@@ -164,17 +153,24 @@ internal sealed class RtspStreamClient : IDisposable
                             cancellationToken,
                             out var probeFailureMessage))
                     {
+                        var nextFailureCount = consecutiveFailureCount + 1;
+                        var willRetry = ShouldReconnect(nextFailureCount);
                         RaiseStreamError(new RtspStreamError(
                             RtspStreamErrorKind.OpenFailed,
                             probeFailureMessage ?? "RTSP endpoint is unavailable.",
-                            WillRetry: true));
+                            WillRetry: willRetry));
+                        if (!willRetry)
+                        {
+                            return;
+                        }
+
                         RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
-                        consecutiveFailureCount++;
+                        consecutiveFailureCount = nextFailureCount;
                         SleepBeforeReconnect(threadCancellationTokenSource, consecutiveFailureCount);
                         continue;
                     }
 
-                    openSemaphore = RtspOpenStreamLimiter.GetSemaphore(_options.MaxConcurrentOpenStreams);
+                    openSemaphore = _options.OpenOperationSemaphore;
                     if (openSemaphore != null)
                     {
                         openSemaphore.Wait(cancellationToken);
@@ -197,8 +193,8 @@ internal sealed class RtspStreamClient : IDisposable
 
                     hasOpened = true;
                     consecutiveFailureCount = 0;
-                    _hardwareDiagnostics = decoder.HardwareDiagnostics;
-                    HardwareAccelerationChanged?.Invoke(this, decoder.IsHardwareAccelerationActive);
+                    _videoDecoderDiagnostics = decoder.VideoDecoderDiagnostics;
+                    HardwareVideoDecodingChanged?.Invoke(this, decoder.IsHardwareVideoDecodingActive);
                     RaiseConnectionStateChanged(RtspConnectionState.Connected);
                     while (_isRunning && !threadCancellationTokenSource.IsCancellationRequested)
                     {
@@ -238,7 +234,7 @@ internal sealed class RtspStreamClient : IDisposable
                                 var dispatchedNativeFrame = false;
 
                                 if (useLeasedFrameDelivery &&
-                                    _options.RenderMode == RtspRenderMode.NativeSurface &&
+                                    _options.FrameDeliveryMode == RtspFrameDeliveryMode.D3D11Texture &&
                                     decoder.TryGetNativePixelFormat(frame, out var nativePixelFormat))
                                 {
                                     var nativeConvertStart = Stopwatch.GetTimestamp();
@@ -336,12 +332,19 @@ internal sealed class RtspStreamClient : IDisposable
                                 break;
                             }
 
+                            var nextFailureCount = consecutiveFailureCount + 1;
+                            var willRetry = ShouldReconnect(nextFailureCount);
                             RaiseStreamError(new RtspStreamError(
                                 RtspStreamErrorKind.EndOfStream,
                                 "Stream ended or no frame was received.",
-                                WillRetry: true));
+                                WillRetry: willRetry));
+                            if (!willRetry)
+                            {
+                                return;
+                            }
+
                             RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
-                            consecutiveFailureCount++;
+                            consecutiveFailureCount = nextFailureCount;
                             SleepBeforeReconnect(threadCancellationTokenSource, consecutiveFailureCount);
                             break;
                         }
@@ -356,21 +359,28 @@ internal sealed class RtspStreamClient : IDisposable
 
                     var kind = hasOpened ? RtspStreamErrorKind.DecodeFailed : RtspStreamErrorKind.OpenFailed;
                     var willFallbackToSoftware = ShouldFallbackToSoftware(ex);
+                    var nextFailureCount = consecutiveFailureCount + 1;
+                    var willRetry = ShouldReconnect(nextFailureCount);
                     var errorMessage = FormatExceptionMessage(ex);
                     RaiseStreamError(new RtspStreamError(
                         kind,
                         willFallbackToSoftware ? $"{errorMessage} Falling back to software decoding." : errorMessage,
                         ex,
-                        WillRetry: true));
+                        WillRetry: willRetry));
 
                     if (willFallbackToSoftware)
                     {
                         _options = CreateSoftwareFallbackOptions(_options);
-                        HardwareAccelerationChanged?.Invoke(this, false);
+                        HardwareVideoDecodingChanged?.Invoke(this, false);
+                    }
+
+                    if (!willRetry)
+                    {
+                        return;
                     }
 
                     RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
-                    consecutiveFailureCount++;
+                    consecutiveFailureCount = nextFailureCount;
                     SleepBeforeReconnect(threadCancellationTokenSource, consecutiveFailureCount);
                 }
                 finally
@@ -496,9 +506,9 @@ internal sealed class RtspStreamClient : IDisposable
 
     private bool ShouldFallbackToSoftware(Exception exception)
     {
-        return _options.UseHardwareAcceleration &&
-               _options.FallbackToSoftwareDecoding &&
-               exception is RtspDecoderRuntimeException { HardwareAccelerationActive: true };
+        return RtspPlaybackConfiguration.UsesHardwareDecoding(_options.VideoDecodingMode) &&
+               RtspPlaybackConfiguration.AllowsSoftwareFallback(_options.VideoDecodingMode) &&
+               exception is RtspDecoderRuntimeException { IsHardwareVideoDecodingActive: true };
     }
 
     private static string FormatExceptionMessage(Exception exception)
@@ -518,16 +528,17 @@ internal sealed class RtspStreamClient : IDisposable
     {
         return new RtspStreamOptions
         {
-            UseHardwareAcceleration = false,
-            HardwareAccelerationMode = RtspHardwareAccelerationMode.Disabled,
-            RenderMode = options.RenderMode,
-            FallbackToSoftwareDecoding = options.FallbackToSoftwareDecoding,
+            VideoDecodingMode = RtspVideoDecodingMode.SoftwareOnly,
+            FrameDeliveryMode = options.FrameDeliveryMode,
             Transport = options.Transport,
             OpenTimeoutMilliseconds = options.OpenTimeoutMilliseconds,
             EndpointProbeTimeoutMilliseconds = options.EndpointProbeTimeoutMilliseconds,
             ReadTimeoutMilliseconds = options.ReadTimeoutMilliseconds,
-            ReconnectDelayMilliseconds = options.ReconnectDelayMilliseconds,
-            MaxConcurrentOpenStreams = options.MaxConcurrentOpenStreams,
+            ReconnectEnabled = options.ReconnectEnabled,
+            ReconnectInitialDelayMilliseconds = options.ReconnectInitialDelayMilliseconds,
+            ReconnectMaximumDelayMilliseconds = options.ReconnectMaximumDelayMilliseconds,
+            MaximumReconnectAttempts = options.MaximumReconnectAttempts,
+            OpenOperationSemaphore = options.OpenOperationSemaphore,
             MaxFramesPerSecond = options.MaxFramesPerSecond,
             MaxVideoWidth = options.MaxVideoWidth,
             MaxVideoHeight = options.MaxVideoHeight,
@@ -650,9 +661,9 @@ internal sealed class RtspStreamClient : IDisposable
         threadCancellationTokenSource.Token.WaitHandle.WaitOne(delay);
     }
 
-    private int CalculateReconnectDelayMilliseconds(int consecutiveFailureCount)
+    internal int CalculateReconnectDelayMilliseconds(int consecutiveFailureCount)
     {
-        var baseDelay = Math.Max(0, _options.ReconnectDelayMilliseconds);
+        var baseDelay = Math.Max(0, _options.ReconnectInitialDelayMilliseconds);
         if (baseDelay == 0)
         {
             return 0;
@@ -660,13 +671,28 @@ internal sealed class RtspStreamClient : IDisposable
 
         var exponent = Math.Clamp(Math.Max(consecutiveFailureCount, 1) - 1, 0, 5);
         var multiplier = 1 << exponent;
-        var cappedDelay = (int)Math.Min((long)baseDelay * multiplier, 60000L);
+        var cappedDelay = (int)Math.Min(
+            (long)baseDelay * multiplier,
+            _options.ReconnectMaximumDelayMilliseconds);
+        if (cappedDelay >= _options.ReconnectMaximumDelayMilliseconds)
+        {
+            return Math.Max(0, _options.ReconnectMaximumDelayMilliseconds);
+        }
+
         var jitterRange = Math.Max(250, cappedDelay / 5);
         lock (OpenSemaphoreLock)
         {
-            return cappedDelay + ReconnectJitter.Next(jitterRange);
+            var remainingBeforeMaximum =
+                _options.ReconnectMaximumDelayMilliseconds - cappedDelay;
+            return cappedDelay + ReconnectJitter.Next(
+                Math.Min(jitterRange, remainingBeforeMaximum + 1));
         }
     }
+
+    internal bool ShouldReconnect(int failureCount) =>
+        _options.ReconnectEnabled &&
+        (_options.MaximumReconnectAttempts is null ||
+         failureCount <= _options.MaximumReconnectAttempts.Value);
 
     public void Dispose()
     {

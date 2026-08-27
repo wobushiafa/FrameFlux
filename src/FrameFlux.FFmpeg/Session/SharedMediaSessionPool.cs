@@ -58,7 +58,7 @@ internal sealed class SharedMediaSessionPool
     private sealed record SharedMediaSessionKey(string Source, MediaOpenOptions Options)
     {
         internal static SharedMediaSessionKey Create(MediaSource source, MediaOpenOptions options) =>
-            new(source.Uri.AbsoluteUri, options with { StreamSharing = MediaStreamSharingMode.Dedicated });
+            new(source.Uri.AbsoluteUri, options with { SessionSharing = MediaSessionSharingMode.Dedicated });
     }
 }
 
@@ -411,7 +411,8 @@ internal sealed class SharedMediaSessionLease : IFfmpegMediaSession
 
         FrameReceived?.Invoke(this, frame);
         var output = _videoOutput;
-        if (output is null || !output.Supports(frame.PixelFormat))
+        if (output is null ||
+            !output.Supports(MediaFrameStorageKind.CpuMemory, frame.PixelFormat))
         {
             return;
         }
@@ -482,13 +483,14 @@ internal sealed class ManagedMediaFrameLease : IMediaFrameLease
 
     public int Height => _frame.Height;
 
-    public MediaFramePixelFormat PixelFormat => _frame.PixelFormat;
+    public MediaFrameStorageKind StorageKind => MediaFrameStorageKind.CpuMemory;
+
+    public MediaPixelFormat PixelFormat => _frame.PixelFormat;
 
     public bool TryGetCpuBuffer(out MediaCpuFrameBuffer buffer)
     {
         if (Volatile.Read(ref _disposed) == 1 ||
-            _buffer == IntPtr.Zero ||
-            PixelFormat == MediaFramePixelFormat.D3D11Texture)
+            _buffer == IntPtr.Zero)
         {
             buffer = default;
             return false;

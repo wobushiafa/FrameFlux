@@ -37,6 +37,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
     private readonly object _sync = new();
     private readonly ILogger _logger;
     private readonly IMediaVideoOutput? _videoOutput;
+    private readonly SemaphoreSlim? _openOperationSemaphore;
     private RtspStreamClient? _client;
     private Task? _stopTask;
     private DiagnosticActivity? _activity;
@@ -45,7 +46,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
     private MediaSnapshot? _lastSnapshot;
     private RtspPerformanceSnapshot _lastPerformance;
     private string? _lastError;
-    private bool _isHardwareAccelerationActive;
+    private bool _isHardwareVideoDecodingActive;
     private double _volume;
     private bool _isMuted;
     private long _frameSequence;
@@ -57,6 +58,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
         double volume,
         bool isMuted,
         IMediaVideoOutput? videoOutput,
+        SemaphoreSlim? openOperationSemaphore = null,
         ILogger? logger = null)
     {
         Source = source ?? throw new ArgumentNullException(nameof(source));
@@ -65,6 +67,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
         _volume = volume;
         _isMuted = isMuted;
         _videoOutput = videoOutput;
+        _openOperationSemaphore = openOperationSemaphore;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
     }
 
@@ -135,8 +138,8 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
             lock (_sync)
             {
                 return new MediaDiagnostics(
-                    _isHardwareAccelerationActive,
-                    _client?.HardwareDiagnostics ?? "N/A",
+                    _isHardwareVideoDecodingActive,
+                    _client?.VideoDecoderDiagnostics ?? "N/A",
                     _lastPerformance.ReadMilliseconds,
                     _lastPerformance.DecodeMilliseconds,
                     _lastPerformance.SampleCount,
@@ -183,13 +186,13 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
             var client = new RtspStreamClient(Source.Uri.ToString(), CreateEngineOptions());
             client.ConnectionStateChanged += OnConnectionStateChanged;
             client.StreamError += OnStreamError;
-            client.HardwareAccelerationChanged += OnHardwareAccelerationChanged;
+            client.HardwareVideoDecodingChanged += OnHardwareVideoDecodingChanged;
             client.PerformanceUpdated += OnPerformanceUpdated;
             client.OnFrameLeaseReceived += OnFrameLeaseReceived;
             _client = client;
             _activity = RtspTelemetry.Activities.StartActivity("media.session", ActivityKind.Client);
             _activity?.SetTag("media.source", Source.Uri.GetLeftPart(UriPartial.Authority));
-            _activity?.SetTag("media.transport", Options.Transport.ToString());
+            _activity?.SetTag("media.transport", Options.Network.Transport.ToString());
             UpdateFrameDeliveryLocked();
             client.Start();
         }
@@ -255,7 +258,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
         {
             client.ConnectionStateChanged -= OnConnectionStateChanged;
             client.StreamError -= OnStreamError;
-            client.HardwareAccelerationChanged -= OnHardwareAccelerationChanged;
+            client.HardwareVideoDecodingChanged -= OnHardwareVideoDecodingChanged;
             client.PerformanceUpdated -= OnPerformanceUpdated;
             client.OnFrameLeaseReceived -= OnFrameLeaseReceived;
             client.Dispose();
@@ -280,45 +283,42 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
     private RtspStreamOptions CreateEngineOptions() =>
         new()
         {
-            Transport = Options.Transport switch
+            Transport = Options.Network.Transport switch
             {
                 MediaTransport.Udp => "udp",
-                MediaTransport.Http => "http",
-                MediaTransport.Https => "https",
+                MediaTransport.HttpTunnel => "http",
+                MediaTransport.HttpsTunnel => "https",
                 _ => "tcp"
             },
-            UseHardwareAcceleration = Options.HardwareAcceleration != MediaHardwareAcceleration.Disabled,
-            HardwareAccelerationMode = Options.HardwareAcceleration switch
-            {
-                MediaHardwareAcceleration.Disabled => RtspHardwareAccelerationMode.Disabled,
-                MediaHardwareAcceleration.Enabled => RtspHardwareAccelerationMode.Enabled,
-                _ => RtspHardwareAccelerationMode.Auto
-            },
-            RenderMode = ResolveRenderMode(_videoOutput),
-            OpenTimeoutMilliseconds = ToMilliseconds(Options.OpenTimeout),
-            EndpointProbeTimeoutMilliseconds = ToMilliseconds(Options.EndpointProbeTimeout),
-            ReadTimeoutMilliseconds = ToMilliseconds(Options.ReadTimeout),
-            ReconnectDelayMilliseconds = ToMilliseconds(Options.ReconnectDelay),
-            MaxConcurrentOpenStreams = Options.MaxConcurrentOpenStreams,
-            MaxFramesPerSecond = Options.MaxFramesPerSecond,
-            MaxVideoWidth = Options.MaxVideoWidth,
-            MaxVideoHeight = Options.MaxVideoHeight,
-            LowLatency = Options.LowLatency,
-            FallbackToSoftwareDecoding = Options.FallbackToSoftwareDecoding,
-            EnableAudio = Options.EnableAudio,
+            VideoDecodingMode = RtspPlaybackConfiguration.ResolveVideoDecodingMode(
+                Options.Video.DecodingPolicy),
+            FrameDeliveryMode = ResolveFrameDeliveryMode(_videoOutput),
+            OpenTimeoutMilliseconds = ToMilliseconds(Options.Network.OpenTimeout),
+            EndpointProbeTimeoutMilliseconds = ToMilliseconds(Options.Network.EndpointProbeTimeout),
+            ReadTimeoutMilliseconds = ToMilliseconds(Options.Network.ReadTimeout),
+            ReconnectEnabled = Options.Network.Reconnect.IsEnabled,
+            ReconnectInitialDelayMilliseconds = ToMilliseconds(
+                Options.Network.Reconnect.InitialDelay),
+            ReconnectMaximumDelayMilliseconds = ToMilliseconds(
+                Options.Network.Reconnect.MaximumDelay),
+            MaximumReconnectAttempts = Options.Network.Reconnect.MaximumAttempts,
+            OpenOperationSemaphore = _openOperationSemaphore,
+            MaxFramesPerSecond = Options.Video.MaximumFrameRate ?? 0,
+            MaxVideoWidth = Options.Video.MaximumWidth ?? 0,
+            MaxVideoHeight = Options.Video.MaximumHeight ?? 0,
+            LowLatency = Options.Network.LatencyMode == MediaLatencyMode.Low,
+            EnableAudio = Options.Audio.IsEnabled,
             Volume = _volume,
             IsMuted = _isMuted
         };
 
-    internal static RtspRenderMode ResolveRenderMode(IMediaVideoOutput? output) =>
-        output?.Preference is
-            MediaRenderPreference.NativeSurface or
-            MediaRenderPreference.CompositedGpu
-            ? RtspRenderMode.NativeSurface
-            : RtspRenderMode.SoftwareBitmap;
+    internal static RtspFrameDeliveryMode ResolveFrameDeliveryMode(IMediaVideoOutput? output) =>
+        output?.PreferredFrameStorage == MediaFrameStorageKind.D3D11Texture
+            ? RtspFrameDeliveryMode.D3D11Texture
+            : RtspFrameDeliveryMode.CpuMemory;
 
-    private static int ToMilliseconds(TimeSpan value) =>
-        checked((int)Math.Min(value.TotalMilliseconds, int.MaxValue));
+    private static int ToMilliseconds(TimeSpan? value) =>
+        value is null ? 0 : checked((int)Math.Min(value.Value.TotalMilliseconds, int.MaxValue));
 
     private void OnConnectionStateChanged(object? sender, RtspConnectionStateChangedEventArgs args)
     {
@@ -355,11 +355,11 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
         Error?.Invoke(this, new MediaPlaybackErrorEventArgs(error));
     }
 
-    private void OnHardwareAccelerationChanged(object? sender, bool isActive)
+    private void OnHardwareVideoDecodingChanged(object? sender, bool isActive)
     {
         lock (_sync)
         {
-            _isHardwareAccelerationActive = isActive;
+            _isHardwareVideoDecodingActive = isActive;
         }
     }
 
@@ -385,12 +385,13 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
                 subscribers = _frameReceived;
             }
 
-            var frame = TryCopyFrame(lease, Options.CaptureSnapshots || subscribers is not null);
+            var keepLatestFrame = Options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame;
+            var frame = TryCopyFrame(lease, keepLatestFrame || subscribers is not null);
             if (frame is not null)
             {
                 lock (_sync)
                 {
-                    if (Options.CaptureSnapshots)
+                    if (keepLatestFrame)
                     {
                         _lastSnapshot = new MediaSnapshot(
                             frame.Data,
@@ -449,7 +450,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
             lease.Width,
             lease.Height,
             lease.Stride,
-            MediaFramePixelFormat.Bgra32,
+            MediaPixelFormat.Bgra32,
             Interlocked.Increment(ref _frameSequence),
             DateTimeOffset.UtcNow);
     }
@@ -495,7 +496,9 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
 
     private void UpdateFrameDeliveryLocked() =>
         _client?.SetFrameDeliveryEnabled(
-            Options.CaptureSnapshots || _frameReceived is not null || _videoOutput is not null);
+            Options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame ||
+            _frameReceived is not null ||
+            _videoOutput is not null);
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 }
