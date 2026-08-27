@@ -81,6 +81,10 @@ internal sealed class D3D11ImageMediaOutput :
         _failureTracker.Reset();
         _frameSlot.Clear();
         ResetPresentationResources();
+        _device?.Dispose();
+        _device = null;
+        _direct3D?.Dispose();
+        _direct3D = null;
     }
 
     public void Dispose()

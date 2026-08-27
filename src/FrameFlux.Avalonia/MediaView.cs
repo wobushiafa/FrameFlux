@@ -230,7 +230,7 @@ public sealed class MediaView : Control, IAsyncDisposable
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
         await _playback.StopAsync(cancellationToken);
-        _presentation.Reset();
+        await _presentation.ReleaseResourcesAsync();
         _presentation.ClearSoftwareFallback();
     }
 
@@ -399,7 +399,7 @@ public sealed class MediaView : Control, IAsyncDisposable
         try
         {
             await _playback.StopAsync();
-            _presentation.Reset();
+            await _presentation.ReleaseResourcesAsync();
             if (_attached && Source is not null)
             {
                 await StartAsync();

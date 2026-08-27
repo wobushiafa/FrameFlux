@@ -110,6 +110,16 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         _modeChanged(null);
     }
 
+    internal ValueTask ReleaseResourcesAsync()
+    {
+        Reset();
+#if !ANDROID
+        return _compositedOutput.ReleaseResourcesAsync();
+#else
+        return ValueTask.CompletedTask;
+#endif
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)

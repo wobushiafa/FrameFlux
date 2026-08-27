@@ -97,6 +97,32 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
         }
     }
 
+    internal async ValueTask ReleaseResourcesAsync()
+    {
+        Clear();
+        await _presentationGate.WaitAsync();
+        try
+        {
+            if (_surfaceVisual is not null)
+            {
+                _surfaceVisual.Visible = false;
+            }
+
+            await ReleaseImportedImageAsync();
+            _drawingSurface?.Dispose();
+            _drawingSurface = null;
+            _surfaceVisual = null;
+            _gpuInterop = null;
+            _sourceWidth = 0;
+            _sourceHeight = 0;
+            _texture.Reset();
+        }
+        finally
+        {
+            _presentationGate.Release();
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)

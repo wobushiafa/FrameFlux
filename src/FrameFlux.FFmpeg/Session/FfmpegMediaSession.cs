@@ -276,6 +276,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession
                 {
                     _client = null;
                     _stopTask = null;
+                    _lastSnapshot = null;
                 }
             }
 
