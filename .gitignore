@@ -12,6 +12,7 @@ TestResults/
 *.user
 *.userosscache
 *.sln.docstates
+Directory.Build.local.props
 
 # Local verification artifacts
 .verify/
