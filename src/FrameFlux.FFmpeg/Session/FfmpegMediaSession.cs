@@ -214,7 +214,10 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
                 return ValueTask.CompletedTask;
             }
 
-            var client = new RtspStreamClient(Source.Uri.ToString(), CreateEngineOptions());
+            var client = new RtspStreamClient(
+                Source.Uri.ToString(),
+                CreateEngineOptions(),
+                _videoOutput);
             client.ConnectionStateChanged += OnConnectionStateChanged;
             client.StreamError += OnStreamError;
             client.HardwareVideoDecodingChanged += OnHardwareVideoDecodingChanged;

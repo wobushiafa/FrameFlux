@@ -16,9 +16,15 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
     <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
     <ProjectReference Include="..\FrameFlux.Presentation\FrameFlux.Presentation.csproj" />
-    <ProjectReference Include="..\FrameFlux.Rendering.Windows\FrameFlux.Rendering.Windows.csproj"
-                      Condition="'$(TargetFramework)' == 'net8.0'" />
     <PackageReference Include="Avalonia" />
+    <InternalsVisibleTo Include="FrameFlux.Avalonia.Android" />
+    <InternalsVisibleTo Include="FrameFlux.Avalonia.Linux" />
+    <InternalsVisibleTo Include="FrameFlux.Avalonia.Windows" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Rendering\WindowsD3D11CompositionMediaOutput.cs" />
+    <Compile Remove="Rendering\WindowsD3D11MediaOutput.cs" />
   </ItemGroup>
 
   <!-- Keep the generated AAR in sync when Android bindings change but no Android assets remain. -->

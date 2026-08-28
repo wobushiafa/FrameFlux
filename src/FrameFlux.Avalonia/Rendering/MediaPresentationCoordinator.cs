@@ -9,10 +9,8 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
     private readonly Action<MediaVideoPresentationMode?> _modeChanged;
     private readonly Action<MediaPresentationFailure> _presentationFailed;
     private readonly SoftwareBitmapMediaOutput _softwareOutput = new();
-#if !ANDROID
-    private readonly WindowsD3D11CompositionMediaOutput _compositedOutput = new();
-    private readonly WindowsD3D11MediaOutput _nativeOutput = new();
-#endif
+    private readonly IAvaloniaPlatformMediaOutput? _gpuOutput;
+    private readonly IAvaloniaPlatformMediaOutput? _nativeOutput;
     private Control? _overlay;
     private bool _softwareFallbackRequested;
     private bool _disposed;
@@ -26,15 +24,23 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         Surface = new Grid();
         _softwareOutput.FramePresented += OnSoftwareFramePresented;
         Surface.Children.Add(_softwareOutput);
-#if !ANDROID
-        _compositedOutput.IsVisible = false;
-        _compositedOutput.FramePresented += OnCompositedFramePresented;
-        _compositedOutput.PresentationFailed += OnCompositedPresentationFailed;
-        Surface.Children.Add(_compositedOutput);
-        _nativeOutput.IsVisible = false;
-        _nativeOutput.PresentationFailed += OnNativePresentationFailed;
-        Surface.Children.Add(_nativeOutput);
-#endif
+        var platformOutputs = AvaloniaPlatformMediaOutputRegistry.TryCreate();
+        _gpuOutput = platformOutputs.GpuComposition;
+        _nativeOutput = platformOutputs.NativeSurface;
+        if (_gpuOutput is not null)
+        {
+            _gpuOutput.Surface.IsVisible = false;
+            _gpuOutput.FramePresented += OnGpuFramePresented;
+            _gpuOutput.PresentationFailed += OnPlatformPresentationFailed;
+            Surface.Children.Add(_gpuOutput.Surface);
+        }
+        if (_nativeOutput is not null)
+        {
+            _nativeOutput.Surface.IsVisible = false;
+            _nativeOutput.FramePresented += OnNativeFramePresented;
+            _nativeOutput.PresentationFailed += OnPlatformPresentationFailed;
+            Surface.Children.Add(_nativeOutput.Surface);
+        }
     }
 
     internal Grid Surface { get; }
@@ -44,28 +50,34 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         MediaVideoPresentationMode requestedMode,
         Stretch stretch)
     {
+        var platformGpuPresentationAvailable =
+            requestedMode == MediaVideoPresentationMode.NativeSurface
+                ? _nativeOutput is not null
+                : _gpuOutput is not null;
         var plan = MediaPresentationPolicy.Resolve(
             _softwareFallbackRequested
                 ? MediaVideoPresentationMode.SoftwareBitmap
                 : requestedMode,
             options,
-            OperatingSystem.IsWindows(),
+            platformGpuPresentationAvailable,
             _overlay is not null);
         SetStretch(stretch);
-#if !ANDROID
-        _compositedOutput.IsVisible = plan.UsesGpuComposition;
-        _nativeOutput.IsVisible = plan.UsesNativeSurface;
+        if (_gpuOutput is not null)
+        {
+            _gpuOutput.Surface.IsVisible = plan.UsesGpuComposition;
+        }
+        if (_nativeOutput is not null)
+        {
+            _nativeOutput.Surface.IsVisible = plan.UsesNativeSurface;
+        }
         var primaryOutput = plan.UsesNativeSurface
-            ? (IMediaVideoOutput)_nativeOutput
+            ? (IMediaVideoOutput)_nativeOutput!
             : plan.UsesGpuComposition
-                ? _compositedOutput
+                ? _gpuOutput!
                 : _softwareOutput;
         var output = plan.UsesNativeSurface || plan.UsesGpuComposition
             ? new AdaptiveMediaVideoOutput(primaryOutput, _softwareOutput)
             : primaryOutput;
-#else
-        var output = (IMediaVideoOutput)_softwareOutput;
-#endif
         _softwareOutput.IsVisible =
             !plan.UsesNativeSurface && !plan.UsesGpuComposition;
         _modeChanged(plan.EffectiveMode);
@@ -75,10 +87,14 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
     internal void SetStretch(Stretch stretch)
     {
         _softwareOutput.Stretch = stretch;
-#if !ANDROID
-        _compositedOutput.Stretch = stretch;
-        _nativeOutput.Stretch = stretch;
-#endif
+        if (_gpuOutput is not null)
+        {
+            _gpuOutput.Stretch = stretch;
+        }
+        if (_nativeOutput is not null)
+        {
+            _nativeOutput.Stretch = stretch;
+        }
     }
 
     internal void SetOverlay(Control? overlay)
@@ -100,24 +116,31 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
     internal void Reset()
     {
         _softwareOutput.Clear();
-#if !ANDROID
-        _compositedOutput.Clear();
-        _compositedOutput.IsVisible = false;
-        _nativeOutput.Clear();
-        _nativeOutput.IsVisible = false;
-#endif
+        _gpuOutput?.Clear();
+        if (_gpuOutput is not null)
+        {
+            _gpuOutput.Surface.IsVisible = false;
+        }
+        _nativeOutput?.Clear();
+        if (_nativeOutput is not null)
+        {
+            _nativeOutput.Surface.IsVisible = false;
+        }
         _softwareOutput.IsVisible = true;
         _modeChanged(null);
     }
 
-    internal ValueTask ReleaseResourcesAsync()
+    internal async ValueTask ReleaseResourcesAsync()
     {
+        if (_gpuOutput is not null)
+        {
+            await _gpuOutput.ReleaseResourcesAsync();
+        }
+        if (_nativeOutput is not null)
+        {
+            await _nativeOutput.ReleaseResourcesAsync();
+        }
         Reset();
-#if !ANDROID
-        return _compositedOutput.ReleaseResourcesAsync();
-#else
-        return ValueTask.CompletedTask;
-#endif
     }
 
     public async ValueTask DisposeAsync()
@@ -130,40 +153,63 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         _disposed = true;
         _softwareOutput.FramePresented -= OnSoftwareFramePresented;
         _softwareOutput.Dispose();
-#if !ANDROID
-        _compositedOutput.FramePresented -= OnCompositedFramePresented;
-        _compositedOutput.PresentationFailed -= OnCompositedPresentationFailed;
-        await _compositedOutput.DisposeAsync();
-        _nativeOutput.PresentationFailed -= OnNativePresentationFailed;
-        _nativeOutput.Dispose();
-#endif
+        if (_gpuOutput is not null)
+        {
+            _gpuOutput.FramePresented -= OnGpuFramePresented;
+            _gpuOutput.PresentationFailed -= OnPlatformPresentationFailed;
+            await _gpuOutput.DisposeAsync();
+        }
+        if (_nativeOutput is not null)
+        {
+            _nativeOutput.FramePresented -= OnNativeFramePresented;
+            _nativeOutput.PresentationFailed -= OnPlatformPresentationFailed;
+            await _nativeOutput.DisposeAsync();
+        }
     }
 
     private void OnSoftwareFramePresented(object? sender, EventArgs args)
     {
-#if !ANDROID
-        _compositedOutput.IsVisible = false;
-        _nativeOutput.IsVisible = false;
-#endif
+        if (_gpuOutput is not null)
+        {
+            _gpuOutput.Surface.IsVisible = false;
+        }
+        if (_nativeOutput is not null)
+        {
+            _nativeOutput.Surface.IsVisible = false;
+        }
         _softwareOutput.IsVisible = true;
         _modeChanged(MediaVideoPresentationMode.SoftwareBitmap);
     }
 
-#if !ANDROID
-    private void OnCompositedFramePresented(object? sender, EventArgs args)
+    private void OnGpuFramePresented(object? sender, EventArgs args)
     {
-        _nativeOutput.IsVisible = false;
+        if (_nativeOutput is not null)
+        {
+            _nativeOutput.Surface.IsVisible = false;
+        }
         _softwareOutput.IsVisible = false;
-        _compositedOutput.IsVisible = true;
+        if (_gpuOutput is not null)
+        {
+            _gpuOutput.Surface.IsVisible = true;
+        }
         _modeChanged(MediaVideoPresentationMode.GpuComposition);
     }
 
-    private void OnCompositedPresentationFailed(
-        object? sender,
-        MediaPresentationFailure failure) =>
-        ReportPresentationFailure(failure);
+    private void OnNativeFramePresented(object? sender, EventArgs args)
+    {
+        if (_gpuOutput is not null)
+        {
+            _gpuOutput.Surface.IsVisible = false;
+        }
+        _softwareOutput.IsVisible = false;
+        if (_nativeOutput is not null)
+        {
+            _nativeOutput.Surface.IsVisible = true;
+        }
+        _modeChanged(MediaVideoPresentationMode.NativeSurface);
+    }
 
-    private void OnNativePresentationFailed(
+    private void OnPlatformPresentationFailed(
         object? sender,
         MediaPresentationFailure failure) =>
         ReportPresentationFailure(failure);
@@ -177,5 +223,4 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
 
         _presentationFailed(failure);
     }
-#endif
 }

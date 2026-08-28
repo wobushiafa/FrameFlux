@@ -12,6 +12,7 @@ internal sealed class RtspStreamClient : IDisposable
     private static readonly object OpenSemaphoreLock = new();
     private static readonly Random ReconnectJitter = new();
     private readonly string _url;
+    private readonly IMediaVideoOutput? _videoOutput;
     private RtspStreamOptions _options;
     private Thread? _decodeThread;
     private volatile bool _isRunning;
@@ -60,10 +61,14 @@ internal sealed class RtspStreamClient : IDisposable
         Volatile.Read(ref _audioPlayback)?.SetMuted(muted);
     }
 
-    internal RtspStreamClient(string url, RtspStreamOptions options)
+    internal RtspStreamClient(
+        string url,
+        RtspStreamOptions options,
+        IMediaVideoOutput? videoOutput = null)
     {
         _url = url;
         _options = options;
+        _videoOutput = videoOutput;
         _volume = options.Volume;
         _muted = options.IsMuted;
         RtspRuntimeDiagnostics.OnStreamClientCreated();
@@ -126,6 +131,7 @@ internal sealed class RtspStreamClient : IDisposable
             while (_isRunning && !threadCancellationTokenSource.IsCancellationRequested)
             {
                 RtspDecoder? decoder = null;
+                IPlatformRtspDecoder? platformDecoder = null;
                 AudioPlaybackController? audioPlayback = null;
                 var clockSynchronizer = new MediaClockSynchronizer();
                 _synchronizationDiagnostics = MediaSynchronizationDiagnostics.Empty;
@@ -182,8 +188,16 @@ internal sealed class RtspStreamClient : IDisposable
                         openSemaphoreEntered = true;
                     }
 
-                    decoder = new RtspDecoder(_url, _options, cancellationToken);
-                    if (decoder.HasAudio && _options.EnableAudio)
+                    platformDecoder = PlatformRtspDecoderRegistry.TryCreate(
+                        _url,
+                        _options,
+                        _videoOutput,
+                        cancellationToken);
+                    if (platformDecoder is null)
+                    {
+                        decoder = new RtspDecoder(_url, _options, cancellationToken);
+                    }
+                    if ((platformDecoder?.HasAudio ?? decoder!.HasAudio) && _options.EnableAudio)
                     {
                         audioPlayback = new AudioPlaybackController(
                             Volatile.Read(ref _volume),
@@ -201,13 +215,83 @@ internal sealed class RtspStreamClient : IDisposable
                     }
 
                     hasOpened = true;
-                    _videoDecoderDiagnostics = decoder.VideoDecoderDiagnostics;
-                    HardwareVideoDecodingChanged?.Invoke(this, decoder.IsHardwareVideoDecodingActive);
+                    _videoDecoderDiagnostics = platformDecoder?.VideoDecoderDiagnostics ??
+                        decoder!.VideoDecoderDiagnostics;
+                    HardwareVideoDecodingChanged?.Invoke(
+                        this,
+                        platformDecoder?.IsHardwareVideoDecodingActive ?? decoder!.IsHardwareVideoDecodingActive);
                     RaiseConnectionStateChanged(RtspConnectionState.Connected);
                     while (_isRunning && !threadCancellationTokenSource.IsCancellationRequested)
                     {
                         var decodeStart = Stopwatch.GetTimestamp();
-                        var hasFrame = decoder.TryDecodeNextFrame(out var frame);
+                        if (platformDecoder is not null)
+                        {
+                            var hasPlatformFrame = platformDecoder.TryDecodeNextFrame(
+                                out var platformFrame);
+                            DrainAudio(platformDecoder, audioPlayback);
+                            UpdateSynchronizationDiagnostics(clockSynchronizer, audioPlayback);
+                            var platformDecodeTicks = Stopwatch.GetTimestamp() - decodeStart;
+                            if (hasPlatformFrame && platformFrame is not null)
+                            {
+                                consecutiveFailureCount = 0;
+                                using (platformFrame)
+                                {
+                                    if (!SynchronizeVideo(
+                                            platformFrame.PresentationSeconds,
+                                            audioPlayback,
+                                            clockSynchronizer,
+                                            cancellationToken) ||
+                                        !_isFrameDeliveryEnabled ||
+                                        !ShouldRenderFrame(frameInterval, ref lastFrameAt))
+                                    {
+                                        continue;
+                                    }
+
+                                    var dispatchStart = Stopwatch.GetTimestamp();
+                                    platformFrame.Present();
+                                    var dispatchTicks = Stopwatch.GetTimestamp() - dispatchStart;
+                                    PublishPerformanceSnapshot(
+                                        ref totalReadTicks,
+                                        ref totalCodecTicks,
+                                        ref totalHardwareTransferTicks,
+                                        ref totalDecodeTicks,
+                                        ref totalConvertTicks,
+                                        ref totalDispatchTicks,
+                                        ref performanceSamples,
+                                        platformDecoder.LastReadTicks,
+                                        platformDecoder.LastCodecTicks,
+                                        0,
+                                        platformDecodeTicks,
+                                        0,
+                                        dispatchTicks);
+                                }
+
+                                continue;
+                            }
+
+                            if (!_isRunning || threadCancellationTokenSource.IsCancellationRequested)
+                            {
+                                break;
+                            }
+
+                            var platformFailureCount = consecutiveFailureCount + 1;
+                            var platformWillRetry = ShouldReconnect(platformFailureCount);
+                            RaiseStreamError(new RtspStreamError(
+                                RtspStreamErrorKind.EndOfStream,
+                                "Stream ended or no frame was received.",
+                                WillRetry: platformWillRetry));
+                            if (!platformWillRetry)
+                            {
+                                return;
+                            }
+
+                            RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
+                            consecutiveFailureCount = platformFailureCount;
+                            SleepBeforeReconnect(threadCancellationTokenSource, consecutiveFailureCount);
+                            break;
+                        }
+
+                        var hasFrame = decoder!.TryDecodeNextFrame(out var frame);
                         DrainAudio(decoder, audioPlayback);
                         UpdateSynchronizationDiagnostics(clockSynchronizer, audioPlayback);
                         var decodeElapsedTicks = Stopwatch.GetTimestamp() - decodeStart;
@@ -455,6 +539,7 @@ internal sealed class RtspStreamClient : IDisposable
                     }
 
                     decoder?.Dispose();
+                    platformDecoder?.Dispose();
                     if (bgraBuffer != IntPtr.Zero)
                     {
                         Marshal.FreeHGlobal(bgraBuffer);
@@ -612,6 +697,22 @@ internal sealed class RtspStreamClient : IDisposable
         }
     }
 
+    private static void DrainAudio(
+        IPlatformRtspDecoder decoder,
+        AudioPlaybackController? audioPlayback)
+    {
+        if (audioPlayback is null)
+        {
+            while (decoder.TryDequeueAudioFrame(out _)) { }
+            return;
+        }
+
+        while (decoder.TryDequeueAudioFrame(out var audioFrame) && audioFrame is not null)
+        {
+            audioPlayback.Write(audioFrame);
+        }
+    }
+
     private bool SynchronizeVideo(
         NativeDecodedFrame frame,
         AudioPlaybackController? audioPlayback,
@@ -626,8 +727,22 @@ internal sealed class RtspStreamClient : IDisposable
 
         var videoPosition = frame.Info.PresentationTimestamp *
             (double)frame.Info.TimeBaseNumerator / frame.Info.TimeBaseDenominator;
-        var decision = clockSynchronizer.EvaluateVideo(
+        return SynchronizeVideo(
             videoPosition,
+            audioPlayback,
+            clockSynchronizer,
+            cancellationToken);
+    }
+
+    private bool SynchronizeVideo(
+        double? videoPosition,
+        AudioPlaybackController? audioPlayback,
+        MediaClockSynchronizer clockSynchronizer,
+        CancellationToken cancellationToken)
+    {
+        if (videoPosition is null) return true;
+        var decision = clockSynchronizer.EvaluateVideo(
+            videoPosition.Value,
             audioPlayback?.PositionSeconds);
         UpdateSynchronizationDiagnostics(clockSynchronizer, audioPlayback);
         if (decision.Action == MediaVideoSynchronizationAction.Drop)

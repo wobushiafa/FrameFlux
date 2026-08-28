@@ -1,6 +1,6 @@
 # FrameFlux
 
-FrameFlux is a cross-platform media playback library built on FFmpeg. Its current implementation provides RTSP playback, while the package boundaries are ready for local files and additional media sources. The managed packages directly bind the required FFmpeg exports and do not depend on `FFmpeg.AutoGen` or a FrameFlux native adapter.
+FrameFlux is a cross-platform media playback library built on FFmpeg. Its current implementation provides RTSP playback, while the package boundaries are ready for local files and additional media sources. The managed packages directly bind the required FFmpeg exports and do not depend on `FFmpeg.AutoGen`. Hardware decoding uses a versioned managed ABI layout generated from the matching FFmpeg public headers.
 
 Current playback capabilities include video and audio decoding, platform audio output, audio-master A/V synchronization, and live volume/mute control. Audio is normalized internally to 48 kHz stereo signed 16-bit PCM.
 
@@ -8,9 +8,13 @@ Current playback capabilities include video and audio decoding, platform audio o
 | --- | --- | --- |
 | `src/FrameFlux.Abstractions` | `FrameFlux.Abstractions` | Protocol-neutral player, source, frame, capability, and video-output contracts. |
 | `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | UI-independent FFmpeg media player and RTSP backend, without bundled native binaries. |
+| `src/FrameFlux.FFmpeg.Android` | `FrameFlux.FFmpeg.Android` | Android MediaCodec hardware decoder fed by FFmpeg-demuxed H.264/HEVC packets. |
 | `src/FrameFlux.Presentation` | `FrameFlux.Presentation` | Shared backend-neutral playback lifecycle used by UI controls. |
 | `src/FrameFlux.Rendering.Windows` | `FrameFlux.Rendering.Windows` | Shared Win32 and D3D11 video presentation used by Windows UI controls. |
 | `src/FrameFlux.Avalonia` | `FrameFlux.Avalonia` | Avalonia `MediaView` and platform rendering outputs. |
+| `src/FrameFlux.Avalonia.Android` | `FrameFlux.Avalonia.Android` | Opt-in Android SurfaceTexture/OES zero-copy presentation backend for Avalonia. |
+| `src/FrameFlux.Avalonia.Linux` | `FrameFlux.Avalonia.Linux` | Opt-in Linux OpenGL texture presentation backend for Avalonia. |
+| `src/FrameFlux.Avalonia.Windows` | `FrameFlux.Avalonia.Windows` | Opt-in Windows D3D11 presentation backend for Avalonia. |
 | `src/FrameFlux.Wpf` | `FrameFlux.Wpf` | Reusable WPF media playback control and renderer. |
 | `src/FrameFlux.FFmpeg.NativeAssets.Windows` | `FrameFlux.FFmpeg.NativeAssets.Windows` | Windows x64 FFmpeg runtime assets. |
 | `src/FrameFlux.FFmpeg.NativeAssets.Linux` | `FrameFlux.FFmpeg.NativeAssets.Linux` | Linux x64 FFmpeg runtime assets. |
@@ -21,7 +25,7 @@ Current playback capabilities include video and audio decoding, platform audio o
 | Demo | Framework | Playback integration |
 | --- | --- | --- |
 | `examples/FrameFlux.Demo.Wpf` | WPF (Windows) | Uses the reusable `MediaView` control with bindable volume and mute. |
-| `examples/FrameFlux.Demo.Avalonia.Desktop` | Avalonia Desktop | Hosts the shared AXAML UI and uses zero-copy D3D11VA/D3D11 presentation on Windows. |
+| `examples/FrameFlux.Demo.Avalonia.Desktop` | Avalonia Desktop | Hosts the shared AXAML UI, using D3D11 on Windows and the registered OpenGL backend on Linux. |
 | `examples/FrameFlux.Demo.Avalonia.Android` | Avalonia Android | Hosts the same AXAML UI in a standard Android activity. |
 
 ```powershell
@@ -33,13 +37,41 @@ dotnet build examples/FrameFlux.Demo.Avalonia.Android -c Release `
 
 Desktop demo builds automatically copy the current host RID's FFmpeg files from `native/artifacts/runtimes/{rid}/native` into their output. Override `FrameFluxNativeRuntimeIdentifier` when testing a different RID. Published applications should reference the matching `FrameFlux.FFmpeg.NativeAssets.*` package; the core `FrameFlux.FFmpeg` package contains no native binaries. The Android asset package maps each ABI-specific `.so` into the Android application package.
 
-On Windows, `MediaVideoPresentationMode.NativeSurface` uses FFmpeg D3D11VA
+Avalonia desktop applications reference and register only the platform packages
+they ship. A cross-platform desktop bundle can register both; each backend is
+created only on its matching operating system:
+
+```csharp
+AppBuilder.Configure<App>()
+    .UsePlatformDetect()
+    .UseFrameFluxWindows()
+    .UseFrameFluxLinux();
+```
+
+On Windows, `FrameFlux.Avalonia.Windows` and
+`MediaVideoPresentationMode.NativeSurface` use FFmpeg D3D11VA
 frames directly in a D3D11 video processor and DXGI swap chain. This
 minimum-latency path does not read frames back to the CPU. Avalonia and WPF
 also support `MediaVideoPresentationMode.GpuComposition` for dedicated
 playback. It converts the decoder texture to a shared BGRA texture and imports
 it into the framework compositor, allowing framework controls to render above
-the video. Linux and Android currently use software frame delivery.
+the video. Linux applications can reference `FrameFlux.Avalonia.Linux` and call
+`UseFrameFluxLinux()` during `AppBuilder` configuration. The Linux backend uses
+VAAPI hardware decoding when available, transfers the decoded frame to system
+memory, and uploads it into an OpenGL texture for overlay-capable composition.
+Android applications reference `FrameFlux.Avalonia.Android` and register it in
+the Android application builder:
+
+```csharp
+protected override AppBuilder CustomizeAppBuilder(AppBuilder builder) =>
+    base.CustomizeAppBuilder(builder).UseFrameFluxAndroid();
+```
+
+The registration also enables `FrameFlux.FFmpeg.Android`. FFmpeg reads RTSP
+and decodes audio directly from the supplied shared libraries; H.264/HEVC
+video packets are sent to Android MediaCodec and rendered to SurfaceTexture's
+`GL_TEXTURE_EXTERNAL_OES` texture without CPU readback. Snapshot requests use
+the software path because zero-copy Surface output has no CPU frame to retain.
 
 Decoding and rendering are configured independently:
 
@@ -58,8 +90,9 @@ Player.PresentationMode = MediaVideoPresentationMode.GpuComposition;
 `HardwarePreferred`, or `HardwareRequired`. `PresentationMode` accepts
 `Automatic`, `SoftwareBitmap`, `NativeSurface`, or `GpuComposition`.
 Assigning either setting while an Avalonia or WPF player is active performs a
-controlled restart. Explicit GPU presentation requires Windows, a dedicated
-session, and hardware-capable decoding; unsupported explicit combinations
+controlled restart. Explicit GPU presentation requires a registered platform
+GPU backend, a dedicated session, and hardware-capable decoding; unsupported
+explicit combinations
 throw instead of silently changing mode. `Automatic` presentation chooses GPU
 composition when available and software otherwise. When
 `HardwarePreferred` falls back to software decoding, the adaptive output
@@ -102,7 +135,14 @@ WPF applications can then use the packaged control:
 
 `MediaView.Source` uses the protocol-neutral `MediaSource` contract. The current backend accepts RTSP and RTSPS; local file support can be added without changing the WPF or Avalonia control APIs.
 
-The configured directory must contain one complete, architecture-matched FFmpeg build. Audio playback requires `avcodec`, `avformat`, `avutil`, `swscale`, and `swresample` from the same FFmpeg release. FrameFlux does not require `FFmpeg.AutoGen` or `frameflux_ffmpeg.dll`.
+The configured directory must contain one complete, architecture-matched
+FFmpeg build. Audio playback requires `avcodec`, `avformat`, `avutil`,
+`swscale`, and `swresample` from the same FFmpeg release. Windows D3D11VA and
+Linux VAAPI use those libraries directly; no FrameFlux adapter library is
+required. Android uses the same direct FFmpeg exports for demuxing and audio,
+then passes encoded video access units to the operating-system MediaCodec API;
+there is no FrameFlux C bridge or private FFmpeg MediaCodec structure access.
+
 
 Platform audio output uses Windows WASAPI shared mode, Linux ALSA
 (`libasound.so.2`), and Android `AudioTrack`. Windows retains `waveOut` only

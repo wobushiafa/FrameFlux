@@ -97,7 +97,8 @@ internal sealed class RtspDecoder : IDisposable
     public bool IsHardwareVideoDecodingActive =>
         !_disposed && FrameFluxFFmpegNative.IsHardwareActive(_session) != 0;
 
-    public bool IsLinuxVaapiActive => false;
+    public bool IsLinuxVaapiActive =>
+        OperatingSystem.IsLinux() && IsHardwareVideoDecodingActive;
 
     public string VideoDecoderDiagnostics { get; }
 

@@ -23,7 +23,7 @@ public sealed class MediaConfigurationTests
     [Fact]
     public void DecodingPolicy_AutomaticUsesPlatformDefault()
     {
-        var expected = OperatingSystem.IsWindows()
+        var expected = OperatingSystem.IsWindows() || OperatingSystem.IsLinux()
             ? RtspVideoDecodingMode.HardwarePreferred
             : RtspVideoDecodingMode.SoftwareOnly;
 

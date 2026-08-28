@@ -5,8 +5,11 @@ namespace FrameFlux.FFmpeg.Tests;
 
 public sealed class FFmpegHardwareAbiTests
 {
-    [Fact]
-    public void ConfigureD3D11vaCodecContext_WritesValidatedFfmpeg7Offsets()
+    [Theory]
+    [InlineData(61)]
+    [InlineData(62)]
+    public void ConfigureHardwareDecoderCodecContext_WritesValidatedOffsets(
+        int codecMajorVersion)
     {
         if (IntPtr.Size != 8)
         {
@@ -16,16 +19,16 @@ public sealed class FFmpegHardwareAbiTests
         var codecContext = Marshal.AllocHGlobal(864);
         try
         {
-            Span<byte> cleared = new byte[864];
-            Marshal.Copy(cleared.ToArray(), 0, codecContext, cleared.Length);
+            var cleared = new byte[864];
+            Marshal.Copy(cleared, 0, codecContext, cleared.Length);
             var deviceContext = new IntPtr(0x1234);
             var callback = new IntPtr(0x5678);
 
-            FFmpegAbi.ConfigureD3D11vaCodecContext(
+            FFmpegAbi.ConfigureHardwareDecoderCodecContext(
                 codecContext,
                 deviceContext,
                 callback,
-                codecMajorVersion: 61);
+                codecMajorVersion);
 
             Assert.Equal(callback, Marshal.ReadIntPtr(codecContext, 192));
             Assert.Equal(deviceContext, Marshal.ReadIntPtr(codecContext, 560));
@@ -37,17 +40,17 @@ public sealed class FFmpegHardwareAbiTests
     }
 
     [Fact]
-    public void ConfigureD3D11vaCodecContext_RejectsUnvalidatedCodecMajor()
+    public void HardwareDecoderLayout_RejectsUnvalidatedCodecMajor()
     {
         var codecContext = Marshal.AllocHGlobal(864);
         try
         {
             Assert.Throws<NotSupportedException>(() =>
-                FFmpegAbi.ConfigureD3D11vaCodecContext(
+                FFmpegAbi.ConfigureHardwareDecoderCodecContext(
                     codecContext,
                     IntPtr.Zero,
                     IntPtr.Zero,
-                    codecMajorVersion: 62));
+                    codecMajorVersion: 60));
         }
         finally
         {
@@ -55,18 +58,42 @@ public sealed class FFmpegHardwareAbiTests
         }
     }
 
-    [Fact]
-    public void ReadFrameFormat_ReadsFfmpeg7FormatField()
+    [Theory]
+    [InlineData(61)]
+    [InlineData(62)]
+    public void ReadFrameFormat_ReadsValidatedFormatField(int codecMajorVersion)
     {
         var frame = Marshal.AllocHGlobal(440);
         try
         {
             Marshal.WriteInt32(frame, 116, 172);
-            Assert.Equal(172, FFmpegAbi.ReadFrameFormat(frame));
+            Assert.Equal(172, FFmpegAbi.ReadFrameFormat(frame, codecMajorVersion));
         }
         finally
         {
             Marshal.FreeHGlobal(frame);
+        }
+    }
+
+    [Fact]
+    public void ReadHardwareConfig_UsesPublicHeaderLayout()
+    {
+        var config = Marshal.AllocHGlobal(sizeof(int) * 3);
+        try
+        {
+            Marshal.WriteInt32(config, 0, 172);
+            Marshal.WriteInt32(config, sizeof(int), 1);
+            Marshal.WriteInt32(config, sizeof(int) * 2, 3);
+
+            var actual = FFmpegAbi.ReadHardwareConfig(config);
+
+            Assert.Equal(172, actual.PixelFormat);
+            Assert.Equal(1, actual.Methods);
+            Assert.Equal(3, actual.DeviceType);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(config);
         }
     }
 

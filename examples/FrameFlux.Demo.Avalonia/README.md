@@ -11,6 +11,11 @@ dotnet run --project examples/FrameFlux.Demo.Avalonia.Desktop
 dotnet build examples/FrameFlux.Demo.Avalonia.Android -c Release
 ```
 
-On Windows, the demo requests the native-surface renderer. D3D11VA decoded
-textures are presented through D3D11 and DXGI without CPU readback. Android
-uses the same public control API without taking a dependency on DirectX.
+On Windows, the desktop host registers `FrameFlux.Avalonia.Windows` and the
+demo requests the native-surface renderer. D3D11VA decoded textures are
+presented through D3D11 and DXGI without CPU readback. On Linux, the host
+registers `FrameFlux.Avalonia.Linux`, uses VAAPI when available, and renders
+through an Avalonia OpenGL texture. Android uses the same public control API
+while registering `FrameFlux.Avalonia.Android`; FFmpeg-demuxed H.264/HEVC is
+decoded by MediaCodec and presented through a SurfaceTexture external OES
+texture without CPU readback or a desktop graphics dependency.

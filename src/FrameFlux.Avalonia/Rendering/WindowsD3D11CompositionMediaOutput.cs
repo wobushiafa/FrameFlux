@@ -12,8 +12,7 @@ namespace FrameFlux.Avalonia;
 
 internal sealed class WindowsD3D11CompositionMediaOutput :
     Control,
-    IMediaVideoOutput,
-    IAsyncDisposable
+    IAvaloniaPlatformMediaOutput
 {
     private const ulong ProducerKey = 0;
     private const ulong ConsumerKey = 1;
@@ -40,7 +39,9 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
 
     public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.D3D11Texture;
 
-    internal Stretch Stretch
+    public Control Surface => this;
+
+    public Stretch Stretch
     {
         get => _stretch;
         set
@@ -50,9 +51,9 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
         }
     }
 
-    internal event EventHandler? FramePresented;
+    public event EventHandler? FramePresented;
 
-    internal event Action<object?, MediaPresentationFailure>? PresentationFailed;
+    public event Action<object?, MediaPresentationFailure>? PresentationFailed;
 
     public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
         storageKind == MediaFrameStorageKind.D3D11Texture;
@@ -87,7 +88,7 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
         return true;
     }
 
-    internal void Clear()
+    public void Clear()
     {
         _failureTracker.Reset();
         _frameSlot.Clear();
@@ -97,7 +98,7 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
         }
     }
 
-    internal async ValueTask ReleaseResourcesAsync()
+    public async ValueTask ReleaseResourcesAsync()
     {
         Clear();
         await _presentationGate.WaitAsync();

@@ -103,8 +103,30 @@ FFmpegHelper.RegisterFFmpeg(@"C:\ffmpeg\bin");
 
 The loader accepts versioned Windows, Linux, macOS, and Android library names,
 validates the required `avutil`, `avcodec`, `avformat`, `swscale`, and
-`swresample` components, and calls their exported functions directly. No
-FrameFlux adapter library is required. A process can use only one configured
-FFmpeg directory.
+`swresample` components, and calls their exported functions directly. Windows
+D3D11VA and Linux VAAPI share the same managed hardware-decoder initialization
+path. The small required structure layout is versioned in the managed ABI layer
+and generated from the matching FFmpeg 7/8 public headers. No FrameFlux native
+adapter library is loaded. A process can use only one configured FFmpeg directory.
+
+On Linux, `Automatic` and `HardwarePreferred` request VAAPI and fall back to
+software when the codec, render node, or driver is unavailable.
+`HardwareRequired` reports initialization failure instead. The initial VAAPI
+path transfers hardware frames to system memory before presentation; inspect
+`MediaDiagnostics.IsHardwareVideoDecodingActive` and
+`MediaDiagnostics.VideoDecoderDiagnostics` for the effective path.
+
+On Android, reference `FrameFlux.FFmpeg.Android` and register
+`FrameFluxAndroidMediaCodec` (the Avalonia Android extension does this
+automatically). The core FFmpeg binding continues to open RTSP, demux packets,
+and decode audio directly from the supplied `.so` exports. H.264 and HEVC
+access units are normalized to Annex-B and queued into the public Android
+MediaCodec API. Decoded output is released to an application-provided
+`IAndroidVideoSurfaceOutput`; no native FrameFlux bridge or FFmpeg private
+MediaCodec ABI is used.
+
+Android Surface decoding requires a dedicated session and snapshots disabled.
+`HardwarePreferred` falls back to the normal software decoder when the codec,
+Surface, or GL context is unavailable. `HardwareRequired` reports the failure.
 
 Navigation visibility policy and full-screen ownership remain application concerns.

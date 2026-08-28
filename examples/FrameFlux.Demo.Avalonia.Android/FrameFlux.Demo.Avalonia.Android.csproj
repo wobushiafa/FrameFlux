@@ -13,6 +13,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\FrameFlux.Demo.Avalonia\FrameFlux.Demo.Avalonia.csproj" />
+    <ProjectReference Include="..\..\src\FrameFlux.Avalonia.Android\FrameFlux.Avalonia.Android.csproj" />
     <PackageReference Include="Avalonia.Android" />
     <PackageReference Include="Xamarin.AndroidX.Core.SplashScreen" />
   </ItemGroup>

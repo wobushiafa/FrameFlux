@@ -8,6 +8,9 @@ internal sealed class FFmpegApi
 
     private FFmpegApi()
     {
+        _hardwareApi = new Lazy<FFmpegHardwareApi>(
+            static () => new FFmpegHardwareApi(),
+            LazyThreadSafetyMode.ExecutionAndPublication);
         AvCodecVersion = Load<VersionDelegate>("avcodec", "avcodec_version");
         AvFormatVersion = Load<VersionDelegate>("avformat", "avformat_version");
         AvUtilVersion = Load<VersionDelegate>("avutil", "avutil_version");
@@ -43,12 +46,6 @@ internal sealed class FFmpegApi
         AvFrameCopyProperties = Load<FrameCopyPropertiesDelegate>("avutil", "av_frame_copy_props");
         AvFrameUnref = Load<UnrefDelegate>("avutil", "av_frame_unref");
         AvFrameFree = Load<FreeDelegate>("avutil", "av_frame_free");
-        AvHardwareDeviceFindTypeByName = Load<HardwareDeviceFindTypeByNameDelegate>("avutil", "av_hwdevice_find_type_by_name");
-        AvHardwareDeviceContextCreate = Load<HardwareDeviceContextCreateDelegate>("avutil", "av_hwdevice_ctx_create");
-        AvHardwareFrameTransferData = Load<HardwareFrameTransferDataDelegate>("avutil", "av_hwframe_transfer_data");
-        AvBufferReference = Load<BufferReferenceDelegate>("avutil", "av_buffer_ref");
-        AvBufferUnreference = Load<BufferUnreferenceDelegate>("avutil", "av_buffer_unref");
-        AvCodecGetHardwareConfig = Load<CodecGetHardwareConfigDelegate>("avcodec", "avcodec_get_hw_config");
         SwsGetCachedContext = Load<SwsGetCachedContextDelegate>("swscale", "sws_getCachedContext");
         SwsScale = Load<SwsScaleDelegate>("swscale", "sws_scale");
         SwsFreeContext = Load<SwsFreeContextDelegate>("swscale", "sws_freeContext");
@@ -74,6 +71,8 @@ internal sealed class FFmpegApi
     }
 
     internal static FFmpegApi Instance => LazyInstance.Value;
+    private readonly Lazy<FFmpegHardwareApi> _hardwareApi;
+    internal FFmpegHardwareApi Hardware => _hardwareApi.Value;
     internal int CodecMajorVersion { get; }
     internal int FormatMajorVersion { get; }
     internal int UtilMajorVersion { get; }
@@ -114,12 +113,6 @@ internal sealed class FFmpegApi
     internal FrameCopyPropertiesDelegate AvFrameCopyProperties { get; }
     internal UnrefDelegate AvFrameUnref { get; }
     internal FreeDelegate AvFrameFree { get; }
-    internal HardwareDeviceFindTypeByNameDelegate AvHardwareDeviceFindTypeByName { get; }
-    internal HardwareDeviceContextCreateDelegate AvHardwareDeviceContextCreate { get; }
-    internal HardwareFrameTransferDataDelegate AvHardwareFrameTransferData { get; }
-    internal BufferReferenceDelegate AvBufferReference { get; }
-    internal BufferUnreferenceDelegate AvBufferUnreference { get; }
-    internal CodecGetHardwareConfigDelegate AvCodecGetHardwareConfig { get; }
     internal SwsGetCachedContextDelegate SwsGetCachedContext { get; }
     internal SwsScaleDelegate SwsScale { get; }
     internal SwsFreeContextDelegate SwsFreeContext { get; }
@@ -205,12 +198,6 @@ internal sealed class FFmpegApi
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FrameCopyPropertiesDelegate(IntPtr destination, IntPtr source);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void UnrefDelegate(IntPtr value);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void FreeDelegate(ref IntPtr value);
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int HardwareDeviceFindTypeByNameDelegate(IntPtr name);
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int HardwareDeviceContextCreateDelegate(ref IntPtr deviceContext, int type, IntPtr device, IntPtr options, int flags);
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int HardwareFrameTransferDataDelegate(IntPtr destination, IntPtr source, int flags);
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr BufferReferenceDelegate(IntPtr buffer);
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void BufferUnreferenceDelegate(ref IntPtr buffer);
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr CodecGetHardwareConfigDelegate(IntPtr codec, int index);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int GetFormatDelegate(IntPtr codecContext, IntPtr formats);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr SwsGetCachedContextDelegate(IntPtr context, int sourceWidth, int sourceHeight, int sourceFormat, int destinationWidth, int destinationHeight, int destinationFormat, int flags, IntPtr sourceFilter, IntPtr destinationFilter, IntPtr parameters);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int SwsScaleDelegate(IntPtr context, IntPtr sourceData, IntPtr sourceStride, int sourceSliceY, int sourceSliceHeight, IntPtr destinationData, IntPtr destinationStride);

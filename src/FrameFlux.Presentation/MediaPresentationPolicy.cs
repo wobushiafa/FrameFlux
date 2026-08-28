@@ -44,7 +44,7 @@ internal static class MediaPresentationPolicy
                 MediaVideoPresentationMode.GpuComposition)
         {
             throw new InvalidOperationException(
-                "The requested GPU presentation mode requires Windows, a dedicated session, and hardware-capable decoding.");
+                "The requested GPU presentation mode requires an available platform backend, a dedicated session, and hardware-capable decoding.");
         }
 
         var effectiveMode = requestedMode == MediaVideoPresentationMode.Automatic
@@ -61,7 +61,9 @@ internal static class MediaPresentationPolicy
 
 internal sealed class AdaptiveMediaVideoOutput(
     IMediaVideoOutput primary,
-    IMediaVideoOutput softwareFallback) : IMediaVideoOutput
+    IMediaVideoOutput softwareFallback) :
+    IMediaVideoOutput,
+    IMediaVideoOutputFeatureProvider
 {
     public MediaFrameStorageKind PreferredFrameStorage => primary.PreferredFrameStorage;
 
@@ -77,6 +79,17 @@ internal sealed class AdaptiveMediaVideoOutput(
         return output.Supports(frame.StorageKind, frame.PixelFormat) &&
                output.TryPresent(frame);
     }
+
+    public object? GetVideoOutputFeature(Type featureType)
+    {
+        ArgumentNullException.ThrowIfNull(featureType);
+        return GetFeature(primary, featureType) ?? GetFeature(softwareFallback, featureType);
+    }
+
+    private static object? GetFeature(IMediaVideoOutput output, Type featureType) =>
+        featureType.IsInstanceOfType(output)
+            ? output
+            : (output as IMediaVideoOutputFeatureProvider)?.GetVideoOutputFeature(featureType);
 }
 
 internal sealed record MediaPresentationFailure(

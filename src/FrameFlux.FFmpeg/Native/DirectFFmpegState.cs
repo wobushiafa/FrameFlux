@@ -23,7 +23,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
     private IntPtr _scaleContext;
     private IntPtr _stream;
     private IntPtr _codecParameters;
-    private D3D11vaDecoderContext? _d3d11va;
+    private IHardwareDecoderContext? _hardwareDecoder;
     private int _videoStreamIndex = -1;
     private readonly BoundedAudioFrameQueue _audioFrames = new();
     private IntPtr _audioCodecContext;
@@ -41,8 +41,8 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
 
     internal string Error { get; private set; } = "Unknown FFmpeg error.";
     internal string VideoDecoderDiagnostics { get; private set; } = "Disabled";
-    internal bool IsHardwareVideoDecodingActive => _d3d11va is not null;
-    internal long LastHardwareTransferTicks => _d3d11va?.LastTransferTicks ?? 0;
+    internal bool IsHardwareVideoDecodingActive => _hardwareDecoder is not null;
+    internal long LastHardwareTransferTicks => _hardwareDecoder?.LastTransferTicks ?? 0;
     internal bool HasAudio => _audioCodecContext != IntPtr.Zero;
 
     internal int Open(in NativeRtspOptions options)
@@ -53,7 +53,9 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
             return -1;
         }
 
-        VideoDecoderDiagnostics = options.UseHardwareAcceleration != 0 ? "D3D11VA requested" : "Disabled";
+        VideoDecoderDiagnostics = options.UseHardwareAcceleration != 0
+            ? $"{HardwareDecoderContextFactory.PlatformBackendName} requested"
+            : "Disabled";
         _preserveHardwareFrames = options.PreserveHardwareFrames != 0;
         _formatContext = _api.AvFormatAllocContext();
         if (_formatContext == IntPtr.Zero)
@@ -346,8 +348,8 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         if (_decodeFrame != IntPtr.Zero) _api.AvFrameFree(ref _decodeFrame);
         if (_packet != IntPtr.Zero) _api.AvPacketFree(ref _packet);
         if (_codecContext != IntPtr.Zero) _api.AvCodecFreeContext(ref _codecContext);
-        _d3d11va?.Dispose();
-        _d3d11va = null;
+        _hardwareDecoder?.Dispose();
+        _hardwareDecoder = null;
         if (_formatContext != IntPtr.Zero) _api.AvFormatCloseInput(ref _formatContext);
         if (_interruptHandle.IsAllocated) _interruptHandle.Free();
     }
@@ -444,10 +446,15 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         if (result < 0) return FailRead(result, "avcodec_receive_frame");
 
         var source = _decodeFrame;
-        var isD3D11Frame = _d3d11va is not null && _d3d11va.IsHardwareFrame(_decodeFrame);
-        if (isD3D11Frame && !_preserveHardwareFrames)
+        var isHardwareFrame =
+            _hardwareDecoder is not null && _hardwareDecoder.IsHardwareFrame(_decodeFrame);
+        var preserveHardwareFrame =
+            isHardwareFrame &&
+            _preserveHardwareFrames &&
+            _hardwareDecoder!.SupportsDirectFrameOutput;
+        if (isHardwareFrame && !preserveHardwareFrame)
         {
-            result = _d3d11va!.Transfer(_decodeFrame, out source);
+            result = _hardwareDecoder!.Transfer(_decodeFrame, out source);
             if (result < 0)
             {
                 _api.AvFrameUnref(_decodeFrame);
@@ -467,7 +474,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
             clone,
             _videoTimeBaseNumerator,
             _videoTimeBaseDenominator,
-            isD3D11Frame && _preserveHardwareFrames);
+            preserveHardwareFrame);
         return NativeReadResult.Ok;
     }
 
@@ -485,16 +492,22 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
             return result < 0 ? Fail(result, "avcodec_open2") : 0;
         }
 
-        if (!D3D11vaDecoderContext.TryCreate(_api, decoder, _codecContext,
-                out _d3d11va, out var hardwareError))
+        var backendName = HardwareDecoderContextFactory.PlatformBackendName;
+        if (!HardwareDecoderContextFactory.TryCreate(
+                _api,
+                decoder,
+                _codecContext,
+                out _hardwareDecoder,
+                out var hardwareError))
         {
             if (options.FallbackToSoftware == 0)
             {
-                Error = $"D3D11VA initialization failed: {hardwareError}.";
+                Error = $"{backendName} initialization failed: {hardwareError}.";
                 return -1;
             }
 
-            VideoDecoderDiagnostics = $"D3D11VA unavailable: {hardwareError}; software fallback";
+            VideoDecoderDiagnostics =
+                $"{backendName} unavailable: {hardwareError}; software fallback";
             result = _api.AvCodecOpen2(_codecContext, decoder, IntPtr.Zero);
             return result < 0 ? Fail(result, "avcodec_open2") : 0;
         }
@@ -502,24 +515,26 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         result = _api.AvCodecOpen2(_codecContext, decoder, IntPtr.Zero);
         if (result >= 0)
         {
-            VideoDecoderDiagnostics = _preserveHardwareFrames
-                ? "D3D11VA active (FFmpeg 7, zero-copy D3D11 texture output)"
-                : "D3D11VA active (FFmpeg 7, hardware frames transferred to system memory)";
+            VideoDecoderDiagnostics =
+                _preserveHardwareFrames && _hardwareDecoder!.SupportsDirectFrameOutput
+                    ? $"{_hardwareDecoder.BackendName} active (zero-copy texture output)"
+                    : $"{_hardwareDecoder!.BackendName} active (hardware frames transferred to system memory)";
             return 0;
         }
 
         var openError = _api.FormatError(result);
         if (options.FallbackToSoftware == 0)
         {
-            Error = $"D3D11VA decoder initialization failed: {openError} ({result}).";
+            Error = $"{backendName} decoder initialization failed: {openError} ({result}).";
             return result;
         }
 
         _api.AvFrameFree(ref _decodeFrame);
         _api.AvCodecFreeContext(ref _codecContext);
-        _d3d11va!.Dispose();
-        _d3d11va = null;
-        VideoDecoderDiagnostics = $"D3D11VA decoder initialization failed: {openError} ({result}); software fallback";
+        _hardwareDecoder!.Dispose();
+        _hardwareDecoder = null;
+        VideoDecoderDiagnostics =
+            $"{backendName} decoder initialization failed: {openError} ({result}); software fallback";
 
         result = AllocateVideoDecoder(decoder);
         if (result < 0) return result;
@@ -897,20 +912,53 @@ internal static class FFmpegAbi
             lineSize);
     }
 
-    internal static int ReadFrameFormat(IntPtr frame) => Marshal.ReadInt32(frame, 116);
+    internal static bool SupportsHardwareDecoderLayout(int codecMajorVersion) =>
+        IntPtr.Size == 8 && codecMajorVersion is 61 or 62;
 
-    internal static void ConfigureD3D11vaCodecContext(
+    internal static int ReadFrameFormat(IntPtr frame, int codecMajorVersion)
+    {
+        var layout = GetHardwareDecoderLayout(codecMajorVersion);
+        return Marshal.ReadInt32(frame, layout.FrameFormatOffset);
+    }
+
+    internal static HardwareDecoderConfig ReadHardwareConfig(IntPtr config) =>
+        new(
+            Marshal.ReadInt32(config, 0),
+            Marshal.ReadInt32(config, sizeof(int)),
+            Marshal.ReadInt32(config, sizeof(int) * 2));
+
+    internal static void ConfigureHardwareDecoderCodecContext(
         IntPtr codecContext,
         IntPtr hardwareDeviceContext,
         IntPtr getFormatCallback,
         int codecMajorVersion)
     {
-        if (codecMajorVersion != 61 || IntPtr.Size != 8)
-            throw new NotSupportedException("The D3D11VA codec ABI is only validated for FFmpeg 7 x64.");
-
-        Marshal.WriteIntPtr(codecContext, 192, getFormatCallback);
-        Marshal.WriteIntPtr(codecContext, 560, hardwareDeviceContext);
+        var layout = GetHardwareDecoderLayout(codecMajorVersion);
+        Marshal.WriteIntPtr(codecContext, layout.GetFormatOffset, getFormatCallback);
+        Marshal.WriteIntPtr(codecContext, layout.HardwareDeviceContextOffset, hardwareDeviceContext);
     }
+
+    private static HardwareDecoderAbiLayout GetHardwareDecoderLayout(
+        int codecMajorVersion)
+    {
+        if (!SupportsHardwareDecoderLayout(codecMajorVersion))
+        {
+            throw new NotSupportedException(
+                $"The hardware decoder ABI is only validated for FFmpeg 7 and 8 x64; " +
+                $"found avcodec {codecMajorVersion}.");
+        }
+
+        // Generated from the matching FFmpeg 7/8 public headers with offsetof.
+        return new HardwareDecoderAbiLayout(
+            GetFormatOffset: 192,
+            HardwareDeviceContextOffset: 560,
+            FrameFormatOffset: 116);
+    }
+
+    private readonly record struct HardwareDecoderAbiLayout(
+        int GetFormatOffset,
+        int HardwareDeviceContextOffset,
+        int FrameFormatOffset);
 
     internal static NativePixelFormat MapPixelFormat(int pixelFormat) => pixelFormat switch
     {

@@ -14,7 +14,10 @@
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
     <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
+    <InternalsVisibleTo Include="FrameFlux.Avalonia.Android" />
     <InternalsVisibleTo Include="FrameFlux.Avalonia" />
+    <InternalsVisibleTo Include="FrameFlux.Avalonia.Linux" />
+    <InternalsVisibleTo Include="FrameFlux.Avalonia.Windows" />
     <InternalsVisibleTo Include="FrameFlux.Wpf" />
     <InternalsVisibleTo Include="FrameFlux.FFmpeg.Tests" />
   </ItemGroup>

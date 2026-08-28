@@ -32,6 +32,8 @@ interface FrameFlux.IMediaVideoOutput
   property FrameFlux.MediaFrameStorageKind PreferredFrameStorage { get; }
   method System.Boolean Supports(FrameFlux.MediaFrameStorageKind storageKind, FrameFlux.MediaPixelFormat pixelFormat)
   method System.Boolean TryPresent(FrameFlux.IMediaFrameLease frame)
+interface FrameFlux.IMediaVideoOutputFeatureProvider
+  method System.Object? GetVideoOutputFeature(System.Type featureType)
 class FrameFlux.MediaAudioDiagnostics : System.IEquatable<FrameFlux.MediaAudioDiagnostics>
   constructor MediaAudioDiagnostics(System.String Backend, System.String? OutputDeviceId, System.String? OutputDeviceName, System.Int32 SampleRate, System.Int32 Channels, System.TimeSpan ConfiguredBufferDuration, System.TimeSpan QueuedDuration, System.Boolean IsOperational, System.Int32 RecoveryCount, System.String? LastError)
   property System.String Backend { get; init; }

@@ -15,6 +15,7 @@
     <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
     <PackageReference Include="Vortice.Direct3D11" />
     <InternalsVisibleTo Include="FrameFlux.Avalonia" />
+    <InternalsVisibleTo Include="FrameFlux.Avalonia.Windows" />
     <InternalsVisibleTo Include="FrameFlux.Wpf" />
   </ItemGroup>
 </Project>

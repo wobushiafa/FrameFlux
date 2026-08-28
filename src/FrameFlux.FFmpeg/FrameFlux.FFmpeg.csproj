@@ -18,6 +18,8 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="NAudio" Condition="'$(TargetFramework)' == 'net8.0'" />
     <InternalsVisibleTo Include="FrameFlux.FFmpeg.Tests" />
+    <InternalsVisibleTo Include="FrameFlux.FFmpeg.Android" />
+    <InternalsVisibleTo Include="FrameFlux.Avalonia.Android" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(FrameFluxNativeRuntimeIdentifier)' != ''">

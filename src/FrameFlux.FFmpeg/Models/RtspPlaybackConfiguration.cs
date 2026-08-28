@@ -10,7 +10,9 @@ internal static class RtspPlaybackConfiguration
             MediaVideoDecodingPolicy.SoftwareOnly => RtspVideoDecodingMode.SoftwareOnly,
             MediaVideoDecodingPolicy.HardwareRequired => RtspVideoDecodingMode.HardwareRequired,
             MediaVideoDecodingPolicy.HardwarePreferred => RtspVideoDecodingMode.HardwarePreferred,
-            _ => OperatingSystem.IsWindows()
+            _ => OperatingSystem.IsWindows() ||
+                 OperatingSystem.IsLinux() ||
+                 OperatingSystem.IsAndroid()
                 ? RtspVideoDecodingMode.HardwarePreferred
                 : RtspVideoDecodingMode.SoftwareOnly
         };

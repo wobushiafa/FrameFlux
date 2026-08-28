@@ -19,6 +19,8 @@ public sealed class PublicApiBaselineTests
     {
 #if FRAMEFLUX_PRESENTATION_API_BASELINE
         var actual = CreateBaseline(
+            typeof(global::FrameFlux.Avalonia.FrameFluxLinuxAppBuilderExtensions).Assembly,
+            typeof(global::FrameFlux.Avalonia.FrameFluxWindowsAppBuilderExtensions).Assembly,
             Assembly.Load("FrameFlux.Presentation"),
             Assembly.Load("FrameFlux.Rendering.Windows"),
             typeof(global::FrameFlux.Wpf.MediaView).Assembly,

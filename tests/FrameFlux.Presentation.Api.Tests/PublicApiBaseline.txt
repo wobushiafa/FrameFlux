@@ -38,6 +38,12 @@ class FrameFlux.Avalonia.MediaView : Avalonia.Controls.Control, Avalonia.Collect
   method System.Threading.Tasks.ValueTask StartAsync(System.Threading.CancellationToken cancellationToken = default)
   method System.Threading.Tasks.ValueTask StopAsync(System.Threading.CancellationToken cancellationToken = default)
   method System.Threading.Tasks.ValueTask<FrameFlux.MediaSnapshot?> CaptureSnapshotAsync(System.Threading.CancellationToken cancellationToken = default)
+[FrameFlux.Avalonia.Linux]
+class FrameFlux.Avalonia.FrameFluxLinuxAppBuilderExtensions
+  method Avalonia.AppBuilder UseFrameFluxLinux(Avalonia.AppBuilder builder)
+[FrameFlux.Avalonia.Windows]
+class FrameFlux.Avalonia.FrameFluxWindowsAppBuilderExtensions
+  method Avalonia.AppBuilder UseFrameFluxWindows(Avalonia.AppBuilder builder)
 [FrameFlux.Presentation]
 [FrameFlux.Rendering.Windows]
 [FrameFlux.Wpf]

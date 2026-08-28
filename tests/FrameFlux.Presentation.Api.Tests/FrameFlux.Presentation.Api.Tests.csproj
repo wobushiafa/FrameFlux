@@ -14,6 +14,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\FrameFlux.Avalonia\FrameFlux.Avalonia.csproj" />
+    <ProjectReference Include="..\..\src\FrameFlux.Avalonia.Linux\FrameFlux.Avalonia.Linux.csproj" />
+    <ProjectReference Include="..\..\src\FrameFlux.Avalonia.Windows\FrameFlux.Avalonia.Windows.csproj" />
     <ProjectReference Include="..\..\src\FrameFlux.Presentation\FrameFlux.Presentation.csproj" />
     <ProjectReference Include="..\..\src\FrameFlux.Rendering.Windows\FrameFlux.Rendering.Windows.csproj" />
     <ProjectReference Include="..\..\src\FrameFlux.Wpf\FrameFlux.Wpf.csproj" />

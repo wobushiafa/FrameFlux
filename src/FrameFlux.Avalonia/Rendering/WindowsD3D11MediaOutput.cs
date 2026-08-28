@@ -7,7 +7,10 @@ using FrameFlux.Rendering.Windows;
 
 namespace FrameFlux.Avalonia;
 
-internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOutput, IDisposable
+internal sealed class WindowsD3D11MediaOutput :
+    NativeControlHost,
+    IAvaloniaPlatformMediaOutput,
+    IDisposable
 {
     private readonly LatestMediaFrameSlot _frameSlot = new();
     private readonly WindowsD3D11Presenter _presenter = new();
@@ -17,7 +20,9 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
 
     public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.D3D11Texture;
 
-    internal Stretch Stretch
+    public Control Surface => this;
+
+    public Stretch Stretch
     {
         get => _stretch;
         set => _stretch = value;
@@ -26,7 +31,9 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
     public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
         storageKind == MediaFrameStorageKind.D3D11Texture;
 
-    internal event Action<object?, MediaPresentationFailure>? PresentationFailed;
+    public event EventHandler? FramePresented;
+
+    public event Action<object?, MediaPresentationFailure>? PresentationFailed;
 
     public bool TryPresent(IMediaFrameLease frame)
     {
@@ -82,11 +89,23 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
         _presenter.Dispose();
     }
 
-    internal void Clear()
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    public void Clear()
     {
         _frameSlot.Clear();
         _failureTracker.Reset();
         _presenter.Reset();
+    }
+
+    public ValueTask ReleaseResourcesAsync()
+    {
+        Clear();
+        return ValueTask.CompletedTask;
     }
 
     private void PresentPendingFrame()
@@ -114,6 +133,7 @@ internal sealed class WindowsD3D11MediaOutput : NativeControlHost, IMediaVideoOu
                 (int)Math.Ceiling(Bounds.Height * scaling),
                 ToMediaStretchMode(_stretch));
             _failureTracker.ReportSuccess();
+            FramePresented?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception exception)
         {
