@@ -57,8 +57,11 @@ playback. It converts the decoder texture to a shared BGRA texture and imports
 it into the framework compositor, allowing framework controls to render above
 the video. Linux applications can reference `FrameFlux.Avalonia.Linux` and call
 `UseFrameFluxLinux()` during `AppBuilder` configuration. The Linux backend uses
-VAAPI hardware decoding when available, transfers the decoded frame to system
-memory, and uploads it into an OpenGL texture for overlay-capable composition.
+VAAPI hardware decoding when available and imports DRM PRIME DMA-BUF frames
+through EGLImage on X11 and Wayland, with software fallback when zero-copy
+interop is unavailable. Linux `NativeSurface` uses a child XID and EGL window
+surface on X11/XWayland; pure Wayland uses the zero-copy `GpuComposition` path
+because Avalonia 12 does not expose a native `wl_subsurface` host.
 Android applications reference `FrameFlux.Avalonia.Android` and register it in
 the Android application builder:
 

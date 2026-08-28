@@ -6,6 +6,18 @@ namespace FrameFlux.Avalonia.Linux.Tests;
 public sealed class LinuxOpenGlMediaOutputTests
 {
     [Fact]
+    public void NativeSurface_RequestsAndAcceptsOnlyDmaBufFrames()
+    {
+        using var output = new LinuxNativeSurfaceMediaOutput();
+
+        Assert.Equal(MediaFrameStorageKind.DmaBuf, output.PreferredFrameStorage);
+        Assert.True(output.Supports(MediaFrameStorageKind.DmaBuf, MediaPixelFormat.Nv12));
+        Assert.True(output.Supports(MediaFrameStorageKind.DmaBuf, MediaPixelFormat.Unknown));
+        Assert.False(output.Supports(MediaFrameStorageKind.CpuMemory, MediaPixelFormat.Bgra32));
+        Assert.False(output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Nv12));
+    }
+
+    [Fact]
     public void Uniform_PreservesSourceAspectRatio()
     {
         var vertices = LinuxOpenGlMediaOutput.BuildVertices(

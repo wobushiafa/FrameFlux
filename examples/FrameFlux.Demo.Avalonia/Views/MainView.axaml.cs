@@ -14,6 +14,7 @@ public sealed partial class MainView : UserControl
     private static readonly IBrush BusyBrush = new SolidColorBrush(Color.Parse("#F59E0B"));
     private static readonly IBrush ErrorBrush = new SolidColorBrush(Color.Parse("#EF4444"));
     private bool _configuringPlaybackModes;
+    private DateTimeOffset _retainErrorUntil;
 
     public MainView()
     {
@@ -135,8 +136,14 @@ public sealed partial class MainView : UserControl
         }
     }
 
-    private void Player_OnPlaybackError(object? sender, MediaPlaybackErrorEventArgs e) =>
+    private void Player_OnPlaybackError(object? sender, MediaPlaybackErrorEventArgs e)
+    {
+        _retainErrorUntil = DateTimeOffset.UtcNow.AddSeconds(15);
+        Console.Error.WriteLine(
+            $"[{DateTimeOffset.Now:O}] FrameFlux playback error " +
+            $"({e.Error.Code}):\n{e.Error.Exception ?? new Exception(e.Error.Message)}");
         SetStatus($"{e.Error.Code}: {e.Error.Message}", ErrorBrush);
+    }
 
     private void SetStatus(string text, IBrush brush)
     {
@@ -146,6 +153,10 @@ public sealed partial class MainView : UserControl
 
     private void RefreshPlaybackStatus(MediaPlaybackState state, IBrush brush)
     {
+        if (DateTimeOffset.UtcNow < _retainErrorUntil)
+        {
+            return;
+        }
         var presentation = Player.EffectivePresentationMode?.ToString() ?? "none";
         SetStatus(
             $"{state} | Presentation: {presentation} | HW decode: {Player.IsHardwareVideoDecodingActive}",
