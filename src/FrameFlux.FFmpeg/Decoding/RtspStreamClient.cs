@@ -332,8 +332,12 @@ internal sealed class RtspStreamClient : IDisposable
                                 var dispatchedNativeFrame = false;
 
                                 if (useLeasedFrameDelivery &&
-                                    _options.FrameDeliveryMode == RtspFrameDeliveryMode.D3D11Texture &&
-                                    decoder.TryGetNativePixelFormat(frame, out var nativePixelFormat))
+                                    (_options.FrameDeliveryMode is RtspFrameDeliveryMode.D3D11Texture or
+                                        RtspFrameDeliveryMode.DmaBuf) &&
+                                    decoder.TryGetNativePixelFormat(frame, out var nativePixelFormat) &&
+                                    NativeFrameMatchesDeliveryMode(
+                                        _options.FrameDeliveryMode,
+                                        nativePixelFormat))
                                 {
                                     var nativeConvertStart = Stopwatch.GetTimestamp();
                                     if (_options.CreateSnapshotFrames &&
@@ -656,6 +660,14 @@ internal sealed class RtspStreamClient : IDisposable
             ScaleQuality = options.ScaleQuality
         };
     }
+
+    private static bool NativeFrameMatchesDeliveryMode(
+        RtspFrameDeliveryMode deliveryMode,
+        RtspNativePixelFormat pixelFormat) =>
+        (deliveryMode == RtspFrameDeliveryMode.D3D11Texture &&
+         pixelFormat == RtspNativePixelFormat.D3D11Texture) ||
+        (deliveryMode == RtspFrameDeliveryMode.DmaBuf &&
+         pixelFormat == RtspNativePixelFormat.DmaBuf);
 
     private static bool ShouldRenderFrame(TimeSpan frameInterval, ref long lastFrameAt)
     {

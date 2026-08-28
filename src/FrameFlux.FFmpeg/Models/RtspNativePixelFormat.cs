@@ -9,5 +9,6 @@ internal enum RtspNativePixelFormat
     /// NV21: semi-planar YUV 4:2:0 with interleaved V-U chroma plane (common on Android MediaCodec).
     /// </summary>
     Nv21,
-    D3D11Texture
+    D3D11Texture,
+    DmaBuf
 }

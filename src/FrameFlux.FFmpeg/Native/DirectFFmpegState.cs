@@ -265,7 +265,16 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         int scaleQuality,
         bool forceOpaqueAlpha)
     {
-        var layout = FFmpegAbi.ReadFrame(frame.Pointer, _api.UtilMajorVersion);
+        var sourceFrame = frame.Pointer;
+        if (frame.IsDmaBuf)
+        {
+            var transferResult = _hardwareDecoder!.Transfer(frame.Pointer, out sourceFrame);
+            if (transferResult < 0)
+            {
+                return transferResult;
+            }
+        }
+        var layout = FFmpegAbi.ReadFrame(sourceFrame, _api.UtilMajorVersion);
         var flags = scaleQuality == 0 ? 1 : scaleQuality == 2 ? 4 : 2;
         _scaleContext = _api.SwsGetCachedContext(
             _scaleContext,
@@ -452,7 +461,28 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
             isHardwareFrame &&
             _preserveHardwareFrames &&
             _hardwareDecoder!.SupportsDirectFrameOutput;
-        if (isHardwareFrame && !preserveHardwareFrame)
+        var isDmaBuf = false;
+        if (preserveHardwareFrame && OperatingSystem.IsLinux())
+        {
+            result = _hardwareDecoder!.Export(_decodeFrame, out source);
+            if (result < 0)
+            {
+                _preserveHardwareFrames = false;
+                VideoDecoderDiagnostics +=
+                    "; DRM PRIME export unavailable, using CPU frame transfer";
+                result = _hardwareDecoder.Transfer(_decodeFrame, out source);
+                if (result < 0)
+                {
+                    _api.AvFrameUnref(_decodeFrame);
+                    return FailRead(result, "av_hwframe_transfer_data");
+                }
+            }
+            else
+            {
+                isDmaBuf = true;
+            }
+        }
+        else if (isHardwareFrame && !preserveHardwareFrame)
         {
             result = _hardwareDecoder!.Transfer(_decodeFrame, out source);
             if (result < 0)
@@ -462,7 +492,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
             }
         }
 
-        var clone = _api.AvFrameClone(source);
+        var clone = isDmaBuf ? source : _api.AvFrameClone(source);
         _api.AvFrameUnref(_decodeFrame);
         if (clone == IntPtr.Zero)
         {
@@ -474,7 +504,8 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
             clone,
             _videoTimeBaseNumerator,
             _videoTimeBaseDenominator,
-            preserveHardwareFrame);
+            preserveHardwareFrame && OperatingSystem.IsWindows(),
+            isDmaBuf);
         return NativeReadResult.Ok;
     }
 
@@ -716,10 +747,12 @@ internal sealed class DirectVideoFrame(
     IntPtr pointer,
     int timeBaseNumerator,
     int timeBaseDenominator,
-    bool isD3D11Texture = false) : IDisposable
+    bool isD3D11Texture = false,
+    bool isDmaBuf = false) : IDisposable
 {
     private readonly FFmpegApi _api = api;
     internal IntPtr Pointer { get; private set; } = pointer;
+    internal bool IsDmaBuf => isDmaBuf;
 
     internal NativeFrameInfo GetInfo()
     {
@@ -733,6 +766,20 @@ internal sealed class DirectVideoFrame(
                 PixelFormat = NativePixelFormat.D3D11Texture,
                 Plane0 = frame.Data[0],
                 Plane1 = frame.Data[1],
+                PresentationTimestamp = frame.PresentationTimestamp,
+                TimeBaseNumerator = timeBaseNumerator,
+                TimeBaseDenominator = timeBaseDenominator
+            };
+        }
+
+        if (isDmaBuf)
+        {
+            return new NativeFrameInfo
+            {
+                Width = frame.Width,
+                Height = frame.Height,
+                PixelFormat = NativePixelFormat.DmaBuf,
+                DmaBufDescriptor = frame.Data[0],
                 PresentationTimestamp = frame.PresentationTimestamp,
                 TimeBaseNumerator = timeBaseNumerator,
                 TimeBaseDenominator = timeBaseDenominator
@@ -910,6 +957,15 @@ internal static class FFmpegAbi
             Marshal.ReadInt64(frame, ptsOffset),
             data,
             lineSize);
+    }
+
+    internal static void WriteFrameFormat(IntPtr frame, int utilMajorVersion, int format)
+    {
+        var lineSizeOffset = IntPtr.Size * 8;
+        var extendedDataOffset = lineSizeOffset + sizeof(int) * 8;
+        var widthOffset = extendedDataOffset + IntPtr.Size;
+        var formatOffset = widthOffset + sizeof(int) * 3;
+        Marshal.WriteInt32(frame, formatOffset, format);
     }
 
     internal static bool SupportsHardwareDecoderLayout(int codecMajorVersion) =>

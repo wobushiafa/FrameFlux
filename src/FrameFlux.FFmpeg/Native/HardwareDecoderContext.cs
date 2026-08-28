@@ -10,6 +10,7 @@ internal interface IHardwareDecoderContext : IDisposable
     long LastTransferTicks { get; }
     bool IsHardwareFrame(IntPtr frame);
     int Transfer(IntPtr source, out IntPtr destination);
+    int Export(IntPtr source, out IntPtr destination);
 }
 
 internal static class HardwareDecoderContextFactory
@@ -44,7 +45,7 @@ internal static class HardwareDecoderContextFactory
         if (OperatingSystem.IsWindows())
             return new HardwareDecoderBackend("D3D11VA", "d3d11va", true);
         if (OperatingSystem.IsLinux())
-            return new HardwareDecoderBackend("VAAPI", "vaapi", false);
+            return new HardwareDecoderBackend("VAAPI", "vaapi", true);
         return null;
     }
 }
@@ -173,6 +174,33 @@ internal sealed class FFmpegHardwareDecoderContext : IHardwareDecoderContext
 
         result = _api.AvFrameCopyProperties(_transferFrame, source);
         if (result >= 0) destination = _transferFrame;
+        return result;
+    }
+
+    public int Export(IntPtr source, out IntPtr destination)
+    {
+        destination = _api.AvFrameAlloc();
+        if (destination == IntPtr.Zero)
+        {
+            return -12;
+        }
+
+        using var name = new NativeUtf8String("drm_prime");
+        var drmPrimeFormat = _hardwareApi.AvGetPixelFormat(name.Pointer);
+        if (drmPrimeFormat < 0)
+        {
+            _api.AvFrameFree(ref destination);
+            return -22;
+        }
+
+        FFmpegAbi.WriteFrameFormat(destination, _api.UtilMajorVersion, drmPrimeFormat);
+        var result = _hardwareApi.AvHardwareFrameMap(destination, source, 1);
+        if (result >= 0)
+        {
+            return result;
+        }
+
+        _api.AvFrameFree(ref destination);
         return result;
     }
 

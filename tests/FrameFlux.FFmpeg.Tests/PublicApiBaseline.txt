@@ -6,6 +6,7 @@ interface FrameFlux.IMediaFrameLease : System.IDisposable
   property System.Int32 Width { get; }
   method System.Boolean TryGetCpuBuffer(out FrameFlux.MediaCpuFrameBuffer buffer)
   method System.Boolean TryGetD3D11Texture(out FrameFlux.MediaD3D11TextureBuffer texture)
+  method System.Boolean TryGetDmaBuf(out FrameFlux.MediaDmaBufFrameBuffer dmaBuf)
 interface FrameFlux.IMediaPlayer : System.IAsyncDisposable
   property FrameFlux.MediaCapabilities Capabilities { get; }
   property FrameFlux.MediaDiagnostics Diagnostics { get; }
@@ -85,9 +86,28 @@ class FrameFlux.MediaDiagnostics : System.IEquatable<FrameFlux.MediaDiagnostics>
   property System.Double ReadMilliseconds { get; init; }
   property FrameFlux.MediaSynchronizationDiagnostics Synchronization { get; init; }
   property System.String VideoDecoderDiagnostics { get; init; }
+struct FrameFlux.MediaDmaBufFrameBuffer : System.IEquatable<FrameFlux.MediaDmaBufFrameBuffer>
+  constructor MediaDmaBufFrameBuffer(System.ReadOnlyMemory<FrameFlux.MediaDmaBufObject> Objects, System.ReadOnlyMemory<FrameFlux.MediaDmaBufLayer> Layers)
+  property System.ReadOnlyMemory<FrameFlux.MediaDmaBufLayer> Layers { get; init; }
+  property System.ReadOnlyMemory<FrameFlux.MediaDmaBufObject> Objects { get; init; }
+struct FrameFlux.MediaDmaBufLayer : System.IEquatable<FrameFlux.MediaDmaBufLayer>
+  constructor MediaDmaBufLayer(System.UInt32 Format, System.ReadOnlyMemory<FrameFlux.MediaDmaBufPlane> Planes)
+  property System.UInt32 Format { get; init; }
+  property System.ReadOnlyMemory<FrameFlux.MediaDmaBufPlane> Planes { get; init; }
+struct FrameFlux.MediaDmaBufObject : System.IEquatable<FrameFlux.MediaDmaBufObject>
+  constructor MediaDmaBufObject(System.Int32 FileDescriptor, System.Int64 Size, System.UInt64 FormatModifier)
+  property System.Int32 FileDescriptor { get; init; }
+  property System.UInt64 FormatModifier { get; init; }
+  property System.Int64 Size { get; init; }
+struct FrameFlux.MediaDmaBufPlane : System.IEquatable<FrameFlux.MediaDmaBufPlane>
+  constructor MediaDmaBufPlane(System.Int32 ObjectIndex, System.Int32 Offset, System.Int32 Pitch)
+  property System.Int32 ObjectIndex { get; init; }
+  property System.Int32 Offset { get; init; }
+  property System.Int32 Pitch { get; init; }
 enum FrameFlux.MediaFrameStorageKind : System.Int32
   CpuMemory = 0
   D3D11Texture = 1
+  DmaBuf = 2
 enum FrameFlux.MediaLatencyMode : System.Int32
   Default = 0
   Low = 1

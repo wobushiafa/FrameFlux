@@ -15,6 +15,8 @@ internal sealed class FFmpegHardwareApi
         AvHardwareFrameTransferData = Load<HardwareFrameTransferDataDelegate>(
             "avutil",
             "av_hwframe_transfer_data");
+        AvHardwareFrameMap = Load<HardwareFrameMapDelegate>("avutil", "av_hwframe_map");
+        AvGetPixelFormat = Load<GetPixelFormatDelegate>("avutil", "av_get_pix_fmt");
         AvBufferReference = Load<BufferReferenceDelegate>("avutil", "av_buffer_ref");
         AvBufferUnreference = Load<BufferUnreferenceDelegate>("avutil", "av_buffer_unref");
         AvCodecGetHardwareConfig = Load<CodecGetHardwareConfigDelegate>(
@@ -25,6 +27,8 @@ internal sealed class FFmpegHardwareApi
     internal HardwareDeviceFindTypeByNameDelegate AvHardwareDeviceFindTypeByName { get; }
     internal HardwareDeviceContextCreateDelegate AvHardwareDeviceContextCreate { get; }
     internal HardwareFrameTransferDataDelegate AvHardwareFrameTransferData { get; }
+    internal HardwareFrameMapDelegate AvHardwareFrameMap { get; }
+    internal GetPixelFormatDelegate AvGetPixelFormat { get; }
     internal BufferReferenceDelegate AvBufferReference { get; }
     internal BufferUnreferenceDelegate AvBufferUnreference { get; }
     internal CodecGetHardwareConfigDelegate AvCodecGetHardwareConfig { get; }
@@ -49,6 +53,12 @@ internal sealed class FFmpegHardwareApi
         IntPtr destination,
         IntPtr source,
         int flags);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int HardwareFrameMapDelegate(IntPtr destination, IntPtr source, int flags);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate int GetPixelFormatDelegate(IntPtr name);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     internal delegate IntPtr BufferReferenceDelegate(IntPtr buffer);

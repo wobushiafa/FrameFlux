@@ -19,7 +19,8 @@ internal enum NativePixelFormat
     Yuv420P = 3,
     Nv12 = 4,
     Nv21 = 5,
-    D3D11Texture = 6
+    D3D11Texture = 6,
+    DmaBuf = 7
 }
 
 internal enum NativeVideoCodec
@@ -68,6 +69,7 @@ internal struct NativeFrameInfo
     public int Stride0;
     public int Stride1;
     public int Stride2;
+    public IntPtr DmaBufDescriptor;
     public long PresentationTimestamp;
     public int TimeBaseNumerator;
     public int TimeBaseDenominator;

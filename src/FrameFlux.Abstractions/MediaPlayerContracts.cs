@@ -264,7 +264,8 @@ public enum MediaPixelFormat
 public enum MediaFrameStorageKind
 {
     CpuMemory,
-    D3D11Texture
+    D3D11Texture,
+    DmaBuf
 }
 
 public readonly record struct MediaCpuFrameBuffer(
@@ -281,6 +282,24 @@ public readonly record struct MediaD3D11TextureBuffer(
     IntPtr Texture,
     int ArraySlice);
 
+public readonly record struct MediaDmaBufObject(
+    int FileDescriptor,
+    long Size,
+    ulong FormatModifier);
+
+public readonly record struct MediaDmaBufPlane(
+    int ObjectIndex,
+    int Offset,
+    int Pitch);
+
+public readonly record struct MediaDmaBufLayer(
+    uint Format,
+    ReadOnlyMemory<MediaDmaBufPlane> Planes);
+
+public readonly record struct MediaDmaBufFrameBuffer(
+    ReadOnlyMemory<MediaDmaBufObject> Objects,
+    ReadOnlyMemory<MediaDmaBufLayer> Layers);
+
 public interface IMediaFrameLease : IDisposable
 {
     int Width { get; }
@@ -294,6 +313,12 @@ public interface IMediaFrameLease : IDisposable
     bool TryGetCpuBuffer(out MediaCpuFrameBuffer buffer);
 
     bool TryGetD3D11Texture(out MediaD3D11TextureBuffer texture);
+
+    bool TryGetDmaBuf(out MediaDmaBufFrameBuffer dmaBuf)
+    {
+        dmaBuf = default;
+        return false;
+    }
 }
 
 public interface IMediaVideoOutput

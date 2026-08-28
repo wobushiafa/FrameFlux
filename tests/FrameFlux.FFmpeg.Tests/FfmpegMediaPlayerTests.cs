@@ -228,6 +228,15 @@ public sealed class FfmpegMediaPlayerTests
             deliveryMode == RtspFrameDeliveryMode.D3D11Texture);
     }
 
+    [Fact]
+    public void Session_ResolvesDmaBufOutputToDmaBufDelivery()
+    {
+        var deliveryMode = FfmpegMediaSession.ResolveFrameDeliveryMode(
+            new FakeVideoOutput(MediaFrameStorageKind.DmaBuf));
+
+        Assert.Equal(RtspFrameDeliveryMode.DmaBuf, deliveryMode);
+    }
+
     private sealed class FakeMediaSessionFactory : IFfmpegMediaSessionFactory
     {
         internal IFfmpegMediaSession? LastSession { get; private set; }

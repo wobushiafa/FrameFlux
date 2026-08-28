@@ -112,7 +112,9 @@ adapter library is loaded. A process can use only one configured FFmpeg director
 On Linux, `Automatic` and `HardwarePreferred` request VAAPI and fall back to
 software when the codec, render node, or driver is unavailable.
 `HardwareRequired` reports initialization failure instead. The initial VAAPI
-path transfers hardware frames to system memory before presentation; inspect
+path exports DRM PRIME frames to outputs that prefer
+`MediaFrameStorageKind.DmaBuf`, avoiding hardware-frame readback. CPU outputs
+continue to transfer frames to system memory; inspect
 `MediaDiagnostics.IsHardwareVideoDecodingActive` and
 `MediaDiagnostics.VideoDecoderDiagnostics` for the effective path.
 

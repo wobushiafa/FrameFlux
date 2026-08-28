@@ -355,9 +355,12 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         };
 
     internal static RtspFrameDeliveryMode ResolveFrameDeliveryMode(IMediaVideoOutput? output) =>
-        output?.PreferredFrameStorage == MediaFrameStorageKind.D3D11Texture
-            ? RtspFrameDeliveryMode.D3D11Texture
-            : RtspFrameDeliveryMode.CpuMemory;
+        output?.PreferredFrameStorage switch
+        {
+            MediaFrameStorageKind.D3D11Texture => RtspFrameDeliveryMode.D3D11Texture,
+            MediaFrameStorageKind.DmaBuf => RtspFrameDeliveryMode.DmaBuf,
+            _ => RtspFrameDeliveryMode.CpuMemory
+        };
 
     private static int ToMilliseconds(TimeSpan? value) =>
         value is null ? 0 : checked((int)Math.Min(value.Value.TotalMilliseconds, int.MaxValue));

@@ -27,9 +27,12 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
     public RtspNativePixelFormat PixelFormat { get; internal set; } = RtspNativePixelFormat.Bgra32;
 
     public MediaFrameStorageKind StorageKind =>
-        PixelFormat == RtspNativePixelFormat.D3D11Texture
-            ? MediaFrameStorageKind.D3D11Texture
-            : MediaFrameStorageKind.CpuMemory;
+        PixelFormat switch
+        {
+            RtspNativePixelFormat.D3D11Texture => MediaFrameStorageKind.D3D11Texture,
+            RtspNativePixelFormat.DmaBuf => MediaFrameStorageKind.DmaBuf,
+            _ => MediaFrameStorageKind.CpuMemory
+        };
 
     MediaPixelFormat IMediaFrameLease.PixelFormat => PixelFormat switch
     {
@@ -37,6 +40,7 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
         RtspNativePixelFormat.Nv12 => MediaPixelFormat.Nv12,
         RtspNativePixelFormat.Nv21 => MediaPixelFormat.Nv21,
         RtspNativePixelFormat.D3D11Texture => MediaPixelFormat.Unknown,
+        RtspNativePixelFormat.DmaBuf => MediaPixelFormat.Unknown,
         _ => MediaPixelFormat.Bgra32
     };
 
@@ -76,6 +80,19 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
         return true;
     }
 
+    public bool TryGetDmaBuf(out MediaDmaBufFrameBuffer dmaBuf)
+    {
+        if (Volatile.Read(ref _disposed) != 0 ||
+            PixelFormat != RtspNativePixelFormat.DmaBuf)
+        {
+            dmaBuf = default;
+            return false;
+        }
+
+        dmaBuf = DmaBuf;
+        return !dmaBuf.Objects.IsEmpty && !dmaBuf.Layers.IsEmpty;
+    }
+
     public int Plane0Offset { get; internal set; }
 
     public int Plane1Offset { get; internal set; }
@@ -99,6 +116,8 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
     public IntPtr D3D11Texture { get; internal set; }
 
     public int D3D11ArraySlice { get; internal set; }
+
+    public MediaDmaBufFrameBuffer DmaBuf { get; internal set; }
 
     public void Dispose()
     {
@@ -206,6 +225,32 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
         NativeHandle = texture;
         D3D11Texture = texture;
         D3D11ArraySlice = arraySlice;
+        DmaBuf = default;
+    }
+
+    internal void ResetDmaBuf(
+        int width,
+        int height,
+        MediaDmaBufFrameBuffer dmaBuf)
+    {
+        Volatile.Write(ref _disposed, 0);
+        Width = width;
+        Height = height;
+        Stride = 0;
+        PixelFormat = RtspNativePixelFormat.DmaBuf;
+        Plane0Offset = 0;
+        Plane1Offset = 0;
+        Plane2Offset = 0;
+        Plane0Stride = 0;
+        Plane1Stride = 0;
+        Plane2Stride = 0;
+        Plane0Pointer = IntPtr.Zero;
+        Plane1Pointer = IntPtr.Zero;
+        Plane2Pointer = IntPtr.Zero;
+        NativeHandle = IntPtr.Zero;
+        D3D11Texture = IntPtr.Zero;
+        D3D11ArraySlice = 0;
+        DmaBuf = dmaBuf;
     }
 
 
