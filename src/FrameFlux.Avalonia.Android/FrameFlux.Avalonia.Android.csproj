@@ -4,6 +4,7 @@
     <SupportedOSPlatformVersion>24</SupportedOSPlatformVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsTrimmable>true</IsTrimmable>
+    <IsAotCompatible>true</IsAotCompatible>
     <IsPackable>true</IsPackable>
     <PackageId>FrameFlux.Avalonia.Android</PackageId>
     <Description>Android SurfaceTexture and OpenGL ES video presentation backend for FrameFlux Avalonia controls.</Description>

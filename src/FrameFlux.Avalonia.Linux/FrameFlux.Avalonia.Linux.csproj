@@ -3,6 +3,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsTrimmable>true</IsTrimmable>
+    <IsAotCompatible>true</IsAotCompatible>
     <IsPackable>true</IsPackable>
     <PackageId>FrameFlux.Avalonia.Linux</PackageId>
     <Description>Linux OpenGL video presentation backend for FrameFlux Avalonia controls.</Description>

@@ -3,6 +3,7 @@
     <TargetFrameworks>net8.0;net10.0-android</TargetFrameworks>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsTrimmable>true</IsTrimmable>
+    <IsAotCompatible>true</IsAotCompatible>
     <IsPackable>true</IsPackable>
     <PackageId>FrameFlux.FFmpeg</PackageId>
     <Description>Cross-platform FFmpeg media engine with RTSP playback for FrameFlux.</Description>

@@ -3,6 +3,7 @@
     <TargetFramework>net10.0-android</TargetFramework>
     <SupportedOSPlatformVersion>24</SupportedOSPlatformVersion>
     <IsTrimmable>true</IsTrimmable>
+    <IsAotCompatible>true</IsAotCompatible>
     <IsPackable>true</IsPackable>
     <PackageId>FrameFlux.FFmpeg.Android</PackageId>
     <Description>Android MediaCodec hardware decoding backend for FrameFlux.FFmpeg.</Description>
