@@ -28,11 +28,11 @@ AppBuilder.Configure<App>()
     .UseFrameFluxLinux();
 ```
 
-The Linux output renders an OpenGL texture inside Avalonia's composition tree.
-It supports overlays and all `Stretch` modes. VAAPI hardware frames are
-currently transferred to system memory before BGRA upload; the backend boundary
-is intentionally isolated so DMA-BUF interop can be added without changing the
-control API.
+The Linux output renders inside Avalonia's composition tree and supports
+overlays and all `Stretch` modes. On EGL-backed X11 and Wayland sessions it
+imports VAAPI DRM PRIME DMA-BUF frames as EGLImages, avoiding system-memory
+readback and BGRA texture upload. Unsupported EGL capabilities and frame layouts
+fall back to the shared software renderer.
 
 On Android, reference `FrameFlux.Avalonia.Android` and call
 `UseFrameFluxAndroid()` from the Android `AppBuilder`. The backend exposes a

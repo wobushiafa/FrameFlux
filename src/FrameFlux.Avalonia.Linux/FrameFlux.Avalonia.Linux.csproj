@@ -17,6 +17,7 @@
     <ProjectReference Include="..\FrameFlux.Avalonia\FrameFlux.Avalonia.csproj" />
     <ProjectReference Include="..\FrameFlux.Presentation\FrameFlux.Presentation.csproj" />
     <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.X11" />
     <InternalsVisibleTo Include="FrameFlux.Avalonia.Linux.Tests" />
   </ItemGroup>
 </Project>

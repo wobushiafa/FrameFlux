@@ -40,8 +40,10 @@ internal sealed class LinuxOpenGlMediaOutput :
     private byte[]? _stagingBuffer;
     private Stretch _stretch = Stretch.Uniform;
     private int _program;
+    private int _dmaBufProgram;
     private int _vertexShader;
     private int _fragmentShader;
+    private int _dmaBufFragmentShader;
     private int _vertexBuffer;
     private int _vertexArray;
     private int _texture;
@@ -51,6 +53,7 @@ internal sealed class LinuxOpenGlMediaOutput :
     private int _sourceHeight;
     private bool _isOpenGlEs;
     private bool _hasTexture;
+    private bool _hasDmaBufTexture;
     private bool _clearRequested;
     private bool _disposed;
 
@@ -63,7 +66,10 @@ internal sealed class LinuxOpenGlMediaOutput :
     public Control Surface => this;
 
     public MediaFrameStorageKind PreferredFrameStorage =>
-        MediaFrameStorageKind.CpuMemory;
+        MediaFrameStorageKind.DmaBuf;
+
+    private LinuxDmaBufEglInterop? _dmaBufInterop;
+    private AvaloniaLinuxDmaBufGlApi? _dmaBufGl;
 
     public Stretch Stretch
     {
@@ -82,16 +88,19 @@ internal sealed class LinuxOpenGlMediaOutput :
     public bool Supports(
         MediaFrameStorageKind storageKind,
         MediaPixelFormat pixelFormat) =>
-        storageKind == MediaFrameStorageKind.CpuMemory &&
-        pixelFormat == MediaPixelFormat.Bgra32;
+        (storageKind == MediaFrameStorageKind.CpuMemory &&
+         pixelFormat == MediaPixelFormat.Bgra32) ||
+        storageKind == MediaFrameStorageKind.DmaBuf;
 
     public bool TryPresent(IMediaFrameLease frame)
     {
         if (_disposed ||
             _failureTracker.IsExhausted ||
-            frame.StorageKind != MediaFrameStorageKind.CpuMemory ||
-            frame.PixelFormat != MediaPixelFormat.Bgra32 ||
-            !frame.TryGetCpuBuffer(out _))
+            !Supports(frame.StorageKind, frame.PixelFormat) ||
+            (frame.StorageKind == MediaFrameStorageKind.CpuMemory &&
+             !frame.TryGetCpuBuffer(out _)) ||
+            (frame.StorageKind == MediaFrameStorageKind.DmaBuf &&
+             !frame.TryGetDmaBuf(out _)))
         {
             return false;
         }
@@ -159,6 +168,22 @@ internal sealed class LinuxOpenGlMediaOutput :
                     $"Unable to link the Linux video shader: {linkError}");
             }
 
+            _dmaBufFragmentShader = CompileShader(
+                gl,
+                GlFragmentShader,
+                CreateDmaBufFragmentShader(_isOpenGlEs));
+            _dmaBufProgram = gl.CreateProgram();
+            gl.AttachShader(_dmaBufProgram, _vertexShader);
+            gl.AttachShader(_dmaBufProgram, _dmaBufFragmentShader);
+            gl.BindAttribLocationString(_dmaBufProgram, 0, "aPosition");
+            gl.BindAttribLocationString(_dmaBufProgram, 1, "aTextureCoordinate");
+            var dmaBufLinkError = gl.LinkProgramAndGetError(_dmaBufProgram);
+            if (!string.IsNullOrEmpty(dmaBufLinkError))
+            {
+                throw new InvalidOperationException(
+                    $"Unable to link the Linux DMA-BUF shader: {dmaBufLinkError}");
+            }
+
             _vertexArray = gl.IsGenVertexArraysAvailable ? gl.GenVertexArray() : 0;
             if (_vertexArray != 0)
             {
@@ -224,6 +249,7 @@ internal sealed class LinuxOpenGlMediaOutput :
             {
                 _clearRequested = false;
                 _hasTexture = false;
+                _hasDmaBufTexture = false;
                 _sourceWidth = 0;
                 _sourceHeight = 0;
             }
@@ -231,7 +257,23 @@ internal sealed class LinuxOpenGlMediaOutput :
             frame = _frameSlot.Take();
             if (frame is not null)
             {
-                UploadFrame(gl, frame);
+                if (frame.StorageKind == MediaFrameStorageKind.DmaBuf)
+                {
+                    if (!frame.TryGetDmaBuf(out var dmaBuf))
+                    {
+                        throw new InvalidOperationException(
+                            "The Linux renderer received an invalid DMA-BUF frame.");
+                    }
+                    _dmaBufGl ??= new AvaloniaLinuxDmaBufGlApi(gl);
+                    _dmaBufInterop ??= new LinuxDmaBufEglInterop(_dmaBufGl);
+                    _dmaBufInterop.Import(frame.Width, frame.Height, dmaBuf);
+                    _hasDmaBufTexture = true;
+                }
+                else
+                {
+                    UploadFrame(gl, frame);
+                    _hasDmaBufTexture = false;
+                }
                 _sourceWidth = frame.Width;
                 _sourceHeight = frame.Height;
                 _hasTexture = true;
@@ -388,13 +430,25 @@ internal sealed class LinuxOpenGlMediaOutput :
             targetHeight,
             _stretch);
         gl.Disable(GlDepthTest);
-        gl.UseProgram(_program);
-        gl.Uniform1i(gl.GetUniformLocationString(_program, "uTexture"), 0);
-        gl.Uniform1i(
-            gl.GetUniformLocationString(_program, "uSwapRedBlue"),
-            _isOpenGlEs ? 1 : 0);
+        var program = _hasDmaBufTexture ? _dmaBufProgram : _program;
+        gl.UseProgram(program);
         gl.ActiveTexture(GlTexture0);
-        gl.BindTexture(GlTexture2D, _texture);
+        if (_hasDmaBufTexture)
+        {
+            gl.Uniform1i(gl.GetUniformLocationString(program, "uTextureY"), 0);
+            gl.BindTexture(GlTexture2D, _dmaBufInterop!.TextureY);
+            gl.ActiveTexture(GlTexture0 + 1);
+            gl.Uniform1i(gl.GetUniformLocationString(program, "uTextureUv"), 1);
+            gl.BindTexture(GlTexture2D, _dmaBufInterop.TextureUv);
+        }
+        else
+        {
+            gl.Uniform1i(gl.GetUniformLocationString(program, "uTexture"), 0);
+            gl.Uniform1i(
+                gl.GetUniformLocationString(program, "uSwapRedBlue"),
+                _isOpenGlEs ? 1 : 0);
+            gl.BindTexture(GlTexture2D, _texture);
+        }
         if (_vertexArray != 0)
         {
             gl.BindVertexArray(_vertexArray);
@@ -506,6 +560,11 @@ internal sealed class LinuxOpenGlMediaOutput :
             gl.DeleteProgram(_program);
             _program = 0;
         }
+        if (_dmaBufProgram != 0)
+        {
+            gl.DeleteProgram(_dmaBufProgram);
+            _dmaBufProgram = 0;
+        }
         if (_vertexShader != 0)
         {
             gl.DeleteShader(_vertexShader);
@@ -516,10 +575,19 @@ internal sealed class LinuxOpenGlMediaOutput :
             gl.DeleteShader(_fragmentShader);
             _fragmentShader = 0;
         }
+        if (_dmaBufFragmentShader != 0)
+        {
+            gl.DeleteShader(_dmaBufFragmentShader);
+            _dmaBufFragmentShader = 0;
+        }
+        _dmaBufInterop?.Release();
+        _dmaBufInterop = null;
+        _dmaBufGl = null;
         _texSubImage2D = null;
         _textureWidth = 0;
         _textureHeight = 0;
         _hasTexture = false;
+        _hasDmaBufTexture = false;
     }
 
     private void RequestRender()
@@ -543,6 +611,8 @@ internal sealed class LinuxOpenGlMediaOutput :
 
     private void ReportFailure(Exception exception)
     {
+        Console.Error.WriteLine(
+            $"[{DateTimeOffset.Now:O}] FrameFlux Linux GPU presentation failed:\n{exception}");
         System.Diagnostics.Trace.TraceError(
             "Avalonia Linux OpenGL presentation failed: {0}",
             exception);
@@ -573,6 +643,22 @@ internal sealed class LinuxOpenGlMediaOutput :
         "void main() {\n" +
         "  vec4 color = texture(uTexture, vTextureCoordinate);\n" +
         "  outputColor = uSwapRedBlue == 1 ? color.bgra : color;\n" +
+        "}\n";
+
+    private static string CreateDmaBufFragmentShader(bool openGlEs) =>
+        (openGlEs
+            ? "#version 300 es\nprecision mediump float;\n"
+            : "#version 150\n") +
+        "uniform sampler2D uTextureY;\n" +
+        "uniform sampler2D uTextureUv;\n" +
+        "in vec2 vTextureCoordinate;\n" +
+        "out vec4 outputColor;\n" +
+        "void main() {\n" +
+        "  float y = 1.16438356 * (texture(uTextureY, vTextureCoordinate).r - 0.0627451);\n" +
+        "  vec2 uv = texture(uTextureUv, vTextureCoordinate).rg - vec2(0.5019608);\n" +
+        "  outputColor = vec4(y + 1.79274107 * uv.y, " +
+        "y - 0.21324861 * uv.x - 0.53290933 * uv.y, " +
+        "y + 2.11240179 * uv.x, 1.0);\n" +
         "}\n";
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
