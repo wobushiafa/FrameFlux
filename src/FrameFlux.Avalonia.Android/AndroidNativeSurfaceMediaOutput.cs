@@ -19,19 +19,15 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
     IMediaVideoOutputFeatureProvider
 {
     private readonly object _surfaceSync = new();
-    private readonly ManualResetEventSlim _surfaceReady = new(false);
+    private readonly AndroidNativeSurfaceLifecycle _lifecycle = new();
     private readonly MediaPresentationFailureTracker _failureTracker = new(maximumAttempts: 1);
     private readonly SurfaceCallback _surfaceCallback;
     private FrameLayout? _nativeHost;
     private SurfaceView? _surfaceView;
     private global::Android.Views.Surface? _decoderSurface;
-    private Exception? _surfaceFailure;
     private Stretch _stretch = Stretch.Uniform;
     private int _sourceWidth;
     private int _sourceHeight;
-    private bool _surfaceAcquired;
-    private bool _releasing;
-    private bool _disposed;
 
     internal AndroidNativeSurfaceMediaOutput()
     {
@@ -71,29 +67,27 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
     public global::Android.Views.Surface AcquireDecoderSurface(
         CancellationToken cancellationToken)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(_lifecycle.IsDisposed, this);
         lock (_surfaceSync)
         {
             if (_decoderSurface?.IsValid == true)
             {
-                _surfaceAcquired = true;
-                _releasing = false;
+                _lifecycle.MarkAcquired();
                 return _decoderSurface;
             }
 
-            _surfaceFailure = null;
-            _surfaceReady.Reset();
+            _lifecycle.PrepareAcquire();
         }
 
-        _surfaceReady.Wait(cancellationToken);
+        _lifecycle.WaitForSurface(cancellationToken);
         lock (_surfaceSync)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_surfaceFailure is not null)
+            ObjectDisposedException.ThrowIf(_lifecycle.IsDisposed, this);
+            if (_lifecycle.Failure is { } failure)
             {
                 throw new PlatformNotSupportedException(
                     "The Avalonia Android native Surface is unavailable.",
-                    _surfaceFailure);
+                    failure);
             }
 
             if (_decoderSurface?.IsValid != true)
@@ -102,8 +96,7 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
                     "The Avalonia Android native Surface was not created.");
             }
 
-            _surfaceAcquired = true;
-            _releasing = false;
+            _lifecycle.MarkAcquired();
             return _decoderSurface;
         }
     }
@@ -129,9 +122,7 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
     {
         lock (_surfaceSync)
         {
-            _releasing = true;
-            _surfaceAcquired = false;
-            _surfaceFailure = null;
+            _lifecycle.MarkReleased();
         }
         _failureTracker.Reset();
         return ValueTask.CompletedTask;
@@ -139,18 +130,13 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
 
     public ValueTask DisposeAsync()
     {
-        if (_disposed)
-        {
-            return ValueTask.CompletedTask;
-        }
-
         lock (_surfaceSync)
         {
-            _disposed = true;
-            _releasing = true;
-            _surfaceAcquired = false;
-            _surfaceFailure = new ObjectDisposedException(GetType().FullName);
-            _surfaceReady.Set();
+            if (!_lifecycle.MarkDisposed(
+                    new ObjectDisposedException(GetType().FullName)))
+            {
+                return ValueTask.CompletedTask;
+            }
         }
         DetachSurfaceCallback();
         _surfaceCallback.Dispose();
@@ -197,10 +183,10 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
 
             lock (_surfaceSync)
             {
-                ObjectDisposedException.ThrowIf(_disposed, this);
+                ObjectDisposedException.ThrowIf(_lifecycle.IsDisposed, this);
                 _nativeHost = host;
                 _surfaceView = surfaceView;
-                _releasing = false;
+                _lifecycle.MarkHostCreated();
             }
             UpdateNativeLayout();
             return new AndroidViewControlHandle(host);
@@ -221,11 +207,7 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
         var reportFailure = false;
         lock (_surfaceSync)
         {
-            reportFailure = _surfaceAcquired && !_releasing && !_disposed;
-            _releasing = true;
-            _surfaceAcquired = false;
-            _surfaceFailure = exception;
-            _surfaceReady.Set();
+            reportFailure = _lifecycle.MarkHostDestroyed(exception);
         }
         DetachSurfaceCallback();
         base.DestroyNativeControlCore(control);
@@ -248,7 +230,7 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
         Exception? failure = null;
         lock (_surfaceSync)
         {
-            if (_disposed)
+            if (_lifecycle.IsDisposed)
             {
                 return;
             }
@@ -257,16 +239,14 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
             {
                 failure = new PlatformNotSupportedException(
                     "Android created an invalid NativeSurface.");
-                _surfaceFailure = failure;
                 _decoderSurface = null;
+                _lifecycle.MarkSurfaceFailure(failure);
             }
             else
             {
                 _decoderSurface = surface;
-                _surfaceFailure = null;
-                _releasing = false;
+                _lifecycle.MarkSurfaceReady();
             }
-            _surfaceReady.Set();
         }
         if (failure is null)
         {
@@ -291,9 +271,7 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
         lock (_surfaceSync)
         {
             _decoderSurface = null;
-            _surfaceReady.Reset();
-            reportFailure = _surfaceAcquired && !_releasing && !_disposed;
-            _surfaceAcquired = false;
+            reportFailure = _lifecycle.MarkSurfaceDestroyed();
         }
 
         if (reportFailure)
@@ -305,7 +283,7 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
 
     private void ScheduleLayoutUpdate()
     {
-        if (_disposed)
+        if (_lifecycle.IsDisposed)
         {
             return;
         }
@@ -374,8 +352,7 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
     {
         lock (_surfaceSync)
         {
-            _surfaceFailure = exception;
-            _surfaceReady.Set();
+            _lifecycle.MarkSurfaceFailure(exception);
         }
         ReportFailure(exception);
     }

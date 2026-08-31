@@ -14,6 +14,8 @@
   <ItemGroup>
     <Compile Include="..\..\src\FrameFlux.Avalonia.Android\AndroidNativeSurfaceLayout.cs"
              Link="AndroidNativeSurfaceLayout.cs" />
+    <Compile Include="..\..\src\FrameFlux.Avalonia.Android\AndroidNativeSurfaceLifecycle.cs"
+             Link="AndroidNativeSurfaceLifecycle.cs" />
     <Compile Include="..\..\src\FrameFlux.Avalonia.Android\AndroidSurfaceTextureGeometry.cs"
              Link="AndroidSurfaceTextureGeometry.cs" />
   </ItemGroup>
