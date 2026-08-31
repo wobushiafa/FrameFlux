@@ -24,15 +24,15 @@ internal sealed class NativeEncodedPacket : IDisposable
     }
 }
 
-internal sealed class NativeRtspPacketReader : IDisposable
+internal sealed class NativeFfmpegPacketReader : IDisposable
 {
     private readonly NativeRtspSessionHandle _session;
     private readonly CancellationTokenRegistration _cancellationRegistration;
     private bool _disposed;
 
-    internal NativeRtspPacketReader(
+    internal NativeFfmpegPacketReader(
         string url,
-        RtspStreamOptions options,
+        FfmpegPlaybackOptions options,
         CancellationToken cancellationToken)
     {
         using var nativeUrl = new NativeUtf8String(url);

@@ -4,7 +4,7 @@ using System.Threading;
 
 namespace FrameFlux.FFmpeg;
 
-internal static class RtspOpenStreamLimiter
+internal static class FfmpegOpenStreamLimiter
 {
     private static readonly object SyncRoot = new();
     private static readonly Dictionary<int, SemaphoreSlim> Semaphores = [];

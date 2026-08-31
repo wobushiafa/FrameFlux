@@ -3,13 +3,13 @@ using Xunit;
 
 namespace FrameFlux.FFmpeg.Tests;
 
-public sealed class RtspReconnectStateTests
+public sealed class MediaReconnectStateTests
 {
     [Fact]
     public void RegisterFailure_AppliesAttemptLimitAndDeterministicBackoff()
     {
-        var state = new RtspReconnectState(
-            new RtspStreamOptions
+        var state = new MediaReconnectState(
+            new FfmpegPlaybackOptions
             {
                 ReconnectEnabled = true,
                 MaximumReconnectAttempts = 2,
@@ -22,17 +22,17 @@ public sealed class RtspReconnectStateTests
         var second = state.RegisterFailure();
         var rejected = state.RegisterFailure();
 
-        Assert.Equal(new RtspReconnectDecision(true, 1, TimeSpan.FromMilliseconds(500)), first);
-        Assert.Equal(new RtspReconnectDecision(true, 2, TimeSpan.FromMilliseconds(800)), second);
-        Assert.Equal(new RtspReconnectDecision(false, 3, TimeSpan.Zero), rejected);
+        Assert.Equal(new MediaReconnectDecision(true, 1, TimeSpan.FromMilliseconds(500)), first);
+        Assert.Equal(new MediaReconnectDecision(true, 2, TimeSpan.FromMilliseconds(800)), second);
+        Assert.Equal(new MediaReconnectDecision(false, 3, TimeSpan.Zero), rejected);
         Assert.Equal(new MediaReconnectDiagnostics(3, 2, 0, TimeSpan.Zero), state.Diagnostics);
     }
 
     [Fact]
     public void RegisterSuccess_CountsOneRecoveryAndResetsConsecutiveFailures()
     {
-        var state = new RtspReconnectState(
-            new RtspStreamOptions
+        var state = new MediaReconnectState(
+            new FfmpegPlaybackOptions
             {
                 ReconnectEnabled = true,
                 ReconnectInitialDelayMilliseconds = 100,
@@ -50,8 +50,8 @@ public sealed class RtspReconnectStateTests
     [Fact]
     public void RegisterFailure_WhenDisabled_DoesNotCountRetryAttempt()
     {
-        var state = new RtspReconnectState(
-            new RtspStreamOptions { ReconnectEnabled = false },
+        var state = new MediaReconnectState(
+            new FfmpegPlaybackOptions { ReconnectEnabled = false },
             _ => 0);
 
         var decision = state.RegisterFailure();

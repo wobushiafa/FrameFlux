@@ -3,7 +3,7 @@ using System.Diagnostics.Metrics;
 
 namespace FrameFlux.FFmpeg;
 
-internal static class RtspTelemetry
+internal static class FfmpegTelemetry
 {
     public static ActivitySource Activities { get; } = new("FrameFlux.FFmpeg");
 

@@ -19,8 +19,8 @@ public sealed class PlatformStabilityMatrixTests
         MediaFrameStorageKind storageKind,
         string presentationFailure)
     {
-        var reconnect = new RtspReconnectState(
-            new RtspStreamOptions
+        var reconnect = new MediaReconnectState(
+            new FfmpegPlaybackOptions
             {
                 ReconnectEnabled = true,
                 MaximumReconnectAttempts = 3,
@@ -58,8 +58,8 @@ public sealed class PlatformStabilityMatrixTests
     {
         const int streamCount = 16;
         var states = Enumerable.Range(0, streamCount)
-            .Select(_ => new RtspReconnectState(
-                new RtspStreamOptions
+            .Select(_ => new MediaReconnectState(
+                new FfmpegPlaybackOptions
                 {
                     ReconnectEnabled = true,
                     MaximumReconnectAttempts = 2,

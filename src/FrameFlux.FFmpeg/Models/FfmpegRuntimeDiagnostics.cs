@@ -5,7 +5,7 @@ using System.Threading;
 
 namespace FrameFlux.FFmpeg;
 
-internal static class RtspRuntimeDiagnostics
+internal static class FfmpegRuntimeDiagnostics
 {
     private static int _activeStreamClients;
 

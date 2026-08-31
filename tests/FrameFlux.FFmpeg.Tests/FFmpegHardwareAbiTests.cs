@@ -127,7 +127,7 @@ public sealed class FFmpegHardwareAbiTests
 
         lease.ResetD3D11(1920, 1080, new IntPtr(0x1234), 7);
 
-        Assert.Equal(RtspNativePixelFormat.D3D11Texture, lease.PixelFormat);
+        Assert.Equal(FfmpegNativePixelFormat.D3D11Texture, lease.PixelFormat);
         Assert.Equal(new IntPtr(0x1234), lease.D3D11Texture);
         Assert.Equal(7, lease.D3D11ArraySlice);
         Assert.True(((IMediaFrameLease)lease).TryGetD3D11Texture(out var texture));

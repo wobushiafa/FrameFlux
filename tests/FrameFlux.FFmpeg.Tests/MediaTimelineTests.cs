@@ -10,7 +10,7 @@ public sealed class MediaTimelineTests
         var stream = CreateStreamInfo(startTimestamp: 90_000);
         var frame = CreateFrameInfo(presentationTimestamp: 95_000);
 
-        var position = RtspDecoder.GetRelativePosition(frame, stream);
+        var position = FfmpegDecoder.GetRelativePosition(frame, stream);
 
         Assert.Equal(TimeSpan.FromSeconds(5), position);
     }
@@ -21,7 +21,7 @@ public sealed class MediaTimelineTests
         var stream = CreateStreamInfo(startTimestamp: 90_000);
         var frame = CreateFrameInfo(presentationTimestamp: 89_500);
 
-        var position = RtspDecoder.GetRelativePosition(frame, stream);
+        var position = FfmpegDecoder.GetRelativePosition(frame, stream);
 
         Assert.Equal(TimeSpan.Zero, position);
     }
@@ -31,7 +31,7 @@ public sealed class MediaTimelineTests
     {
         var stream = CreateStreamInfo(startTimestamp: 90_000);
 
-        var timestamp = RtspDecoder.GetSeekTimestamp(TimeSpan.FromSeconds(5), stream);
+        var timestamp = FfmpegDecoder.GetSeekTimestamp(TimeSpan.FromSeconds(5), stream);
 
         Assert.Equal(95_000, timestamp);
     }
@@ -44,10 +44,10 @@ public sealed class MediaTimelineTests
 
         Assert.Equal(
             TimeSpan.FromSeconds(5),
-            RtspDecoder.GetRelativePosition(frame, stream));
+            FfmpegDecoder.GetRelativePosition(frame, stream));
         Assert.Equal(
             5_000,
-            RtspDecoder.GetSeekTimestamp(TimeSpan.FromSeconds(5), stream));
+            FfmpegDecoder.GetSeekTimestamp(TimeSpan.FromSeconds(5), stream));
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public sealed class MediaTimelineTests
         var stream = CreateStreamInfo(startTimestamp: 90_000);
         var frame = CreateFrameInfo(presentationTimestamp: long.MinValue);
 
-        Assert.Null(RtspDecoder.GetRelativePosition(frame, stream));
+        Assert.Null(FfmpegDecoder.GetRelativePosition(frame, stream));
     }
 
     private static NativeStreamInfo CreateStreamInfo(long startTimestamp) => new()

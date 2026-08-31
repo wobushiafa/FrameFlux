@@ -24,30 +24,30 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
 
     public int Stride { get; internal set; }
 
-    public RtspNativePixelFormat PixelFormat { get; internal set; } = RtspNativePixelFormat.Bgra32;
+    public FfmpegNativePixelFormat PixelFormat { get; internal set; } = FfmpegNativePixelFormat.Bgra32;
 
     public MediaFrameStorageKind StorageKind =>
         PixelFormat switch
         {
-            RtspNativePixelFormat.D3D11Texture => MediaFrameStorageKind.D3D11Texture,
-            RtspNativePixelFormat.DmaBuf => MediaFrameStorageKind.DmaBuf,
+            FfmpegNativePixelFormat.D3D11Texture => MediaFrameStorageKind.D3D11Texture,
+            FfmpegNativePixelFormat.DmaBuf => MediaFrameStorageKind.DmaBuf,
             _ => MediaFrameStorageKind.CpuMemory
         };
 
     MediaPixelFormat IMediaFrameLease.PixelFormat => PixelFormat switch
     {
-        RtspNativePixelFormat.Yuv420P => MediaPixelFormat.Yuv420P,
-        RtspNativePixelFormat.Nv12 => MediaPixelFormat.Nv12,
-        RtspNativePixelFormat.Nv21 => MediaPixelFormat.Nv21,
-        RtspNativePixelFormat.D3D11Texture => MediaPixelFormat.Unknown,
-        RtspNativePixelFormat.DmaBuf => MediaPixelFormat.Unknown,
+        FfmpegNativePixelFormat.Yuv420P => MediaPixelFormat.Yuv420P,
+        FfmpegNativePixelFormat.Nv12 => MediaPixelFormat.Nv12,
+        FfmpegNativePixelFormat.Nv21 => MediaPixelFormat.Nv21,
+        FfmpegNativePixelFormat.D3D11Texture => MediaPixelFormat.Unknown,
+        FfmpegNativePixelFormat.DmaBuf => MediaPixelFormat.Unknown,
         _ => MediaPixelFormat.Bgra32
     };
 
     public bool TryGetCpuBuffer(out MediaCpuFrameBuffer buffer)
     {
         if (Volatile.Read(ref _disposed) != 0 ||
-            PixelFormat == RtspNativePixelFormat.D3D11Texture ||
+            PixelFormat == FfmpegNativePixelFormat.D3D11Texture ||
             Plane0Pointer == IntPtr.Zero)
         {
             buffer = default;
@@ -69,7 +69,7 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
     public bool TryGetD3D11Texture(out MediaD3D11TextureBuffer texture)
     {
         if (Volatile.Read(ref _disposed) != 0 ||
-            PixelFormat != RtspNativePixelFormat.D3D11Texture ||
+            PixelFormat != FfmpegNativePixelFormat.D3D11Texture ||
             D3D11Texture == IntPtr.Zero)
         {
             texture = default;
@@ -83,7 +83,7 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
     public bool TryGetDmaBuf(out MediaDmaBufFrameBuffer dmaBuf)
     {
         if (Volatile.Read(ref _disposed) != 0 ||
-            PixelFormat != RtspNativePixelFormat.DmaBuf)
+            PixelFormat != FfmpegNativePixelFormat.DmaBuf)
         {
             dmaBuf = default;
             return false;
@@ -135,7 +135,7 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
         Width = width;
         Height = height;
         Stride = stride;
-        PixelFormat = RtspNativePixelFormat.Bgra32;
+        PixelFormat = FfmpegNativePixelFormat.Bgra32;
         Plane0Offset = 0;
         Plane1Offset = 0;
         Plane2Offset = 0;
@@ -151,7 +151,7 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
     internal void ResetNative(
         int width,
         int height,
-        RtspNativePixelFormat pixelFormat,
+        FfmpegNativePixelFormat pixelFormat,
         int plane0Offset,
         int plane1Offset,
         int plane2Offset,
@@ -179,7 +179,7 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
     internal void ResetNativeDirect(
         int width,
         int height,
-        RtspNativePixelFormat pixelFormat,
+        FfmpegNativePixelFormat pixelFormat,
         IntPtr plane0Pointer,
         IntPtr plane1Pointer,
         IntPtr plane2Pointer,
@@ -212,7 +212,7 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
         Width = width;
         Height = height;
         Stride = 0;
-        PixelFormat = RtspNativePixelFormat.D3D11Texture;
+        PixelFormat = FfmpegNativePixelFormat.D3D11Texture;
         Plane0Offset = 0;
         Plane1Offset = 0;
         Plane2Offset = 0;
@@ -237,7 +237,7 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
         Width = width;
         Height = height;
         Stride = 0;
-        PixelFormat = RtspNativePixelFormat.DmaBuf;
+        PixelFormat = FfmpegNativePixelFormat.DmaBuf;
         Plane0Offset = 0;
         Plane1Offset = 0;
         Plane2Offset = 0;

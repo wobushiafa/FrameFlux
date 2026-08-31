@@ -2,9 +2,9 @@ using System;
 
 namespace FrameFlux.FFmpeg;
 
-internal sealed class RtspDecoderRuntimeException : Exception
+internal sealed class FfmpegDecoderRuntimeException : Exception
 {
-    public RtspDecoderRuntimeException(
+    public FfmpegDecoderRuntimeException(
         string message,
         Exception? innerException,
         bool isHardwareVideoDecodingActive)

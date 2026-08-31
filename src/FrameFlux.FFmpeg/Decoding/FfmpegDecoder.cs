@@ -31,17 +31,17 @@ internal sealed class NativeDecodedFrame : IDisposable
     }
 }
 
-internal sealed class RtspDecoder : IDisposable
+internal sealed class FfmpegDecoder : IDisposable
 {
-    private readonly RtspStreamOptions _options;
+    private readonly FfmpegPlaybackOptions _options;
     private readonly NativeRtspSessionHandle _session;
     private readonly CancellationTokenRegistration _cancellationRegistration;
     private readonly NativeStreamInfo _streamInfo;
     private bool _disposed;
 
-    internal RtspDecoder(
+    internal FfmpegDecoder(
         string url,
-        RtspStreamOptions options,
+        FfmpegPlaybackOptions options,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(url);
@@ -58,14 +58,14 @@ internal sealed class RtspDecoder : IDisposable
             ReadTimeoutMilliseconds = options.ReadTimeoutMilliseconds,
             LowLatency = options.LowLatency ? 1 : 0,
             UseHardwareAcceleration =
-                RtspPlaybackConfiguration.UsesHardwareDecoding(options.VideoDecodingMode) ? 1 : 0,
+                FfmpegPlaybackConfiguration.UsesHardwareDecoding(options.VideoDecodingMode) ? 1 : 0,
             FallbackToSoftware =
-                RtspPlaybackConfiguration.AllowsSoftwareFallback(options.VideoDecodingMode) ? 1 : 0,
+                FfmpegPlaybackConfiguration.AllowsSoftwareFallback(options.VideoDecodingMode) ? 1 : 0,
             PreserveHardwareFrames =
                 (OperatingSystem.IsWindows() &&
-                 options.FrameDeliveryMode == RtspFrameDeliveryMode.D3D11Texture) ||
+                 options.FrameDeliveryMode == FfmpegFrameDeliveryMode.D3D11Texture) ||
                 (OperatingSystem.IsLinux() &&
-                 options.FrameDeliveryMode == RtspFrameDeliveryMode.DmaBuf)
+                 options.FrameDeliveryMode == FfmpegFrameDeliveryMode.DmaBuf)
                     ? 1
                     : 0,
             EnableAudio = options.EnableAudio ? 1 : 0,
@@ -236,21 +236,21 @@ internal sealed class RtspDecoder : IDisposable
         }
     }
 
-    private RtspDecoderRuntimeException CreateRuntimeException(string message) =>
+    private FfmpegDecoderRuntimeException CreateRuntimeException(string message) =>
         new(message, null, IsHardwareVideoDecodingActive);
 
     internal bool TryGetNativePixelFormat(
         NativeDecodedFrame frame,
-        out RtspNativePixelFormat pixelFormat)
+        out FfmpegNativePixelFormat pixelFormat)
     {
         pixelFormat = frame.Info.PixelFormat switch
         {
-            NativePixelFormat.Bgra32 => RtspNativePixelFormat.Bgra32,
-            NativePixelFormat.Yuv420P => RtspNativePixelFormat.Yuv420P,
-            NativePixelFormat.Nv12 => RtspNativePixelFormat.Nv12,
-            NativePixelFormat.Nv21 => RtspNativePixelFormat.Nv21,
-            NativePixelFormat.D3D11Texture => RtspNativePixelFormat.D3D11Texture,
-            NativePixelFormat.DmaBuf => RtspNativePixelFormat.DmaBuf,
+            NativePixelFormat.Bgra32 => FfmpegNativePixelFormat.Bgra32,
+            NativePixelFormat.Yuv420P => FfmpegNativePixelFormat.Yuv420P,
+            NativePixelFormat.Nv12 => FfmpegNativePixelFormat.Nv12,
+            NativePixelFormat.Nv21 => FfmpegNativePixelFormat.Nv21,
+            NativePixelFormat.D3D11Texture => FfmpegNativePixelFormat.D3D11Texture,
+            NativePixelFormat.DmaBuf => FfmpegNativePixelFormat.DmaBuf,
             _ => default
         };
         return frame.Info.PixelFormat is NativePixelFormat.Bgra32 or
@@ -260,17 +260,17 @@ internal sealed class RtspDecoder : IDisposable
 
     internal FfmpegMediaFrameLease CreateNativeFrameLease(
         NativeDecodedFrame frame,
-        RtspNativePixelFormat pixelFormat)
+        FfmpegNativePixelFormat pixelFormat)
     {
         var info = frame.Info;
         var handle = frame.DetachHandle();
         var lease = new FfmpegMediaFrameLease(IntPtr.Zero, 0, _ => handle.Dispose());
-        if (pixelFormat == RtspNativePixelFormat.D3D11Texture)
+        if (pixelFormat == FfmpegNativePixelFormat.D3D11Texture)
         {
             lease.ResetD3D11(info.Width, info.Height, info.Plane0, checked((int)info.Plane1));
             return lease;
         }
-        if (pixelFormat == RtspNativePixelFormat.DmaBuf)
+        if (pixelFormat == FfmpegNativePixelFormat.DmaBuf)
         {
             lease.ResetDmaBuf(
                 info.Width,

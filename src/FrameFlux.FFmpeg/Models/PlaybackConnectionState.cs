@@ -1,6 +1,6 @@
 namespace FrameFlux.FFmpeg;
 
-internal enum RtspConnectionState
+internal enum PlaybackConnectionState
 {
     Idle,
     Connecting,

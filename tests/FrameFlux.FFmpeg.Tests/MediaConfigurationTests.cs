@@ -8,28 +8,28 @@ namespace FrameFlux.FFmpeg.Tests;
 public sealed class MediaConfigurationTests
 {
     [Theory]
-    [InlineData(MediaVideoDecodingPolicy.SoftwareOnly, (int)RtspVideoDecodingMode.SoftwareOnly)]
-    [InlineData(MediaVideoDecodingPolicy.HardwarePreferred, (int)RtspVideoDecodingMode.HardwarePreferred)]
-    [InlineData(MediaVideoDecodingPolicy.HardwareRequired, (int)RtspVideoDecodingMode.HardwareRequired)]
+    [InlineData(MediaVideoDecodingPolicy.SoftwareOnly, (int)FfmpegVideoDecodingMode.SoftwareOnly)]
+    [InlineData(MediaVideoDecodingPolicy.HardwarePreferred, (int)FfmpegVideoDecodingMode.HardwarePreferred)]
+    [InlineData(MediaVideoDecodingPolicy.HardwareRequired, (int)FfmpegVideoDecodingMode.HardwareRequired)]
     public void DecodingPolicy_MapsExplicitModes(
         MediaVideoDecodingPolicy policy,
         int expected)
     {
         Assert.Equal(
-            (RtspVideoDecodingMode)expected,
-            RtspPlaybackConfiguration.ResolveVideoDecodingMode(policy));
+            (FfmpegVideoDecodingMode)expected,
+            FfmpegPlaybackConfiguration.ResolveVideoDecodingMode(policy));
     }
 
     [Fact]
     public void DecodingPolicy_AutomaticUsesPlatformDefault()
     {
         var expected = OperatingSystem.IsWindows() || OperatingSystem.IsLinux()
-            ? RtspVideoDecodingMode.HardwarePreferred
-            : RtspVideoDecodingMode.SoftwareOnly;
+            ? FfmpegVideoDecodingMode.HardwarePreferred
+            : FfmpegVideoDecodingMode.SoftwareOnly;
 
         Assert.Equal(
             expected,
-            RtspPlaybackConfiguration.ResolveVideoDecodingMode(
+            FfmpegPlaybackConfiguration.ResolveVideoDecodingMode(
                 MediaVideoDecodingPolicy.Automatic));
     }
 
@@ -137,14 +137,14 @@ public sealed class MediaConfigurationTests
     [Fact]
     public void ReconnectPolicy_RespectsDisableAttemptLimitAndDelayCap()
     {
-        using var disabledClient = new RtspStreamClient(
+        using var disabledClient = new FfmpegPlaybackClient(
             "rtsp://camera/disabled",
-            new RtspStreamOptions { ReconnectEnabled = false });
+            new FfmpegPlaybackOptions { ReconnectEnabled = false });
         Assert.False(disabledClient.ShouldReconnect(1));
 
-        using var limitedClient = new RtspStreamClient(
+        using var limitedClient = new FfmpegPlaybackClient(
             "rtsp://camera/limited",
-            new RtspStreamOptions
+            new FfmpegPlaybackOptions
             {
                 ReconnectEnabled = true,
                 MaximumReconnectAttempts = 2,
@@ -207,7 +207,7 @@ public sealed class MediaConfigurationTests
             "CreateEngineOptions",
             BindingFlags.Instance | BindingFlags.NonPublic);
 
-        var options = Assert.IsType<RtspStreamOptions>(method?.Invoke(session, null));
+        var options = Assert.IsType<FfmpegPlaybackOptions>(method?.Invoke(session, null));
 
         Assert.Equal(expected, options.CreateSnapshotFrames);
     }

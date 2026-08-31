@@ -1,6 +1,6 @@
 namespace FrameFlux.FFmpeg;
 
-internal enum RtspVideoDecodingMode
+internal enum FfmpegVideoDecodingMode
 {
     SoftwareOnly,
     HardwarePreferred,

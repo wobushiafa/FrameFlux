@@ -1,6 +1,6 @@
 namespace FrameFlux.FFmpeg;
 
-internal enum RtspScaleQuality
+internal enum FfmpegScaleQuality
 {
     /// <summary>
     /// 多路预览推荐

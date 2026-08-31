@@ -5,14 +5,14 @@ using Java.Nio;
 
 namespace FrameFlux.FFmpeg.Android;
 
-internal sealed class AndroidMediaCodecDecoderFactory : IPlatformRtspDecoderFactory
+internal sealed class AndroidMediaCodecDecoderFactory : IPlatformVideoDecoderFactory
 {
-    public bool CanCreate(IMediaVideoOutput? output, RtspStreamOptions options) =>
+    public bool CanCreate(IMediaVideoOutput? output, FfmpegPlaybackOptions options) =>
         !options.CreateSnapshotFrames && ResolveSurfaceOutput(output) is not null;
 
-    public IPlatformRtspDecoder Create(
+    public IPlatformVideoDecoder Create(
         string url,
-        RtspStreamOptions options,
+        FfmpegPlaybackOptions options,
         IMediaVideoOutput output,
         CancellationToken cancellationToken)
     {
@@ -29,7 +29,7 @@ internal sealed class AndroidMediaCodecDecoderFactory : IPlatformRtspDecoderFact
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            throw new RtspDecoderRuntimeException(
+            throw new FfmpegDecoderRuntimeException(
                 $"Android MediaCodec initialization failed: {exception.Message}",
                 exception,
                 isHardwareVideoDecodingActive: true);
@@ -44,12 +44,12 @@ internal sealed class AndroidMediaCodecDecoderFactory : IPlatformRtspDecoderFact
     }
 }
 
-internal sealed class AndroidMediaCodecDecoder : IPlatformRtspDecoder
+internal sealed class AndroidMediaCodecDecoder : IPlatformVideoDecoder
 {
     private const int OutputFormatChanged = -2;
     private const long CodecTimeoutMicroseconds = 10_000;
     private readonly IAndroidVideoSurfaceOutput _output;
-    private readonly NativeRtspPacketReader _reader;
+    private readonly NativeFfmpegPacketReader _reader;
     private readonly MediaCodec _codec;
     private readonly MediaCodec.BufferInfo _bufferInfo = new();
     private readonly MediaCodecInitializationData _initializationData;
@@ -62,15 +62,15 @@ internal sealed class AndroidMediaCodecDecoder : IPlatformRtspDecoder
 
     internal AndroidMediaCodecDecoder(
         string url,
-        RtspStreamOptions options,
+        FfmpegPlaybackOptions options,
         IAndroidVideoSurfaceOutput output,
         CancellationToken cancellationToken)
     {
-        NativeRtspPacketReader? reader = null;
+        NativeFfmpegPacketReader? reader = null;
         MediaCodec? codec = null;
         try
         {
-            reader = new NativeRtspPacketReader(url, options, cancellationToken);
+            reader = new NativeFfmpegPacketReader(url, options, cancellationToken);
             var mimeType = reader.Codec switch
             {
                 NativeVideoCodec.H264 => MediaFormat.MimetypeVideoAvc,
@@ -183,7 +183,7 @@ internal sealed class AndroidMediaCodecDecoder : IPlatformRtspDecoder
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            throw new RtspDecoderRuntimeException(
+            throw new FfmpegDecoderRuntimeException(
                 $"Android MediaCodec decoding failed: {exception.Message}",
                 exception,
                 isHardwareVideoDecodingActive: true);

@@ -7,20 +7,20 @@ using System.Threading.Tasks;
 
 namespace FrameFlux.FFmpeg;
 
-internal sealed class RtspStreamClient : IDisposable
+internal sealed class FfmpegPlaybackClient : IDisposable
 {
     private readonly string _url;
     private readonly IMediaVideoOutput? _videoOutput;
     private readonly bool _isLive;
     private readonly ManualResetEventSlim _playbackGate = new(initialState: true);
     private readonly MediaPlaybackClock _playbackClock = new();
-    private RtspStreamOptions _options;
+    private FfmpegPlaybackOptions _options;
     private Thread? _decodeThread;
     private volatile bool _isRunning;
     private CancellationTokenSource? _cancellationTokenSource;
     private TaskCompletionSource<object?> _completionSource = CreateCompletedCompletionSource();
     private volatile bool _isFrameDeliveryEnabled = true;
-    private RtspConnectionState _connectionState = RtspConnectionState.Idle;
+    private PlaybackConnectionState _connectionState = PlaybackConnectionState.Idle;
     private readonly UnmanagedFrameBufferPool _frameBufferPool = new();
     private int _disposeSignaled;
     private string _videoDecoderDiagnostics = "N/A";
@@ -30,7 +30,7 @@ internal sealed class RtspStreamClient : IDisposable
     private MediaAudioDiagnostics _lastAudioDiagnostics = MediaAudioDiagnostics.Empty;
     private MediaSynchronizationDiagnostics _synchronizationDiagnostics =
         MediaSynchronizationDiagnostics.Empty;
-    private readonly RtspReconnectState _reconnectState;
+    private readonly MediaReconnectState _reconnectState;
     private MediaSeekRequest? _pendingSeek;
     private long _positionTicks;
     private long _durationTicks = -1;
@@ -51,10 +51,10 @@ internal sealed class RtspStreamClient : IDisposable
     internal event FrameReceivedHandler? OnFrameReceived;
     internal event FrameLeaseReceivedHandler? OnFrameLeaseReceived;
     internal event FrameLeaseReceivedHandler? OnSnapshotFrameLeaseReceived;
-    internal event EventHandler<RtspStreamErrorEventArgs>? StreamError;
-    internal event EventHandler<RtspConnectionStateChangedEventArgs>? ConnectionStateChanged;
+    internal event EventHandler<FfmpegPlaybackErrorEventArgs>? StreamError;
+    internal event EventHandler<PlaybackConnectionStateChangedEventArgs>? ConnectionStateChanged;
     internal event EventHandler<bool>? HardwareVideoDecodingChanged;
-    internal event EventHandler<RtspPerformanceSnapshot>? PerformanceUpdated;
+    internal event EventHandler<FfmpegPerformanceSnapshot>? PerformanceUpdated;
 
     internal Task Completion => Volatile.Read(ref _completionSource).Task;
 
@@ -123,20 +123,20 @@ internal sealed class RtspStreamClient : IDisposable
             new OperationCanceledException("The seek request was superseded."));
         return new ValueTask(request.Completion.Task.WaitAsync(cancellationToken));
     }
-    internal RtspStreamClient(
+    internal FfmpegPlaybackClient(
         string url,
-        RtspStreamOptions options,
+        FfmpegPlaybackOptions options,
         IMediaVideoOutput? videoOutput = null)
     {
         _url = url;
         _options = options;
         _videoOutput = videoOutput;
-        _reconnectState = new RtspReconnectState(options);
+        _reconnectState = new MediaReconnectState(options);
         _volume = options.Volume;
         _muted = options.IsMuted;
         _isLive = Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             uri.Scheme is "rtsp" or "rtsps";
-        RtspRuntimeDiagnostics.OnStreamClientCreated();
+        FfmpegRuntimeDiagnostics.OnStreamClientCreated();
     }
 
     public void Start()
@@ -195,8 +195,8 @@ internal sealed class RtspStreamClient : IDisposable
         {
             while (_isRunning && !threadCancellationTokenSource.IsCancellationRequested)
             {
-                RtspDecoder? decoder = null;
-                IPlatformRtspDecoder? platformDecoder = null;
+                FfmpegDecoder? decoder = null;
+                IPlatformVideoDecoder? platformDecoder = null;
                 AudioPlaybackController? audioPlayback = null;
                 var clockSynchronizer = new MediaClockSynchronizer();
                 _synchronizationDiagnostics = MediaSynchronizationDiagnostics.Empty;
@@ -221,7 +221,7 @@ internal sealed class RtspStreamClient : IDisposable
 
                 try
                 {
-                    RaiseConnectionStateChanged(RtspConnectionState.Connecting);
+                    RaiseConnectionStateChanged(PlaybackConnectionState.Connecting);
                     var cancellationToken = threadCancellationTokenSource.Token;
                     if (_isLive && !RtspEndpointProbe.IsReachable(
                             _url,
@@ -230,8 +230,8 @@ internal sealed class RtspStreamClient : IDisposable
                             out var probeFailureMessage))
                     {
                         var reconnect = RegisterReconnectFailure();
-                        RaiseStreamError(new RtspStreamError(
-                            RtspStreamErrorKind.OpenFailed,
+                        RaiseStreamError(new FfmpegPlaybackError(
+                            FfmpegPlaybackErrorKind.OpenFailed,
                             probeFailureMessage ?? "RTSP endpoint is unavailable.",
                             WillRetry: reconnect.RetryAllowed));
                         if (!reconnect.RetryAllowed)
@@ -239,7 +239,7 @@ internal sealed class RtspStreamClient : IDisposable
                             return;
                         }
 
-                        RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
+                        RaiseConnectionStateChanged(PlaybackConnectionState.Reconnecting);
                         SleepBeforeReconnect(threadCancellationTokenSource, reconnect.Delay);
                         continue;
                     }
@@ -252,7 +252,7 @@ internal sealed class RtspStreamClient : IDisposable
                     }
 
                     platformDecoder = _isLive
-                        ? PlatformRtspDecoderRegistry.TryCreate(
+                        ? PlatformVideoDecoderRegistry.TryCreate(
                             _url,
                             _options,
                             _videoOutput,
@@ -260,7 +260,7 @@ internal sealed class RtspStreamClient : IDisposable
                         : null;
                     if (platformDecoder is null)
                     {
-                        decoder = new RtspDecoder(_url, _options, cancellationToken);
+                        decoder = new FfmpegDecoder(_url, _options, cancellationToken);
                     }
                     if (decoder is not null)
                     {
@@ -290,7 +290,7 @@ internal sealed class RtspStreamClient : IDisposable
                     HardwareVideoDecodingChanged?.Invoke(
                         this,
                         platformDecoder?.IsHardwareVideoDecodingActive ?? decoder!.IsHardwareVideoDecodingActive);
-                    RaiseConnectionStateChanged(RtspConnectionState.Connected);
+                    RaiseConnectionStateChanged(PlaybackConnectionState.Connected);
                     while (_isRunning && !threadCancellationTokenSource.IsCancellationRequested)
                     {
                         if (!_isLive && !_playbackGate.IsSet)
@@ -357,8 +357,8 @@ internal sealed class RtspStreamClient : IDisposable
                             }
 
                             var reconnect = RegisterReconnectFailure();
-                            RaiseStreamError(new RtspStreamError(
-                                RtspStreamErrorKind.EndOfStream,
+                            RaiseStreamError(new FfmpegPlaybackError(
+                                FfmpegPlaybackErrorKind.EndOfStream,
                                 "Stream ended or no frame was received.",
                                 WillRetry: reconnect.RetryAllowed));
                             if (!reconnect.RetryAllowed)
@@ -366,7 +366,7 @@ internal sealed class RtspStreamClient : IDisposable
                                 return;
                             }
 
-                            RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
+                            RaiseConnectionStateChanged(PlaybackConnectionState.Reconnecting);
                             SleepBeforeReconnect(threadCancellationTokenSource, reconnect.Delay);
                             break;
                         }
@@ -420,8 +420,8 @@ internal sealed class RtspStreamClient : IDisposable
                                 var dispatchedNativeFrame = false;
 
                                 if (useLeasedFrameDelivery &&
-                                    (_options.FrameDeliveryMode is RtspFrameDeliveryMode.D3D11Texture or
-                                        RtspFrameDeliveryMode.DmaBuf) &&
+                                    (_options.FrameDeliveryMode is FfmpegFrameDeliveryMode.D3D11Texture or
+                                        FfmpegFrameDeliveryMode.DmaBuf) &&
                                     decoder.TryGetNativePixelFormat(frame, out var nativePixelFormat) &&
                                     NativeFrameMatchesDeliveryMode(
                                         _options.FrameDeliveryMode,
@@ -591,8 +591,8 @@ internal sealed class RtspStreamClient : IDisposable
                             }
 
                             var reconnect = RegisterReconnectFailure();
-                            RaiseStreamError(new RtspStreamError(
-                                RtspStreamErrorKind.EndOfStream,
+                            RaiseStreamError(new FfmpegPlaybackError(
+                                FfmpegPlaybackErrorKind.EndOfStream,
                                 "Stream ended or no frame was received.",
                                 WillRetry: reconnect.RetryAllowed));
                             if (!reconnect.RetryAllowed)
@@ -600,7 +600,7 @@ internal sealed class RtspStreamClient : IDisposable
                                 return;
                             }
 
-                            RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
+                            RaiseConnectionStateChanged(PlaybackConnectionState.Reconnecting);
                             SleepBeforeReconnect(threadCancellationTokenSource, reconnect.Delay);
                             break;
                         }
@@ -613,11 +613,11 @@ internal sealed class RtspStreamClient : IDisposable
                         break;
                     }
 
-                    var kind = hasOpened ? RtspStreamErrorKind.DecodeFailed : RtspStreamErrorKind.OpenFailed;
+                    var kind = hasOpened ? FfmpegPlaybackErrorKind.DecodeFailed : FfmpegPlaybackErrorKind.OpenFailed;
                     var willFallbackToSoftware = ShouldFallbackToSoftware(ex);
                     var reconnect = _isLive ? RegisterReconnectFailure() : default;
                     var errorMessage = FormatExceptionMessage(ex);
-                    RaiseStreamError(new RtspStreamError(
+                    RaiseStreamError(new FfmpegPlaybackError(
                         kind,
                         willFallbackToSoftware ? $"{errorMessage} Falling back to software decoding." : errorMessage,
                         ex,
@@ -634,7 +634,7 @@ internal sealed class RtspStreamClient : IDisposable
                         return;
                     }
 
-                    RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
+                    RaiseConnectionStateChanged(PlaybackConnectionState.Reconnecting);
                     SleepBeforeReconnect(threadCancellationTokenSource, reconnect.Delay);
                 }
                 finally
@@ -701,7 +701,7 @@ internal sealed class RtspStreamClient : IDisposable
         _frameBufferPool.Return(lease.Buffer, lease.Size);
     }
 
-    private bool ProcessPendingSeek(RtspDecoder decoder)
+    private bool ProcessPendingSeek(FfmpegDecoder decoder)
     {
         var request = Interlocked.Exchange(ref _pendingSeek, null);
         if (request is null)
@@ -728,7 +728,7 @@ internal sealed class RtspStreamClient : IDisposable
         _frameBufferPool.StopAcceptingReturns();
     }
 
-    private void RaiseConnectionStateChanged(RtspConnectionState state)
+    private void RaiseConnectionStateChanged(PlaybackConnectionState state)
     {
         var oldState = _connectionState;
         if (oldState == state)
@@ -737,19 +737,19 @@ internal sealed class RtspStreamClient : IDisposable
         }
 
         _connectionState = state;
-        ConnectionStateChanged?.Invoke(this, new RtspConnectionStateChangedEventArgs(oldState, state));
+        ConnectionStateChanged?.Invoke(this, new PlaybackConnectionStateChangedEventArgs(oldState, state));
     }
 
-    private void RaiseStreamError(RtspStreamError error)
+    private void RaiseStreamError(FfmpegPlaybackError error)
     {
-        StreamError?.Invoke(this, new RtspStreamErrorEventArgs(error));
+        StreamError?.Invoke(this, new FfmpegPlaybackErrorEventArgs(error));
     }
 
     private bool ShouldFallbackToSoftware(Exception exception)
     {
-        return RtspPlaybackConfiguration.UsesHardwareDecoding(_options.VideoDecodingMode) &&
-               RtspPlaybackConfiguration.AllowsSoftwareFallback(_options.VideoDecodingMode) &&
-               exception is RtspDecoderRuntimeException { IsHardwareVideoDecodingActive: true };
+        return FfmpegPlaybackConfiguration.UsesHardwareDecoding(_options.VideoDecodingMode) &&
+               FfmpegPlaybackConfiguration.AllowsSoftwareFallback(_options.VideoDecodingMode) &&
+               exception is FfmpegDecoderRuntimeException { IsHardwareVideoDecodingActive: true };
     }
 
     private static string FormatExceptionMessage(Exception exception)
@@ -765,11 +765,11 @@ internal sealed class RtspStreamClient : IDisposable
         return message;
     }
 
-    private static RtspStreamOptions CreateSoftwareFallbackOptions(RtspStreamOptions options)
+    private static FfmpegPlaybackOptions CreateSoftwareFallbackOptions(FfmpegPlaybackOptions options)
     {
-        return new RtspStreamOptions
+        return new FfmpegPlaybackOptions
         {
-            VideoDecodingMode = RtspVideoDecodingMode.SoftwareOnly,
+            VideoDecodingMode = FfmpegVideoDecodingMode.SoftwareOnly,
             FrameDeliveryMode = options.FrameDeliveryMode,
             Transport = options.Transport,
             OpenTimeoutMilliseconds = options.OpenTimeoutMilliseconds,
@@ -797,12 +797,12 @@ internal sealed class RtspStreamClient : IDisposable
     }
 
     private static bool NativeFrameMatchesDeliveryMode(
-        RtspFrameDeliveryMode deliveryMode,
-        RtspNativePixelFormat pixelFormat) =>
-        (deliveryMode == RtspFrameDeliveryMode.D3D11Texture &&
-         pixelFormat == RtspNativePixelFormat.D3D11Texture) ||
-        (deliveryMode == RtspFrameDeliveryMode.DmaBuf &&
-         pixelFormat == RtspNativePixelFormat.DmaBuf);
+        FfmpegFrameDeliveryMode deliveryMode,
+        FfmpegNativePixelFormat pixelFormat) =>
+        (deliveryMode == FfmpegFrameDeliveryMode.D3D11Texture &&
+         pixelFormat == FfmpegNativePixelFormat.D3D11Texture) ||
+        (deliveryMode == FfmpegFrameDeliveryMode.DmaBuf &&
+         pixelFormat == FfmpegNativePixelFormat.DmaBuf);
 
     private static bool ShouldRenderFrame(TimeSpan frameInterval, ref long lastFrameAt)
     {
@@ -829,7 +829,7 @@ internal sealed class RtspStreamClient : IDisposable
     }
 
     private void DrainAudio(
-        RtspDecoder decoder,
+        FfmpegDecoder decoder,
         AudioPlaybackController? audioPlayback)
     {
         if (audioPlayback is null)
@@ -848,7 +848,7 @@ internal sealed class RtspStreamClient : IDisposable
     }
 
     private void DrainAudio(
-        IPlatformRtspDecoder decoder,
+        IPlatformVideoDecoder decoder,
         AudioPlaybackController? audioPlayback)
     {
         if (audioPlayback is null)
@@ -970,13 +970,13 @@ internal sealed class RtspStreamClient : IDisposable
         threadCancellationTokenSource.Token.WaitHandle.WaitOne(delay);
     }
 
-    private RtspReconnectDecision RegisterReconnectFailure()
+    private MediaReconnectDecision RegisterReconnectFailure()
     {
         var decision = _reconnectState.RegisterFailure();
         if (decision.RetryAllowed)
         {
-            RtspTelemetry.ReconnectAttempts.Add(1);
-            RtspTelemetry.ReconnectDelay.Record(decision.Delay.TotalMilliseconds);
+            FfmpegTelemetry.ReconnectAttempts.Add(1);
+            FfmpegTelemetry.ReconnectDelay.Record(decision.Delay.TotalMilliseconds);
         }
 
         return decision;
@@ -986,7 +986,7 @@ internal sealed class RtspStreamClient : IDisposable
     {
         if (_reconnectState.RegisterSuccess())
         {
-            RtspTelemetry.ReconnectRecoveries.Add(1);
+            FfmpegTelemetry.ReconnectRecoveries.Add(1);
         }
     }
 
@@ -1002,7 +1002,7 @@ internal sealed class RtspStreamClient : IDisposable
     {
         if (Interlocked.Exchange(ref _disposeSignaled, 1) == 0)
         {
-            RtspRuntimeDiagnostics.OnStreamClientDisposed();
+            FfmpegRuntimeDiagnostics.OnStreamClientDisposed();
         }
 
         Stop(waitForExit: true);
@@ -1036,7 +1036,7 @@ internal sealed class RtspStreamClient : IDisposable
             return;
         }
 
-        var snapshot = new RtspPerformanceSnapshot(
+        var snapshot = new FfmpegPerformanceSnapshot(
             ReadMilliseconds: totalReadTicks * 1000d / Stopwatch.Frequency / performanceSamples,
             CodecMilliseconds: totalCodecTicks * 1000d / Stopwatch.Frequency / performanceSamples,
             HardwareTransferMilliseconds: totalHardwareTransferTicks * 1000d / Stopwatch.Frequency / performanceSamples,

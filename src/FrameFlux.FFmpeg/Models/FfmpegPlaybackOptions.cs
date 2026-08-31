@@ -1,10 +1,10 @@
 namespace FrameFlux.FFmpeg;
 
-internal sealed class RtspStreamOptions
+internal sealed class FfmpegPlaybackOptions
 {
-    public RtspVideoDecodingMode VideoDecodingMode { get; init; } = RtspVideoDecodingMode.HardwarePreferred;
+    public FfmpegVideoDecodingMode VideoDecodingMode { get; init; } = FfmpegVideoDecodingMode.HardwarePreferred;
 
-    public RtspFrameDeliveryMode FrameDeliveryMode { get; init; } = RtspFrameDeliveryMode.CpuMemory;
+    public FfmpegFrameDeliveryMode FrameDeliveryMode { get; init; } = FfmpegFrameDeliveryMode.CpuMemory;
     
     public System.IntPtr ExternalHwDevice { get; init; }
 
@@ -50,5 +50,5 @@ internal sealed class RtspStreamOptions
 
     public bool ForceOpaqueAlpha { get; init; } = true;
 
-    public RtspScaleQuality ScaleQuality { get; init; } = RtspScaleQuality.Bilinear;
+    public FfmpegScaleQuality ScaleQuality { get; init; } = FfmpegScaleQuality.Bilinear;
 }

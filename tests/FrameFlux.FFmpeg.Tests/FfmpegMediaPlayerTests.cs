@@ -316,7 +316,7 @@ public sealed class FfmpegMediaPlayerTests
 
         Assert.Equal(
             expectsD3D11Textures,
-            deliveryMode == RtspFrameDeliveryMode.D3D11Texture);
+            deliveryMode == FfmpegFrameDeliveryMode.D3D11Texture);
     }
 
     [Fact]
@@ -325,7 +325,7 @@ public sealed class FfmpegMediaPlayerTests
         var deliveryMode = FfmpegMediaSession.ResolveFrameDeliveryMode(
             new FakeVideoOutput(MediaFrameStorageKind.DmaBuf));
 
-        Assert.Equal(RtspFrameDeliveryMode.DmaBuf, deliveryMode);
+        Assert.Equal(FfmpegFrameDeliveryMode.DmaBuf, deliveryMode);
     }
 
     private sealed class FakeMediaSessionFactory : IFfmpegMediaSessionFactory

@@ -1,17 +1,17 @@
 namespace FrameFlux.FFmpeg;
 
-internal interface IPlatformRtspDecoderFactory
+internal interface IPlatformVideoDecoderFactory
 {
-    bool CanCreate(IMediaVideoOutput? output, RtspStreamOptions options);
+    bool CanCreate(IMediaVideoOutput? output, FfmpegPlaybackOptions options);
 
-    IPlatformRtspDecoder Create(
+    IPlatformVideoDecoder Create(
         string url,
-        RtspStreamOptions options,
+        FfmpegPlaybackOptions options,
         IMediaVideoOutput output,
         CancellationToken cancellationToken);
 }
 
-internal interface IPlatformRtspDecoder : IDisposable
+internal interface IPlatformVideoDecoder : IDisposable
 {
     bool HasAudio { get; }
 
@@ -39,11 +39,11 @@ internal interface IPlatformDecodedVideoFrame : IDisposable
     void Present();
 }
 
-internal static class PlatformRtspDecoderRegistry
+internal static class PlatformVideoDecoderRegistry
 {
-    private static IPlatformRtspDecoderFactory? _androidFactory;
+    private static IPlatformVideoDecoderFactory? _androidFactory;
 
-    internal static void RegisterAndroidFactory(IPlatformRtspDecoderFactory factory)
+    internal static void RegisterAndroidFactory(IPlatformVideoDecoderFactory factory)
     {
         ArgumentNullException.ThrowIfNull(factory);
         var existing = Interlocked.CompareExchange(ref _androidFactory, factory, null);
@@ -54,15 +54,15 @@ internal static class PlatformRtspDecoderRegistry
         }
     }
 
-    internal static IPlatformRtspDecoder? TryCreate(
+    internal static IPlatformVideoDecoder? TryCreate(
         string url,
-        RtspStreamOptions options,
+        FfmpegPlaybackOptions options,
         IMediaVideoOutput? output,
         CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsAndroid() ||
             output is null ||
-            !RtspPlaybackConfiguration.UsesHardwareDecoding(options.VideoDecodingMode))
+            !FfmpegPlaybackConfiguration.UsesHardwareDecoding(options.VideoDecodingMode))
         {
             return null;
         }

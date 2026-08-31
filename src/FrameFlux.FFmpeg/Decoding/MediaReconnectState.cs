@@ -1,16 +1,16 @@
 namespace FrameFlux.FFmpeg;
 
-internal sealed class RtspReconnectState
+internal sealed class MediaReconnectState
 {
     private readonly object _sync = new();
-    private readonly RtspStreamOptions _options;
+    private readonly FfmpegPlaybackOptions _options;
     private readonly Func<int, int> _nextJitter;
     private int _consecutiveFailures;
     private int _totalAttempts;
     private int _recoveryCount;
     private int _nextDelayMilliseconds;
 
-    public RtspReconnectState(RtspStreamOptions options, Func<int, int>? nextJitter = null)
+    public MediaReconnectState(FfmpegPlaybackOptions options, Func<int, int>? nextJitter = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _nextJitter = nextJitter ?? Random.Shared.Next;
@@ -31,7 +31,7 @@ internal sealed class RtspReconnectState
         }
     }
 
-    public RtspReconnectDecision RegisterFailure()
+    public MediaReconnectDecision RegisterFailure()
     {
         lock (_sync)
         {
@@ -42,12 +42,12 @@ internal sealed class RtspReconnectState
             if (!retryAllowed)
             {
                 _nextDelayMilliseconds = 0;
-                return new RtspReconnectDecision(false, _consecutiveFailures, TimeSpan.Zero);
+                return new MediaReconnectDecision(false, _consecutiveFailures, TimeSpan.Zero);
             }
 
             _totalAttempts++;
             _nextDelayMilliseconds = CalculateDelayMilliseconds(_consecutiveFailures);
-            return new RtspReconnectDecision(
+            return new MediaReconnectDecision(
                 true,
                 _consecutiveFailures,
                 TimeSpan.FromMilliseconds(_nextDelayMilliseconds));
@@ -93,7 +93,7 @@ internal sealed class RtspReconnectState
     }
 }
 
-internal readonly record struct RtspReconnectDecision(
+internal readonly record struct MediaReconnectDecision(
     bool RetryAllowed,
     int AttemptNumber,
     TimeSpan Delay);

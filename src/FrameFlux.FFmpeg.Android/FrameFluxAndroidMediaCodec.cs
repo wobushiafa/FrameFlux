@@ -11,5 +11,5 @@ public static class FrameFluxAndroidMediaCodec
     /// Registers the process-wide Android decoder backend. Repeated calls are safe.
     /// </summary>
     public static void Register() =>
-        PlatformRtspDecoderRegistry.RegisterAndroidFactory(Factory);
+        PlatformVideoDecoderRegistry.RegisterAndroidFactory(Factory);
 }

@@ -60,14 +60,14 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
     private readonly ILogger _logger;
     private readonly IMediaVideoOutput? _videoOutput;
     private readonly SemaphoreSlim? _openOperationSemaphore;
-    private RtspStreamClient? _client;
+    private FfmpegPlaybackClient? _client;
     private Task? _stopTask;
     private DiagnosticActivity? _activity;
     private EventHandler<MediaVideoFrame>? _frameReceived;
     private Action<IMediaFrameLease>? _frameLeaseConsumer;
     private MediaPlaybackState _state = MediaPlaybackState.Idle;
     private MediaSnapshot? _lastSnapshot;
-    private RtspPerformanceSnapshot _lastPerformance;
+    private FfmpegPerformanceSnapshot _lastPerformance;
     private string? _lastError;
     private bool _isHardwareVideoDecodingActive;
     private double _playbackRate = 1d;
@@ -288,7 +288,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
                 return ValueTask.CompletedTask;
             }
 
-            var client = new RtspStreamClient(
+            var client = new FfmpegPlaybackClient(
                 Source.Uri.IsFile ? Source.Uri.LocalPath : Source.Uri.ToString(),
                 CreateEngineOptions(),
                 _videoOutput);
@@ -300,14 +300,14 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             client.OnFrameLeaseReceived += OnFrameLeaseReceived;
             client.OnSnapshotFrameLeaseReceived += OnSnapshotFrameLeaseReceived;
             _client = client;
-            _activity = RtspTelemetry.Activities.StartActivity("media.session", ActivityKind.Client);
+            _activity = FfmpegTelemetry.Activities.StartActivity("media.session", ActivityKind.Client);
             _activity?.SetTag("media.source", Source.Uri.GetLeftPart(UriPartial.Authority));
             _activity?.SetTag("media.transport", Options.Network.Transport.ToString());
             UpdateFrameDeliveryLocked();
             client.Start();
         }
 
-        RtspTelemetry.SessionsStarted.Add(1);
+        FfmpegTelemetry.SessionsStarted.Add(1);
         _logger.LogInformation("Started media session for {Host}", Source.Uri.Host);
         return ValueTask.CompletedTask;
     }
@@ -354,7 +354,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         TimeSpan position,
         CancellationToken cancellationToken = default)
     {
-        RtspStreamClient client;
+        FfmpegPlaybackClient client;
         lock (_sync)
         {
             ThrowIfDisposed();
@@ -393,7 +393,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         GC.SuppressFinalize(this);
     }
 
-    private async Task CompleteStopAsync(RtspStreamClient client)
+    private async Task CompleteStopAsync(FfmpegPlaybackClient client)
     {
         try
         {
@@ -422,12 +422,12 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             _activity?.Dispose();
             _activity = null;
             TransitionTo(MediaPlaybackState.Stopped);
-            RtspTelemetry.SessionsStopped.Add(1);
+            FfmpegTelemetry.SessionsStopped.Add(1);
             _logger.LogInformation("Stopped media session for {Host}", Source.Uri.Host);
         }
     }
 
-    private RtspStreamOptions CreateEngineOptions() =>
+    private FfmpegPlaybackOptions CreateEngineOptions() =>
         new()
         {
             Transport = Options.Network.Transport switch
@@ -437,7 +437,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
                 MediaTransport.HttpsTunnel => "https",
                 _ => "tcp"
             },
-            VideoDecodingMode = RtspPlaybackConfiguration.ResolveVideoDecodingMode(
+            VideoDecodingMode = FfmpegPlaybackConfiguration.ResolveVideoDecodingMode(
                 Options.Video.DecodingPolicy),
             FrameDeliveryMode = ResolveFrameDeliveryMode(_videoOutput),
             OpenTimeoutMilliseconds = ToMilliseconds(Options.Network.OpenTimeout),
@@ -464,30 +464,30 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             IsMuted = _isMuted
         };
 
-    internal static RtspFrameDeliveryMode ResolveFrameDeliveryMode(IMediaVideoOutput? output) =>
+    internal static FfmpegFrameDeliveryMode ResolveFrameDeliveryMode(IMediaVideoOutput? output) =>
         output?.PreferredFrameStorage switch
         {
-            MediaFrameStorageKind.D3D11Texture => RtspFrameDeliveryMode.D3D11Texture,
-            MediaFrameStorageKind.DmaBuf => RtspFrameDeliveryMode.DmaBuf,
-            _ => RtspFrameDeliveryMode.CpuMemory
+            MediaFrameStorageKind.D3D11Texture => FfmpegFrameDeliveryMode.D3D11Texture,
+            MediaFrameStorageKind.DmaBuf => FfmpegFrameDeliveryMode.DmaBuf,
+            _ => FfmpegFrameDeliveryMode.CpuMemory
         };
 
     private static int ToMilliseconds(TimeSpan? value) =>
         value is null ? 0 : checked((int)Math.Min(value.Value.TotalMilliseconds, int.MaxValue));
 
-    private void OnConnectionStateChanged(object? sender, RtspConnectionStateChangedEventArgs args)
+    private void OnConnectionStateChanged(object? sender, PlaybackConnectionStateChangedEventArgs args)
     {
         TransitionTo(args.NewState switch
         {
-            RtspConnectionState.Connecting => MediaPlaybackState.Opening,
-            RtspConnectionState.Connected => MediaPlaybackState.Playing,
-            RtspConnectionState.Reconnecting => MediaPlaybackState.Reconnecting,
-            RtspConnectionState.Stopped => MediaPlaybackState.Stopped,
+            PlaybackConnectionState.Connecting => MediaPlaybackState.Opening,
+            PlaybackConnectionState.Connected => MediaPlaybackState.Playing,
+            PlaybackConnectionState.Reconnecting => MediaPlaybackState.Reconnecting,
+            PlaybackConnectionState.Stopped => MediaPlaybackState.Stopped,
             _ => MediaPlaybackState.Idle
         });
     }
 
-    private void OnStreamError(object? sender, RtspStreamErrorEventArgs args)
+    private void OnStreamError(object? sender, FfmpegPlaybackErrorEventArgs args)
     {
         var error = new MediaPlaybackError(
             args.Error.Kind.ToString(),
@@ -499,7 +499,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             _lastError = error.Message;
         }
 
-        RtspTelemetry.SessionErrors.Add(1);
+        FfmpegTelemetry.SessionErrors.Add(1);
         _activity?.SetStatus(ActivityStatusCode.Error, error.Message);
         _logger.LogWarning(error.Exception, "Media stream error for {Host}: {Message}", Source.Uri.Host, error.Message);
         if (!error.IsRecoverable)
@@ -521,15 +521,15 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         }
     }
 
-    private void OnPerformanceUpdated(object? sender, RtspPerformanceSnapshot snapshot)
+    private void OnPerformanceUpdated(object? sender, FfmpegPerformanceSnapshot snapshot)
     {
         lock (_sync)
         {
             _lastPerformance = snapshot;
         }
 
-        RtspTelemetry.FrameReadDuration.Record(snapshot.ReadMilliseconds);
-        RtspTelemetry.FrameDecodeDuration.Record(snapshot.DecodeMilliseconds);
+        FfmpegTelemetry.FrameReadDuration.Record(snapshot.ReadMilliseconds);
+        FfmpegTelemetry.FrameDecodeDuration.Record(snapshot.DecodeMilliseconds);
     }
 
     private void OnFrameLeaseReceived(FfmpegMediaFrameLease lease)
@@ -630,7 +630,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
     private MediaVideoFrame? TryCopyFrame(FfmpegMediaFrameLease lease, bool required)
     {
         if (!required ||
-            lease.PixelFormat != RtspNativePixelFormat.Bgra32 ||
+            lease.PixelFormat != FfmpegNativePixelFormat.Bgra32 ||
             lease.Buffer == IntPtr.Zero ||
             lease.Width <= 0 ||
             lease.Height <= 0 ||
@@ -676,7 +676,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             }
         }
 
-        RtspTelemetry.FramesDelivered.Add(1);
+        FfmpegTelemetry.FramesDelivered.Add(1);
     }
 
     private void TransitionTo(MediaPlaybackState state)

@@ -1,6 +1,6 @@
 namespace FrameFlux.FFmpeg;
 
-internal enum RtspNativePixelFormat
+internal enum FfmpegNativePixelFormat
 {
     Bgra32,
     Yuv420P,
