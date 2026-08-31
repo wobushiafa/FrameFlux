@@ -465,12 +465,12 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
         var top = (float)positionScaleY;
         return
         [
-            left, top, (float)u0, (float)v0,
-            left, bottom, (float)u0, (float)v1,
-            right, bottom, (float)u1, (float)v1,
-            left, top, (float)u0, (float)v0,
-            right, bottom, (float)u1, (float)v1,
-            right, top, (float)u1, (float)v0
+            left, top, (float)u0, (float)v1,
+            left, bottom, (float)u0, (float)v0,
+            right, bottom, (float)u1, (float)v0,
+            left, top, (float)u0, (float)v1,
+            right, bottom, (float)u1, (float)v0,
+            right, top, (float)u1, (float)v1
         ];
     }
 

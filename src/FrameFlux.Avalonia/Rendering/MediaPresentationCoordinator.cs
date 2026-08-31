@@ -12,7 +12,7 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
     private readonly IAvaloniaPlatformMediaOutput? _gpuOutput;
     private readonly IAvaloniaPlatformMediaOutput? _nativeOutput;
     private Control? _overlay;
-    private bool _softwareFallbackRequested;
+    private MediaVideoPresentationMode? _presentationFallbackMode;
     private bool _disposed;
 
     internal MediaPresentationCoordinator(
@@ -50,14 +50,13 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         MediaVideoPresentationMode requestedMode,
         Stretch stretch)
     {
+        var presentationMode = _presentationFallbackMode ?? requestedMode;
         var platformGpuPresentationAvailable =
-            requestedMode == MediaVideoPresentationMode.NativeSurface
+            presentationMode == MediaVideoPresentationMode.NativeSurface
                 ? _nativeOutput is not null
                 : _gpuOutput is not null;
         var plan = MediaPresentationPolicy.Resolve(
-            _softwareFallbackRequested
-                ? MediaVideoPresentationMode.SoftwareBitmap
-                : requestedMode,
+            presentationMode,
             options,
             platformGpuPresentationAvailable,
             _overlay is not null);
@@ -111,7 +110,7 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         }
     }
 
-    internal void ClearSoftwareFallback() => _softwareFallbackRequested = false;
+    internal void ClearSoftwareFallback() => _presentationFallbackMode = null;
 
     internal void Reset()
     {
@@ -211,14 +210,13 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
 
     private void OnPlatformPresentationFailed(
         object? sender,
-        MediaPresentationFailure failure) =>
-        ReportPresentationFailure(failure);
-
-    private void ReportPresentationFailure(MediaPresentationFailure failure)
+        MediaPresentationFailure failure)
     {
         if (failure.RequiresSoftwareFallback)
         {
-            _softwareFallbackRequested = true;
+            _presentationFallbackMode = MediaPresentationFallbackPolicy.Resolve(
+                ReferenceEquals(sender, _nativeOutput),
+                _gpuOutput is not null);
         }
 
         _presentationFailed(failure);

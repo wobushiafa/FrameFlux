@@ -8,7 +8,7 @@ public static class FrameFluxAndroidAppBuilderExtensions
     private static readonly Func<AvaloniaPlatformMediaOutputs> OutputFactory =
         static () => new AvaloniaPlatformMediaOutputs(
             new AndroidSurfaceTextureMediaOutput(),
-            null);
+            new AndroidNativeSurfaceMediaOutput());
 
     public static AppBuilder UseFrameFluxAndroid(this AppBuilder builder)
     {

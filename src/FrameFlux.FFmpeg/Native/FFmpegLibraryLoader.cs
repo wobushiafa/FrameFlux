@@ -16,6 +16,7 @@ internal static class FFmpegLibraryLoader
     private static readonly HashSet<string> LoadedPaths = new(PathComparer);
     private static readonly string[] RequiredComponents = ["avutil", "swresample", "swscale", "avcodec", "avformat"];
     private static readonly string[] LoadOrder = ["avutil", "swresample", "swscale", "avcodec", "avformat"];
+    private static readonly string[] AndroidLoadOrder = ["avcodec", "avutil", "swresample", "swscale", "avformat"];
     private static string? _configuredDirectory;
 
     internal static void Configure(string? libraryDirectory)
@@ -148,7 +149,8 @@ internal static class FFmpegLibraryLoader
         var pendingPaths = new List<string>();
         try
         {
-            foreach (var component in LoadOrder)
+            var loadOrder = OperatingSystem.IsAndroid() ? AndroidLoadOrder : LoadOrder;
+            foreach (var component in loadOrder)
             {
                 if (ComponentHandles.ContainsKey(component))
                 {

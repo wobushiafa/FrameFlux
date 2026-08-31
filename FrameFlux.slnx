@@ -21,6 +21,7 @@
     <Project Path="src/FrameFlux.Wpf/FrameFlux.Wpf.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/FrameFlux.Avalonia.Android.Tests/FrameFlux.Avalonia.Android.Tests.csproj" />
     <Project Path="tests/FrameFlux.Avalonia.Linux.Tests/FrameFlux.Avalonia.Linux.Tests.csproj" />
     <Project Path="tests/FrameFlux.FFmpeg.Tests/FrameFlux.FFmpeg.Tests.csproj" />
     <Project Path="tests/FrameFlux.Presentation.Api.Tests/FrameFlux.Presentation.Api.Tests.csproj" />

@@ -7,8 +7,8 @@
     <IsAotCompatible>true</IsAotCompatible>
     <IsPackable>true</IsPackable>
     <PackageId>FrameFlux.Avalonia.Android</PackageId>
-    <Description>Android SurfaceTexture and OpenGL ES video presentation backend for FrameFlux Avalonia controls.</Description>
-    <PackageTags>media;video;rendering;avalonia;android;opengl;mediacodec</PackageTags>
+    <Description>Android SurfaceView, SurfaceTexture, and OpenGL ES video presentation backends for FrameFlux Avalonia controls.</Description>
+    <PackageTags>media;video;rendering;avalonia;android;surfaceview;opengl;mediacodec</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);1591</NoWarn>
@@ -20,5 +20,6 @@
     <ProjectReference Include="..\FrameFlux.FFmpeg.Android\FrameFlux.FFmpeg.Android.csproj" />
     <ProjectReference Include="..\FrameFlux.Presentation\FrameFlux.Presentation.csproj" />
     <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Android" />
   </ItemGroup>
 </Project>
