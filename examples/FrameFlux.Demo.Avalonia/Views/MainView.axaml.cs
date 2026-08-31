@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using FrameFlux.Avalonia;
 using FrameFlux.FFmpeg;
 
@@ -14,6 +15,7 @@ public sealed partial class MainView : UserControl
     private static readonly IBrush BusyBrush = new SolidColorBrush(Color.Parse("#F59E0B"));
     private static readonly IBrush ErrorBrush = new SolidColorBrush(Color.Parse("#EF4444"));
     private bool _configuringPlaybackModes;
+    private string? _temporaryMediaPath;
 
     public MainView()
     {
@@ -46,18 +48,114 @@ public sealed partial class MainView : UserControl
 
     private async void StartButton_OnClick(object? sender, RoutedEventArgs e)
     {
+        SetSourceCommandsEnabled(false);
         try
         {
             var source = MediaSource.Parse(SourceTextBox.Text ?? string.Empty);
-            await Player.StopAsync();
-            Player.Source = source;
-            SetStatus("Opening stream", BusyBrush);
-            await Player.StartAsync();
+            await StartSourceAsync(source);
         }
         catch (Exception exception)
         {
             SetStatus(exception.Message, ErrorBrush);
         }
+        finally
+        {
+            SetSourceCommandsEnabled(true);
+        }
+    }
+
+    private async void OpenFileButton_OnClick(object? sender, RoutedEventArgs e)
+    {
+        SetSourceCommandsEnabled(false);
+        try
+        {
+            var topLevel = TopLevel.GetTopLevel(this) ??
+                throw new InvalidOperationException("The file picker is unavailable.");
+            var files = await topLevel.StorageProvider.OpenFilePickerAsync(
+                new FilePickerOpenOptions
+                {
+                    Title = "Open media file",
+                    AllowMultiple = false,
+                    FileTypeFilter =
+                    [
+                        new FilePickerFileType("Video files")
+                        {
+                            Patterns = ["*.mp4", "*.mkv", "*.mov", "*.avi", "*.webm"],
+                            MimeTypes = ["video/*"]
+                        }
+                    ]
+                });
+            var file = files.FirstOrDefault();
+            if (file is null)
+            {
+                return;
+            }
+
+            var path = file.TryGetLocalPath();
+            string? temporaryPath = null;
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                temporaryPath = await CopyToTemporaryFileAsync(file);
+                path = temporaryPath;
+            }
+
+            SourceTextBox.Text = path;
+            await StartSourceAsync(MediaSource.FromFile(path), temporaryPath);
+        }
+        catch (Exception exception)
+        {
+            SetStatus(exception.Message, ErrorBrush);
+        }
+        finally
+        {
+            SetSourceCommandsEnabled(true);
+        }
+    }
+
+    private async Task StartSourceAsync(MediaSource source, string? temporaryPath = null)
+    {
+        await Player.StopAsync();
+        DeleteSupersededTemporaryFile(source);
+        _temporaryMediaPath = temporaryPath ?? _temporaryMediaPath;
+        Player.Source = source;
+        SourceKindTextBlock.Text = source.Uri.IsFile ? "FILE" : "LIVE";
+        SourceKindIndicator.Background = source.Uri.IsFile ? IdleBrush : ErrorBrush;
+        SetStatus(source.Uri.IsFile ? "Opening file" : "Opening stream", BusyBrush);
+        await Player.StartAsync();
+    }
+
+    private static async Task<string> CopyToTemporaryFileAsync(IStorageFile file)
+    {
+        var extension = Path.GetExtension(file.Name);
+        var path = Path.Combine(
+            Path.GetTempPath(),
+            $"frameflux-demo-{Guid.NewGuid():N}{extension}");
+        await using var input = await file.OpenReadAsync();
+        await using var output = File.Create(path);
+        await input.CopyToAsync(output);
+        return path;
+    }
+
+    private void DeleteSupersededTemporaryFile(MediaSource source)
+    {
+        if (_temporaryMediaPath is null ||
+            source.Uri.IsFile &&
+            string.Equals(
+                _temporaryMediaPath,
+                source.Uri.LocalPath,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        File.Delete(_temporaryMediaPath);
+        _temporaryMediaPath = null;
+    }
+
+    private void SetSourceCommandsEnabled(bool enabled)
+    {
+        OpenFileButton.IsEnabled = enabled;
+        StartButton.IsEnabled = enabled;
     }
 
     private async void StopButton_OnClick(object? sender, RoutedEventArgs e)

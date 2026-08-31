@@ -28,6 +28,14 @@
                     DockPanel.Dock="Right">
                 Start
             </Button>
+            <Button x:Name="OpenFileButton"
+                    Margin="0,0,8,0"
+                    Padding="16,6"
+                    AutomationProperties.Name="Open local media file"
+                    Click="OpenFileButton_Click"
+                    DockPanel.Dock="Right">
+                Open file
+            </Button>
             <CheckBox x:Name="MuteCheckBox"
                       Margin="12,0"
                       VerticalAlignment="Center"
@@ -47,6 +55,7 @@
                        Text="Volume" />
             <TextBox x:Name="SourceTextBox"
                      VerticalContentAlignment="Center"
+                     AutomationProperties.Name="Media source"
                      Text="rtsp://username:password@camera-host:554/stream" />
         </DockPanel>
         <WrapPanel Grid.Row="1"
@@ -88,13 +97,15 @@
                         CornerRadius="3"
                         IsHitTestVisible="False">
                     <StackPanel Orientation="Horizontal">
-                        <Border Width="7"
+                        <Border x:Name="SourceKindIndicator"
+                                Width="7"
                                 Height="7"
                                 Margin="0,0,6,0"
                                 VerticalAlignment="Center"
                                 Background="#EF4444"
                                 CornerRadius="4" />
-                        <TextBlock VerticalAlignment="Center"
+                        <TextBlock x:Name="SourceKindTextBlock"
+                                   VerticalAlignment="Center"
                                    FontSize="12"
                                    FontWeight="SemiBold"
                                    Foreground="White"
@@ -105,6 +116,6 @@
         </Border>
         <TextBlock x:Name="StatusTextBlock"
                    Grid.Row="3"
-                   Text="Enter an RTSP URL, then start playback." />
+                   Text="Enter an RTSP URL or open a local media file." />
     </Grid>
 </Window>

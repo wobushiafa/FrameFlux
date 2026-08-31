@@ -1,6 +1,7 @@
 using System.Windows;
 using FrameFlux;
 using FrameFlux.FFmpeg;
+using Microsoft.Win32;
 
 namespace FrameFlux.Demo.Wpf;
 
@@ -38,15 +39,66 @@ public partial class MainWindow : Window
 
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
+        SetSourceCommandsEnabled(false);
         try
         {
-            Player.Source = MediaSource.Parse(SourceTextBox.Text);
-            await Player.StartAsync();
+            await StartSourceAsync(MediaSource.Parse(SourceTextBox.Text));
         }
         catch (Exception exception)
         {
             StatusTextBlock.Text = exception.Message;
         }
+        finally
+        {
+            SetSourceCommandsEnabled(true);
+        }
+    }
+
+    private async void OpenFileButton_Click(object sender, RoutedEventArgs e)
+    {
+        SetSourceCommandsEnabled(false);
+        try
+        {
+            var dialog = new OpenFileDialog
+            {
+                Title = "Open media file",
+                Filter = "Video files|*.mp4;*.mkv;*.mov;*.avi;*.webm|All files|*.*",
+                Multiselect = false
+            };
+            if (dialog.ShowDialog(this) != true)
+            {
+                return;
+            }
+
+            SourceTextBox.Text = dialog.FileName;
+            await StartSourceAsync(MediaSource.FromFile(dialog.FileName));
+        }
+        catch (Exception exception)
+        {
+            StatusTextBlock.Text = exception.Message;
+        }
+        finally
+        {
+            SetSourceCommandsEnabled(true);
+        }
+    }
+
+    private async Task StartSourceAsync(MediaSource source)
+    {
+        await Player.StopAsync();
+        Player.Source = source;
+        SourceKindTextBlock.Text = source.Uri.IsFile ? "FILE" : "LIVE";
+        SourceKindIndicator.Background = source.Uri.IsFile
+            ? System.Windows.Media.Brushes.Gray
+            : System.Windows.Media.Brushes.Red;
+        StatusTextBlock.Text = source.Uri.IsFile ? "Opening file" : "Opening stream";
+        await Player.StartAsync();
+    }
+
+    private void SetSourceCommandsEnabled(bool enabled)
+    {
+        OpenFileButton.IsEnabled = enabled;
+        StartButton.IsEnabled = enabled;
     }
 
     private async void StopButton_Click(object sender, RoutedEventArgs e) => await Player.StopAsync();

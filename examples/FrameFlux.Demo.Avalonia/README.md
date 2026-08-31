@@ -1,7 +1,9 @@
 # FrameFlux Avalonia demo
 
 This cross-platform demo hosts the protocol-neutral `FrameFlux.Avalonia.MediaView`
-control directly. The current FFmpeg backend supports RTSP and RTSPS sources.
+control directly. Enter an RTSP/RTSPS address or use **Open file** to select a
+local video. Android document-provider selections are copied to temporary local
+storage before playback.
 
 The UI is defined in `App.axaml` and `Views/MainView.axaml`, then reused by the
 desktop and Android hosts.
