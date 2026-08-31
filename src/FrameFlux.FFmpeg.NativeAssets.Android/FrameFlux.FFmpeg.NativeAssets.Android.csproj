@@ -14,6 +14,7 @@
   <ItemGroup>
     <None Include="..\..\native\artifacts\runtimes\android-arm\native\libc++_shared.so;
                    ..\..\native\artifacts\runtimes\android-arm\native\libavcodec_neon.so;
+                   ..\..\native\artifacts\runtimes\android-arm\native\libavfilter_neon.so;
                    ..\..\native\artifacts\runtimes\android-arm\native\libavformat_neon.so;
                    ..\..\native\artifacts\runtimes\android-arm\native\libavutil_neon.so;
                    ..\..\native\artifacts\runtimes\android-arm\native\libswresample_neon.so;
@@ -23,6 +24,7 @@
           FrameFluxValidatePageAlignment="true" />
     <None Include="..\..\native\artifacts\runtimes\android-arm64\native\libc++_shared.so;
                    ..\..\native\artifacts\runtimes\android-arm64\native\libavcodec.so;
+                   ..\..\native\artifacts\runtimes\android-arm64\native\libavfilter.so;
                    ..\..\native\artifacts\runtimes\android-arm64\native\libavformat.so;
                    ..\..\native\artifacts\runtimes\android-arm64\native\libavutil.so;
                    ..\..\native\artifacts\runtimes\android-arm64\native\libswresample.so;
@@ -32,6 +34,7 @@
           FrameFluxValidatePageAlignment="true" />
     <None Include="..\..\native\artifacts\runtimes\android-x86\native\libc++_shared.so;
                    ..\..\native\artifacts\runtimes\android-x86\native\libavcodec.so;
+                   ..\..\native\artifacts\runtimes\android-x86\native\libavfilter.so;
                    ..\..\native\artifacts\runtimes\android-x86\native\libavformat.so;
                    ..\..\native\artifacts\runtimes\android-x86\native\libavutil.so;
                    ..\..\native\artifacts\runtimes\android-x86\native\libswresample.so;
@@ -41,6 +44,7 @@
           FrameFluxValidatePageAlignment="true" />
     <None Include="..\..\native\artifacts\runtimes\android-x64\native\libc++_shared.so;
                    ..\..\native\artifacts\runtimes\android-x64\native\libavcodec.so;
+                   ..\..\native\artifacts\runtimes\android-x64\native\libavfilter.so;
                    ..\..\native\artifacts\runtimes\android-x64\native\libavformat.so;
                    ..\..\native\artifacts\runtimes\android-x64\native\libavutil.so;
                    ..\..\native\artifacts\runtimes\android-x64\native\libswresample.so;

@@ -14,9 +14,12 @@ internal static class FFmpegLibraryLoader
     private static readonly object SyncRoot = new();
     private static readonly Dictionary<string, IntPtr> ComponentHandles = new(StringComparer.Ordinal);
     private static readonly HashSet<string> LoadedPaths = new(PathComparer);
-    private static readonly string[] RequiredComponents = ["avutil", "swresample", "swscale", "avcodec", "avformat"];
-    private static readonly string[] LoadOrder = ["avutil", "swresample", "swscale", "avcodec", "avformat"];
-    private static readonly string[] AndroidLoadOrder = ["avcodec", "avutil", "swresample", "swscale", "avformat"];
+    private static readonly string[] RequiredComponents =
+        ["avutil", "swresample", "swscale", "avcodec", "avfilter", "avformat"];
+    private static readonly string[] LoadOrder =
+        ["avutil", "swresample", "swscale", "avcodec", "avformat", "avfilter"];
+    private static readonly string[] AndroidLoadOrder =
+        ["avutil", "swresample", "swscale", "avcodec", "avformat", "avfilter"];
     private static string? _configuredDirectory;
 
     internal static void Configure(string? libraryDirectory)
@@ -134,13 +137,14 @@ internal static class FFmpegLibraryLoader
             .Select(component => (Component: component, File: FindBestLibraryFile(directories, component, platform)))
             .Where(selection => selection.File is not null)
             .ToDictionary(selection => selection.Component, selection => selection.File!, StringComparer.Ordinal);
-        if (selectedFiles.Count is > 0 and < 5)
+        if (selectedFiles.Count > 0 && selectedFiles.Count < RequiredComponents.Length)
         {
             var missing = RequiredComponents.Where(component => !selectedFiles.ContainsKey(component));
             throw new DllNotFoundException(
                 "A partial FFmpeg library set was found beside the application. " +
                 $"Missing: {string.Join(", ", missing)}. " +
-                "Ship all five components from one build, or rely entirely on system libraries.");
+                $"Ship all {RequiredComponents.Length} components from one build, " +
+                "or rely entirely on system libraries.");
         }
 
         ValidateSelectedLibraryVersions(selectedFiles, platform);
@@ -225,17 +229,17 @@ internal static class FFmpegLibraryLoader
             60 => new Dictionary<string, int>(StringComparer.Ordinal)
             {
                 ["avcodec"] = 60, ["avformat"] = 60, ["avutil"] = 58,
-                ["swscale"] = 7, ["swresample"] = 4
+                ["swscale"] = 7, ["swresample"] = 4, ["avfilter"] = 9
             },
             61 => new Dictionary<string, int>(StringComparer.Ordinal)
             {
                 ["avcodec"] = 61, ["avformat"] = 61, ["avutil"] = 59,
-                ["swscale"] = 8, ["swresample"] = 5
+                ["swscale"] = 8, ["swresample"] = 5, ["avfilter"] = 10
             },
             62 => new Dictionary<string, int>(StringComparer.Ordinal)
             {
                 ["avcodec"] = 62, ["avformat"] = 62, ["avutil"] = 60,
-                ["swscale"] = 9, ["swresample"] = 6
+                ["swscale"] = 9, ["swresample"] = 6, ["avfilter"] = 11
             },
             _ => throw new NotSupportedException(
                 $"The selected avcodec library has unsupported major version {codecMajor}.")

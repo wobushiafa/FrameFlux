@@ -1,4 +1,3 @@
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -7,15 +6,21 @@ namespace FrameFlux.Demo.Wpf;
 
 public partial class MainWindow
 {
-    private readonly double[] _playbackRates = [0.5d, 1d, 1.5d, 2d];
+    private const double TimelineMediaStepMilliseconds = 100d;
+    private const double MinimumTimelineRefreshMilliseconds = 16d;
+    private const double MaximumTimelineRefreshMilliseconds = 250d;
+    private readonly double[] _playbackRates = [0.25d, 0.5d, 1d, 1.5d, 2d, 3d, 4d];
     private DispatcherTimer? _positionTimer;
     private bool _seeking;
 
     private void InitializePlaybackControls()
     {
-        PlaybackRateComboBox.ItemsSource = _playbackRates.Select(rate => $"{rate:0.#}x").ToArray();
-        PlaybackRateComboBox.SelectedIndex = 1;
-        _positionTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        PlaybackRateComboBox.ItemsSource = _playbackRates.Select(rate => $"{rate:0.##}x").ToArray();
+        PlaybackRateComboBox.SelectedIndex = Array.IndexOf(_playbackRates, 1d);
+        _positionTimer = new DispatcherTimer
+        {
+            Interval = GetTimelineRefreshInterval(1d)
+        };
         _positionTimer.Tick += (_, _) => RefreshTimeline();
         _positionTimer.Start();
     }
@@ -34,7 +39,8 @@ public partial class MainWindow
 
     private void PlaybackRateComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (PlaybackRateComboBox.SelectedIndex is < 0 or > 3)
+        if (PlaybackRateComboBox.SelectedIndex is < 0 ||
+            PlaybackRateComboBox.SelectedIndex >= _playbackRates.Length)
         {
             return;
         }
@@ -44,13 +50,19 @@ public partial class MainWindow
         {
             Player.PlaybackRate = rate;
         }
-        RateAudioNotice.Visibility = rate != 1d && Player.Capabilities.CanChangePlaybackRate
-            ? Visibility.Visible
-            : Visibility.Collapsed;
     }
 
     private void RefreshTimeline()
     {
+        if (_positionTimer is not null)
+        {
+            var interval = GetTimelineRefreshInterval(Player.PlaybackRate);
+            if (_positionTimer.Interval != interval)
+            {
+                _positionTimer.Interval = interval;
+            }
+        }
+
         var position = Player.Position;
         var duration = Player.Duration ?? TimeSpan.Zero;
         PositionTextBlock.Text = FormatTime(position);
@@ -63,6 +75,17 @@ public partial class MainWindow
             PositionSlider.Value = Math.Clamp(position.TotalSeconds, 0d, PositionSlider.Maximum);
         }
         StartButton.Content = Player.State == MediaPlaybackState.Playing ? "Pause" : "Play";
+    }
+
+    private static TimeSpan GetTimelineRefreshInterval(double playbackRate)
+    {
+        var rate = double.IsFinite(playbackRate) && playbackRate > 0d
+            ? playbackRate
+            : 1d;
+        return TimeSpan.FromMilliseconds(Math.Clamp(
+            TimelineMediaStepMilliseconds / rate,
+            MinimumTimelineRefreshMilliseconds,
+            MaximumTimelineRefreshMilliseconds));
     }
 
     private static string FormatTime(TimeSpan value) =>

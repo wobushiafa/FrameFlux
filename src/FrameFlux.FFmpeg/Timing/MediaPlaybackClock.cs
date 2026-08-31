@@ -54,12 +54,12 @@ internal sealed class MediaPlaybackClock
 
     internal static void ValidateRate(double rate)
     {
-        if (!double.IsFinite(rate) || rate is < 0.5d or > 2d)
+        if (!double.IsFinite(rate) || rate is < 0.25d or > 4d)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(rate),
                 rate,
-                "Playback rate must be between 0.5 and 2.0.");
+                "Playback rate must be between 0.25 and 4.0.");
         }
     }
 }

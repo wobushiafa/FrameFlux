@@ -95,8 +95,16 @@ internal sealed partial class FfmpegPlaybackClient
     {
         var cancellationToken = threadCancellationTokenSource.Token;
         var lastFrameAt = 0L;
+        var decoderPlaybackRate = double.NaN;
         while (_isRunning && !threadCancellationTokenSource.IsCancellationRequested)
         {
+            var playbackRate = Volatile.Read(ref _playbackRate);
+            if (playbackRate != decoderPlaybackRate)
+            {
+                decoder.SetPlaybackRate(playbackRate);
+                decoderPlaybackRate = playbackRate;
+            }
+
             if (!_isLive && !_playbackGate.IsSet)
             {
                 if (ProcessPendingSeek(decoder))
@@ -121,7 +129,7 @@ internal sealed partial class FfmpegPlaybackClient
             _playbackSynchronizer.DrainAudio(
                 decoder,
                 audioPlayback,
-                Volatile.Read(ref _playbackRate));
+                playbackRate);
             var decodeTicks = Stopwatch.GetTimestamp() - decodeStart;
             if (hasFrame && frame is not null)
             {

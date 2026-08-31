@@ -179,6 +179,12 @@ internal sealed class FfmpegDecoder : IDisposable
         Position = position;
     }
 
+    internal void SetPlaybackRate(double playbackRate)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        FrameFluxFFmpegNative.SetPlaybackRate(_session, playbackRate);
+    }
+
     internal static TimeSpan? GetRelativePosition(
         NativeFrameInfo frameInfo,
         NativeStreamInfo streamInfo)

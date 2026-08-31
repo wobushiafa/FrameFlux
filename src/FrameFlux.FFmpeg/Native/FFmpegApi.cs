@@ -16,6 +16,7 @@ internal sealed class FFmpegApi
         AvUtilVersion = Load<VersionDelegate>("avutil", "avutil_version");
         SwScaleVersion = Load<VersionDelegate>("swscale", "swscale_version");
         SwResampleVersion = Load<VersionDelegate>("swresample", "swresample_version");
+        AvFilterVersion = Load<VersionDelegate>("avfilter", "avfilter_version");
         AvFormatNetworkInit = Load<NetworkInitDelegate>("avformat", "avformat_network_init");
         AvFormatAllocContext = Load<AllocDelegate>("avformat", "avformat_alloc_context");
         AvFormatOpenInput = Load<FormatOpenInputDelegate>("avformat", "avformat_open_input");
@@ -48,6 +49,8 @@ internal sealed class FFmpegApi
         AvFrameCopyProperties = Load<FrameCopyPropertiesDelegate>("avutil", "av_frame_copy_props");
         AvFrameUnref = Load<UnrefDelegate>("avutil", "av_frame_unref");
         AvFrameFree = Load<FreeDelegate>("avutil", "av_frame_free");
+        AvGetSampleFormatName = Load<GetSampleFormatNameDelegate>("avutil", "av_get_sample_fmt_name");
+        AvChannelLayoutDescribe = Load<ChannelLayoutDescribeDelegate>("avutil", "av_channel_layout_describe");
         SwsGetCachedContext = Load<SwsGetCachedContextDelegate>("swscale", "sws_getCachedContext");
         SwsScale = Load<SwsScaleDelegate>("swscale", "sws_scale");
         SwsFreeContext = Load<SwsFreeContextDelegate>("swscale", "sws_freeContext");
@@ -56,18 +59,31 @@ internal sealed class FFmpegApi
         SwrGetDelay = Load<SwrGetDelayDelegate>("swresample", "swr_get_delay");
         SwrConvert = Load<SwrConvertDelegate>("swresample", "swr_convert");
         SwrFree = Load<SwrFreeDelegate>("swresample", "swr_free");
+        AvFilterGraphAlloc = Load<AllocDelegate>("avfilter", "avfilter_graph_alloc");
+        AvFilterGraphFree = Load<FreeDelegate>("avfilter", "avfilter_graph_free");
+        AvFilterGetByName = Load<FilterGetByNameDelegate>("avfilter", "avfilter_get_by_name");
+        AvFilterGraphCreateFilter =
+            Load<FilterGraphCreateFilterDelegate>("avfilter", "avfilter_graph_create_filter");
+        AvFilterLink = Load<FilterLinkDelegate>("avfilter", "avfilter_link");
+        AvFilterGraphConfig = Load<FilterGraphConfigDelegate>("avfilter", "avfilter_graph_config");
+        AvBufferSourceAddFrameFlags =
+            Load<BufferSourceAddFrameFlagsDelegate>("avfilter", "av_buffersrc_add_frame_flags");
+        AvBufferSinkGetFrame =
+            Load<BufferSinkGetFrameDelegate>("avfilter", "av_buffersink_get_frame");
 
         CodecMajorVersion = (int)(AvCodecVersion() >> 16);
         FormatMajorVersion = (int)(AvFormatVersion() >> 16);
         UtilMajorVersion = (int)(AvUtilVersion() >> 16);
         ScaleMajorVersion = (int)(SwScaleVersion() >> 16);
         ResampleMajorVersion = (int)(SwResampleVersion() >> 16);
+        FilterMajorVersion = (int)(AvFilterVersion() >> 16);
         ValidateVersionFamily(
             CodecMajorVersion,
             FormatMajorVersion,
             UtilMajorVersion,
             ScaleMajorVersion,
-            ResampleMajorVersion);
+            ResampleMajorVersion,
+            FilterMajorVersion);
 
         _ = AvFormatNetworkInit();
     }
@@ -80,11 +96,13 @@ internal sealed class FFmpegApi
     internal int UtilMajorVersion { get; }
     internal int ScaleMajorVersion { get; }
     internal int ResampleMajorVersion { get; }
+    internal int FilterMajorVersion { get; }
     internal VersionDelegate AvCodecVersion { get; }
     internal VersionDelegate AvFormatVersion { get; }
     internal VersionDelegate AvUtilVersion { get; }
     internal VersionDelegate SwScaleVersion { get; }
     internal VersionDelegate SwResampleVersion { get; }
+    internal VersionDelegate AvFilterVersion { get; }
     internal NetworkInitDelegate AvFormatNetworkInit { get; }
     internal AllocDelegate AvFormatAllocContext { get; }
     internal FormatOpenInputDelegate AvFormatOpenInput { get; }
@@ -117,6 +135,8 @@ internal sealed class FFmpegApi
     internal FrameCopyPropertiesDelegate AvFrameCopyProperties { get; }
     internal UnrefDelegate AvFrameUnref { get; }
     internal FreeDelegate AvFrameFree { get; }
+    internal GetSampleFormatNameDelegate AvGetSampleFormatName { get; }
+    internal ChannelLayoutDescribeDelegate AvChannelLayoutDescribe { get; }
     internal SwsGetCachedContextDelegate SwsGetCachedContext { get; }
     internal SwsScaleDelegate SwsScale { get; }
     internal SwsFreeContextDelegate SwsFreeContext { get; }
@@ -125,6 +145,14 @@ internal sealed class FFmpegApi
     internal SwrGetDelayDelegate SwrGetDelay { get; }
     internal SwrConvertDelegate SwrConvert { get; }
     internal SwrFreeDelegate SwrFree { get; }
+    internal AllocDelegate AvFilterGraphAlloc { get; }
+    internal FreeDelegate AvFilterGraphFree { get; }
+    internal FilterGetByNameDelegate AvFilterGetByName { get; }
+    internal FilterGraphCreateFilterDelegate AvFilterGraphCreateFilter { get; }
+    internal FilterLinkDelegate AvFilterLink { get; }
+    internal FilterGraphConfigDelegate AvFilterGraphConfig { get; }
+    internal BufferSourceAddFrameFlagsDelegate AvBufferSourceAddFrameFlags { get; }
+    internal BufferSinkGetFrameDelegate AvBufferSinkGetFrame { get; }
 
     internal string FormatError(int error)
     {
@@ -146,13 +174,14 @@ internal sealed class FFmpegApi
         int formatMajor,
         int utilMajor,
         int scaleMajor,
-        int resampleMajor)
+        int resampleMajor,
+        int filterMajor)
     {
         var expected = codecMajor switch
         {
-            60 => (Format: 60, Util: 58, Scale: 7, Resample: 4, Release: 6),
-            61 => (Format: 61, Util: 59, Scale: 8, Resample: 5, Release: 7),
-            62 => (Format: 62, Util: 60, Scale: 9, Resample: 6, Release: 8),
+            60 => (Format: 60, Util: 58, Scale: 7, Resample: 4, Filter: 9, Release: 6),
+            61 => (Format: 61, Util: 59, Scale: 8, Resample: 5, Filter: 10, Release: 7),
+            62 => (Format: 62, Util: 60, Scale: 9, Resample: 6, Filter: 11, Release: 8),
             _ => throw new NotSupportedException(
                 $"This FrameFlux build supports FFmpeg avcodec major versions 60, 61 and 62; found {codecMajor}.")
         };
@@ -160,16 +189,17 @@ internal sealed class FFmpegApi
         if (formatMajor == expected.Format &&
             utilMajor == expected.Util &&
             scaleMajor == expected.Scale &&
-            resampleMajor == expected.Resample)
+            resampleMajor == expected.Resample &&
+            filterMajor == expected.Filter)
         {
             return;
         }
 
         throw new NotSupportedException(
             $"The loaded FFmpeg components do not form a supported FFmpeg {expected.Release} ABI family. " +
-            $"Expected avcodec/avformat/avutil/swscale/swresample " +
-            $"{codecMajor}/{expected.Format}/{expected.Util}/{expected.Scale}/{expected.Resample}, " +
-            $"but found {codecMajor}/{formatMajor}/{utilMajor}/{scaleMajor}/{resampleMajor}. " +
+            $"Expected avcodec/avformat/avutil/swscale/swresample/avfilter " +
+            $"{codecMajor}/{expected.Format}/{expected.Util}/{expected.Scale}/{expected.Resample}/{expected.Filter}, " +
+            $"but found {codecMajor}/{formatMajor}/{utilMajor}/{scaleMajor}/{resampleMajor}/{filterMajor}. " +
             "Use all shared libraries from one FFmpeg build.");
     }
 
@@ -204,6 +234,8 @@ internal sealed class FFmpegApi
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FrameCopyPropertiesDelegate(IntPtr destination, IntPtr source);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void UnrefDelegate(IntPtr value);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void FreeDelegate(ref IntPtr value);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr GetSampleFormatNameDelegate(int sampleFormat);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int ChannelLayoutDescribeDelegate(IntPtr layout, IntPtr buffer, nuint bufferSize);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int GetFormatDelegate(IntPtr codecContext, IntPtr formats);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr SwsGetCachedContextDelegate(IntPtr context, int sourceWidth, int sourceHeight, int sourceFormat, int destinationWidth, int destinationHeight, int destinationFormat, int flags, IntPtr sourceFilter, IntPtr destinationFilter, IntPtr parameters);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int SwsScaleDelegate(IntPtr context, IntPtr sourceData, IntPtr sourceStride, int sourceSliceY, int sourceSliceHeight, IntPtr destinationData, IntPtr destinationStride);
@@ -213,4 +245,10 @@ internal sealed class FFmpegApi
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate long SwrGetDelayDelegate(IntPtr context, long timeBase);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int SwrConvertDelegate(IntPtr context, IntPtr output, int outputSamples, IntPtr input, int inputSamples);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void SwrFreeDelegate(ref IntPtr context);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr FilterGetByNameDelegate(IntPtr name);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FilterGraphCreateFilterDelegate(out IntPtr filterContext, IntPtr filter, IntPtr name, IntPtr arguments, IntPtr opaque, IntPtr graphContext);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FilterLinkDelegate(IntPtr source, uint sourcePad, IntPtr destination, uint destinationPad);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FilterGraphConfigDelegate(IntPtr graphContext, IntPtr logContext);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int BufferSourceAddFrameFlagsDelegate(IntPtr sourceContext, IntPtr frame, int flags);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int BufferSinkGetFrameDelegate(IntPtr sinkContext, IntPtr frame);
 }

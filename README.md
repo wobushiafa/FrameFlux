@@ -1,15 +1,15 @@
 # FrameFlux
 
-FrameFlux 是一个基于 FFmpeg 的跨平台媒体播放库。目前已实现 RTSP 播放，包与接口边界也为本地文件及其他媒体源预留了扩展空间。硬件解码使用与目标 FFmpeg 公共头文件匹配的版本化 ABI 布局。
+FrameFlux 是一个基于 FFmpeg 的跨平台媒体播放库，支持 RTSP 直播和本地文件播放。硬件解码使用与目标 FFmpeg 公共头文件匹配的版本化 ABI 布局。
 
-当前能力包括音视频解码、平台音频输出、以音频为主时钟的音画同步，以及运行时音量和静音控制。音频内部统一为 48 kHz、双声道、16 位有符号 PCM。
+当前能力包括音视频解码、平台音频输出、直播音画同步、本地文件时钟、Seek、Duration、0.25x 至 4x 音视频倍速，以及运行时音量和静音控制。音频倍速通过 FFmpeg `atempo` 保持音调，内部统一为 48 kHz、双声道、16 位有符号 PCM。
 
 ## 项目结构
 
 | 项目 | 包 | 用途 |
 | --- | --- | --- |
 | `src/FrameFlux.Abstractions` | `FrameFlux.Abstractions` | 与协议无关的播放器、媒体源、帧、能力和视频输出契约。 |
-| `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | 独立于 UI 的 FFmpeg 播放器和 RTSP 后端，不附带原生二进制。 |
+| `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | 独立于 UI 的 FFmpeg 播放器，支持 RTSP 和本地文件，不附带原生二进制。 |
 | `src/FrameFlux.FFmpeg.Android` | `FrameFlux.FFmpeg.Android` | 接收 FFmpeg 解复用 H.264/HEVC 数据的 Android MediaCodec 硬件解码器。 |
 | `src/FrameFlux.Presentation` | `FrameFlux.Presentation` | UI 控件共享的、与渲染后端无关的播放生命周期。 |
 | `src/FrameFlux.Rendering.Windows` | `FrameFlux.Rendering.Windows` | Windows UI 控件共享的 Win32 和 D3D11 视频呈现。 |
@@ -24,8 +24,8 @@ FrameFlux 是一个基于 FFmpeg 的跨平台媒体播放库。目前已实现 R
 
 | 示例 | 框架 | 播放集成 |
 | --- | --- | --- |
-| `examples/FrameFlux.Demo.Wpf` | WPF（Windows） | 使用可复用 `MediaView`，支持绑定音量和静音。 |
-| `examples/FrameFlux.Demo.Avalonia.Desktop` | Avalonia Desktop | Windows 使用 D3D11，Linux 使用已注册的 EGL 后端。 |
+| `examples/FrameFlux.Demo.Wpf` | WPF（Windows） | 使用可复用 `MediaView`，支持本地文件、Seek、倍速、音量和静音。 |
+| `examples/FrameFlux.Demo.Avalonia.Desktop` | Avalonia Desktop | 支持本地文件、Seek 和倍速；Windows 使用 D3D11，Linux 使用已注册的 EGL 后端。 |
 | `examples/FrameFlux.Demo.Avalonia.Android` | Avalonia Android | 在标准 Android Activity 中承载共享 AXAML 界面。 |
 
 ```powershell
@@ -66,6 +66,8 @@ protected override AppBuilder CustomizeAppBuilder(AppBuilder builder) =>
 
 注册同时启用 `FrameFlux.FFmpeg.Android`。FFmpeg 负责 RTSP、音频解码以及 H.264/HEVC 解复用，视频访问单元交给 MediaCodec，并通过 `GL_TEXTURE_EXTERNAL_OES` 渲染到 SurfaceTexture，全程不读回 CPU。零拷贝 Surface 没有可长期保留的 CPU 帧，因此快照使用软件路径。
 
+Android 的 `NativeSurface` 基于系统 `SurfaceView`，位于 Avalonia 合成树之外。因此 Popup、ComboBox 下拉层、菜单、Tooltip 和 Flyout 可能显示在视频下方。界面需要覆盖视频时应选择 `GpuComposition`；`NativeSurface` 适用于视频始终处于原生层、且上方没有 Avalonia 浮层的场景。
+
 ## 解码与呈现
 
 解码策略和呈现模式可以独立配置：
@@ -105,7 +107,7 @@ Android 目标要求 API 24 或更高。当前仓库中的 Android FFmpeg 二进
 FFmpegHelper.RegisterFFmpeg(@"C:\ffmpeg\bin");
 ```
 
-目录必须包含一套完整、架构匹配且来自同一 FFmpeg 版本的运行库。音频播放需要 `avcodec`、`avformat`、`avutil`、`swscale` 和 `swresample`。Windows D3D11VA 与 Linux VAAPI 直接使用这些库。Android 使用相同的 FFmpeg 导出完成解复用和音频解码，再将编码视频送入系统 MediaCodec。
+目录必须包含一套完整、架构匹配且来自同一 FFmpeg 版本的运行库。播放需要 `avcodec`、`avformat`、`avutil`、`avfilter`、`swscale` 和 `swresample`。Windows D3D11VA 与 Linux VAAPI 直接使用这些库。Android 使用相同的 FFmpeg 导出完成解复用、音频解码和音频倍速，再将编码视频送入系统 MediaCodec。
 
 UI 包不依赖具体 FFmpeg 后端，应用负责注入播放器工厂：
 
@@ -124,7 +126,7 @@ WPF 可以直接使用打包的控件：
     Stretch="Uniform" />
 ```
 
-`MediaView.Source` 使用与协议无关的 `MediaSource` 契约。当前后端支持 RTSP 和 RTSPS，未来增加本地文件支持不需要修改 WPF 或 Avalonia 控件 API。
+`MediaView.Source` 使用与协议无关的 `MediaSource` 契约。当前后端支持 RTSP、RTSPS 和本地文件路径。本地文件会提供 Duration、Seek 和 0.25x 至 4x 的音视频倍速；直播源保持实时播放，不开放 Seek 和倍速能力。
 
 ## 音频输出
 
@@ -208,5 +210,11 @@ dotnet test tests/FrameFlux.FFmpeg.Tests/FrameFlux.FFmpeg.Tests.csproj -c Releas
 桌面库目标框架为 `net8.0`，可由 .NET 8、9 和 10 应用引用。Android 程序集目标框架为当前支持的 `net10.0-android`，无需额外生成桌面 `net10.0` 程序集。
 
 当前直接绑定支持 FFmpeg 6、7 和 8 的 ABI，即 `avcodec` 主版本 60、61 和 62。每个平台目录必须保持一套完整且架构匹配的 FFmpeg 构建。
+
+首次发布的准备步骤、包白名单和阻断条件见 [发布指南](docs/RELEASING.md)。第三方组件及原生二进制的待确认事项见 [第三方声明](THIRD-PARTY-NOTICES.md)。
+
+## 许可证
+
+FrameFlux 源码和托管包使用 [MIT License](LICENSE)。FFmpeg 及其他第三方组件适用各自的许可证；发布原生资源包前必须同时满足 [第三方声明](THIRD-PARTY-NOTICES.md) 中列出的义务。
 
 仓库地址：https://github.com/wobushiafa/FrameFlux

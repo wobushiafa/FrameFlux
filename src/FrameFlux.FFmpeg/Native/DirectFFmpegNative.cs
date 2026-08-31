@@ -82,6 +82,17 @@ internal static class FrameFluxFFmpegNative
             .Seek(timestamp);
     }
 
+    internal static void SetPlaybackRate(
+        NativeRtspSessionHandle session,
+        double playbackRate)
+    {
+        if (!session.IsInvalid)
+        {
+            GetTarget<DirectRtspSession>(session.DangerousGetHandle())
+                .SetPlaybackRate(playbackRate);
+        }
+    }
+
     internal static NativeReadResult ReadFrame(
         NativeRtspSessionHandle session,
         out NativeVideoFrameHandle frame)

@@ -75,6 +75,7 @@ internal sealed class AudioPlaybackController : IDisposable
     private readonly Task _outputWorker;
     private double _volume;
     private bool _muted;
+    private double _playbackRate = 1d;
     private double? _mediaStartSeconds;
     private double? _lastSubmittedEndSeconds;
     private long _outputFramesAtMediaStart;
@@ -119,7 +120,7 @@ internal sealed class AudioPlaybackController : IDisposable
             {
                 return _output.IsOperational && _mediaStartSeconds is { } start
                     ? start + (double)(_output.PlayedFrames - _outputFramesAtMediaStart) /
-                        _output.SampleRate
+                        _output.SampleRate * Volatile.Read(ref _playbackRate)
                     : null;
             }
         }
@@ -135,6 +136,18 @@ internal sealed class AudioPlaybackController : IDisposable
     internal void SetMuted(bool muted)
     {
         Volatile.Write(ref _muted, muted);
+    }
+
+    internal void SetPlaybackRate(double playbackRate)
+    {
+        MediaPlaybackClock.ValidateRate(playbackRate);
+        if (Volatile.Read(ref _playbackRate) == playbackRate)
+        {
+            return;
+        }
+
+        Volatile.Write(ref _playbackRate, playbackRate);
+        Reset();
     }
 
     internal void Reset()
@@ -164,7 +177,8 @@ internal sealed class AudioPlaybackController : IDisposable
         _frames.Writer.TryWrite(new QueuedAudioFrame(
             frame,
             Volatile.Read(ref _volume),
-            Volatile.Read(ref _muted)));
+            Volatile.Read(ref _muted),
+            Volatile.Read(ref _playbackRate)));
     }
 
     public void Dispose()
@@ -291,6 +305,11 @@ internal sealed class AudioPlaybackController : IDisposable
 
     private void ProcessFrame(QueuedAudioFrame queuedFrame)
     {
+        if (queuedFrame.PlaybackRate != Volatile.Read(ref _playbackRate))
+        {
+            return;
+        }
+
         var frame = queuedFrame.Frame;
         if (frame.PresentationSeconds is { } presentation)
         {
@@ -314,12 +333,18 @@ internal sealed class AudioPlaybackController : IDisposable
                     ? (double)frame.Data.Length /
                         (frame.SampleRate * frame.Channels * sizeof(short))
                     : 0d;
-                _lastSubmittedEndSeconds = presentation + frameDuration;
+                _lastSubmittedEndSeconds =
+                    presentation + frameDuration * queuedFrame.PlaybackRate;
             }
         }
 
         ApplyGainMultiplier(frame.Data, _gainMultiplier);
         ApplyVolume(frame.Data, queuedFrame.Volume, queuedFrame.Muted);
+        if (queuedFrame.PlaybackRate != Volatile.Read(ref _playbackRate))
+        {
+            return;
+        }
+
         _output.Write(frame.Data);
     }
 
@@ -372,7 +397,8 @@ internal sealed class AudioPlaybackController : IDisposable
     private readonly record struct QueuedAudioFrame(
         NativeAudioFrame Frame,
         double Volume,
-        bool Muted);
+        bool Muted,
+        double PlaybackRate);
 }
 
 internal sealed class NullAudioOutput : IAudioOutput

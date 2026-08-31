@@ -35,6 +35,9 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
     private int _audioTimeBaseNumerator;
     private int _audioTimeBaseDenominator = 1;
     private FFmpegAudioResampler? _audioResampler;
+    private FFmpegAudioTempoFilter? _audioTempoFilter;
+    private double _audioPlaybackRate = 1d;
+    private double? _nextAudioPresentationSeconds;
     private bool _cancelled;
     private bool _disposed;
     private bool _preserveHardwareFrames;
@@ -174,11 +177,27 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
             _api.AvFrameUnref(_audioDecodeFrame);
         }
         _audioFrames.Clear();
+        _audioTempoFilter?.Reset();
+        _nextAudioPresentationSeconds = null;
         return 0;
     }
 
     internal bool TryDequeueAudioFrame(out NativeAudioFrame? frame) =>
         _audioFrames.TryDequeue(out frame);
+
+    internal void SetPlaybackRate(double playbackRate)
+    {
+        MediaPlaybackClock.ValidateRate(playbackRate);
+        if (_audioPlaybackRate == playbackRate)
+        {
+            return;
+        }
+
+        _audioPlaybackRate = playbackRate;
+        _audioFrames.Clear();
+        _audioTempoFilter?.Reset();
+        _nextAudioPresentationSeconds = null;
+    }
 
     internal NativeReadResult ReadFrame(out DirectVideoFrame? output)
     {
@@ -379,6 +398,8 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
 
         _disposed = true;
         Volatile.Write(ref _cancelled, true);
+        _audioTempoFilter?.Dispose();
+        _audioTempoFilter = null;
         _audioResampler?.Dispose();
         _audioResampler = null;
         if (_scaleContext != IntPtr.Zero)
@@ -660,6 +681,11 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         try
         {
             _audioResampler = new FFmpegAudioResampler(_api, _audioCodecContext);
+            _audioTempoFilter = new FFmpegAudioTempoFilter(
+                _api,
+                _audioCodecContext,
+                _audioTimeBaseNumerator,
+                _audioTimeBaseDenominator);
         }
         catch
         {
@@ -707,11 +733,21 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
                 var layout = FFmpegAbi.ReadFrame(_audioDecodeFrame, _api.UtilMajorVersion);
                 if (layout.SampleCount > 0)
                 {
-                    _audioFrames.Enqueue(_audioResampler.Convert(
+                    if (_audioPlaybackRate != 1d &&
+                        _nextAudioPresentationSeconds is null &&
+                        layout.PresentationTimestamp != long.MinValue)
+                    {
+                        _nextAudioPresentationSeconds =
+                            layout.PresentationTimestamp *
+                            (double)_audioTimeBaseNumerator /
+                            _audioTimeBaseDenominator;
+                    }
+
+                    _audioTempoFilter!.Process(
                         _audioDecodeFrame,
                         layout,
-                        _audioTimeBaseNumerator,
-                        _audioTimeBaseDenominator));
+                        _audioPlaybackRate,
+                        EnqueueFilteredAudioFrame);
                 }
             }
             finally
@@ -723,12 +759,15 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
 
     private void CloseAudioDecoder()
     {
+        _audioTempoFilter?.Dispose();
+        _audioTempoFilter = null;
         _audioResampler?.Dispose();
         _audioResampler = null;
         if (_audioDecodeFrame != IntPtr.Zero) _api.AvFrameFree(ref _audioDecodeFrame);
         if (_audioCodecContext != IntPtr.Zero) _api.AvCodecFreeContext(ref _audioCodecContext);
         _audioStreamIndex = -1;
         _audioStream = IntPtr.Zero;
+        _nextAudioPresentationSeconds = null;
     }
 
     private void FlushAudioDecoder()
@@ -742,6 +781,44 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         if (result >= 0 || result == ErrorEof)
         {
             DrainAudioFrames();
+            _audioTempoFilter?.Flush(EnqueueFilteredAudioFrame);
+        }
+    }
+
+    private void EnqueueFilteredAudioFrame(IntPtr frame, FrameLayout layout)
+    {
+        if (_audioResampler is null || layout.SampleCount <= 0)
+        {
+            return;
+        }
+
+        var outputLayout = layout;
+        if (_audioPlaybackRate != 1d &&
+            _nextAudioPresentationSeconds is { } presentationSeconds)
+        {
+            outputLayout = layout with
+            {
+                PresentationTimestamp = checked((long)Math.Round(
+                    presentationSeconds *
+                    _audioTimeBaseDenominator /
+                    Math.Max(1, _audioTimeBaseNumerator)))
+            };
+        }
+
+        var output = _audioResampler.Convert(
+            frame,
+            outputLayout,
+            _audioTimeBaseNumerator,
+            _audioTimeBaseDenominator);
+        _audioFrames.Enqueue(output);
+        if (_audioPlaybackRate != 1d &&
+            _nextAudioPresentationSeconds is not null)
+        {
+            var sampleFrames = output.Data.Length /
+                (Math.Max(1, output.Channels) * sizeof(short));
+            _nextAudioPresentationSeconds +=
+                sampleFrames * _audioPlaybackRate /
+                Math.Max(1d, output.SampleRate);
         }
     }
 

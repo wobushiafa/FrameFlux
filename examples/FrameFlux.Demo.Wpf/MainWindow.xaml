@@ -136,10 +136,6 @@
                       Width="88" MinHeight="32" Margin="12,0,0,0"
                       SelectionChanged="PlaybackRateComboBox_SelectionChanged"
                       AutomationProperties.Name="Playback speed" />
-            <TextBlock x:Name="RateAudioNotice" Grid.Column="4"
-                       Margin="8,0,0,0" VerticalAlignment="Center"
-                       Foreground="#B45309" Visibility="Collapsed"
-                       Text="Audio off at non-1x" />
         </Grid>
         <TextBlock x:Name="StatusTextBlock"
                    Grid.Row="4"

@@ -41,12 +41,10 @@ internal sealed class FfmpegPlaybackSynchronizer
         }
         else
         {
+            audioPlayback.SetPlaybackRate(playbackRate);
             while (decoder.TryDequeueAudioFrame(out var audioFrame) && audioFrame is not null)
             {
-                if (playbackRate == 1d)
-                {
-                    audioPlayback.Write(audioFrame);
-                }
+                audioPlayback.Write(audioFrame);
             }
         }
 
@@ -64,12 +62,10 @@ internal sealed class FfmpegPlaybackSynchronizer
         }
         else
         {
+            audioPlayback.SetPlaybackRate(playbackRate);
             while (decoder.TryDequeueAudioFrame(out var audioFrame) && audioFrame is not null)
             {
-                if (playbackRate == 1d)
-                {
-                    audioPlayback.Write(audioFrame);
-                }
+                audioPlayback.Write(audioFrame);
             }
         }
 
@@ -108,11 +104,11 @@ internal sealed class FfmpegPlaybackSynchronizer
             return true;
         }
 
-        if (!_isLive && !_playbackClock.WaitUntil(
-                playbackPosition ?? videoPosition.Value,
-                cancellationToken))
+        if (!_isLive)
         {
-            return false;
+            return _playbackClock.WaitUntil(
+                playbackPosition ?? videoPosition.Value,
+                cancellationToken);
         }
 
         var decision = _clockSynchronizer.EvaluateVideo(

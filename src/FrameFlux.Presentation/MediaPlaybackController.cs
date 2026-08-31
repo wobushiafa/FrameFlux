@@ -35,12 +35,12 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
         get => _player?.PlaybackRate ?? _playbackRate;
         set
         {
-            if (!double.IsFinite(value) || value is < 0.5d or > 2d)
+            if (!double.IsFinite(value) || value is < 0.25d or > 4d)
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(value),
                     value,
-                    "Playback rate must be between 0.5 and 2.0.");
+                    "Playback rate must be between 0.25 and 4.0.");
             }
 
             _playbackRate = value;

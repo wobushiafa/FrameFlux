@@ -4,9 +4,16 @@
     <Nullable>enable</Nullable>
     <Version>0.1.0</Version>
     <Authors>FrameFlux</Authors>
+    <Company>FrameFlux</Company>
+    <Product>FrameFlux</Product>
+    <Copyright>Copyright (c) 2026 FrameFlux contributors</Copyright>
     <RepositoryUrl>https://github.com/wobushiafa/FrameFlux</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>$(RepositoryUrl)</PackageProjectUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
     <EnablePackageValidation>true</EnablePackageValidation>
     <IncludeSymbols>true</IncludeSymbols>

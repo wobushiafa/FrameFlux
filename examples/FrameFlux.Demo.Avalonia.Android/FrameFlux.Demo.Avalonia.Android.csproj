@@ -7,6 +7,7 @@
     <ApplicationVersion>1</ApplicationVersion>
     <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
+    <IsPackable>false</IsPackable>
     <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
     <FrameFluxValidateAndroidPageAlignment>true</FrameFluxValidateAndroidPageAlignment>
     <WarningsAsErrors Condition="'$(FrameFluxAllowUnsupportedAndroidPageAlignment)' != 'true'">$(WarningsAsErrors);XA0141</WarningsAsErrors>

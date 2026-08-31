@@ -96,7 +96,7 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
         }
 
         Volatile.Write(ref _playbackRate, rate);
-        Volatile.Read(ref _audioPlayback)?.Reset();
+        Volatile.Read(ref _audioPlayback)?.SetPlaybackRate(rate);
         _playbackSynchronizer.SetPlaybackRate(rate, Position.TotalSeconds);
     }
 
@@ -263,6 +263,7 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                             _options.AudioOutputDeviceId,
                             TimeSpan.FromMilliseconds(
                                 _options.AudioBufferDurationMilliseconds));
+                        audioPlayback.SetPlaybackRate(Volatile.Read(ref _playbackRate));
                         Volatile.Write(ref _audioPlayback, audioPlayback);
                     }
                     if (openSemaphoreEntered)

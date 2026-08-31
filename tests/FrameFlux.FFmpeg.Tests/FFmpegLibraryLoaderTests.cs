@@ -246,7 +246,8 @@ public sealed class FFmpegLibraryLoaderTests
             "win-x64",
             "native");
 
-        Assert.True(File.Exists(Path.Combine(libraryDirectory, "avcodec-61.dll")));
+        Assert.True(File.Exists(Path.Combine(libraryDirectory, "avcodec-62.dll")));
+        Assert.True(File.Exists(Path.Combine(libraryDirectory, "avfilter-11.dll")));
         Assert.False(File.Exists(Path.Combine(libraryDirectory, "frameflux_ffmpeg.dll")));
 
         FFmpegHelper.RegisterFFmpeg(libraryDirectory);
@@ -305,7 +306,8 @@ public sealed class FFmpegLibraryLoaderTests
             ["avformat"] = "avformat-61.dll",
             ["avutil"] = "avutil-59.dll",
             ["swscale"] = "swscale-8.dll",
-            ["swresample"] = "swresample-5.dll"
+            ["swresample"] = "swresample-5.dll",
+            ["avfilter"] = "avfilter-10.dll"
         };
 
         FFmpegLibraryLoader.ValidateSelectedLibraryVersions(
@@ -322,7 +324,8 @@ public sealed class FFmpegLibraryLoaderTests
             ["avformat"] = "avformat-62.dll",
             ["avutil"] = "avutil-59.dll",
             ["swscale"] = "swscale-8.dll",
-            ["swresample"] = "swresample-5.dll"
+            ["swresample"] = "swresample-5.dll",
+            ["avfilter"] = "avfilter-10.dll"
         };
 
         var exception = Assert.Throws<NotSupportedException>(
@@ -334,33 +337,42 @@ public sealed class FFmpegLibraryLoaderTests
     }
 
     [Theory]
-    [InlineData(60, 60, 58, 7, 4)]
-    [InlineData(61, 61, 59, 8, 5)]
-    [InlineData(62, 62, 60, 9, 6)]
+    [InlineData(60, 60, 58, 7, 4, 9)]
+    [InlineData(61, 61, 59, 8, 5, 10)]
+    [InlineData(62, 62, 60, 9, 6, 11)]
     public void VersionValidation_AcceptsCompleteSupportedFamilies(
         int codec,
         int format,
         int util,
         int scale,
-        int resample)
+        int resample,
+        int filter)
     {
-        FFmpegApi.ValidateVersionFamily(codec, format, util, scale, resample);
+        FFmpegApi.ValidateVersionFamily(codec, format, util, scale, resample, filter);
     }
 
     [Theory]
-    [InlineData(61, 62, 59, 8, 5)]
-    [InlineData(61, 61, 60, 8, 5)]
-    [InlineData(61, 61, 59, 9, 5)]
-    [InlineData(61, 61, 59, 8, 6)]
+    [InlineData(61, 62, 59, 8, 5, 10)]
+    [InlineData(61, 61, 60, 8, 5, 10)]
+    [InlineData(61, 61, 59, 9, 5, 10)]
+    [InlineData(61, 61, 59, 8, 6, 10)]
+    [InlineData(61, 61, 59, 8, 5, 11)]
     public void VersionValidation_RejectsMixedComponentFamilies(
         int codec,
         int format,
         int util,
         int scale,
-        int resample)
+        int resample,
+        int filter)
     {
         var exception = Assert.Throws<NotSupportedException>(
-            () => FFmpegApi.ValidateVersionFamily(codec, format, util, scale, resample));
+            () => FFmpegApi.ValidateVersionFamily(
+                codec,
+                format,
+                util,
+                scale,
+                resample,
+                filter));
 
         Assert.Contains("one FFmpeg build", exception.Message, StringComparison.Ordinal);
     }
@@ -369,7 +381,7 @@ public sealed class FFmpegLibraryLoaderTests
     public void VersionValidation_RejectsUnsupportedCodecMajor()
     {
         Assert.Throws<NotSupportedException>(
-            () => FFmpegApi.ValidateVersionFamily(63, 63, 61, 10, 7));
+            () => FFmpegApi.ValidateVersionFamily(63, 63, 61, 10, 7, 12));
     }
 
     private static NativeAudioFrame CreateAudioFrame(short[] samples)

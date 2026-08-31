@@ -5,6 +5,35 @@ namespace FrameFlux.FFmpeg.Tests;
 
 public sealed class MediaPlaybackControllerTests
 {
+    [Theory]
+    [InlineData(0.25d)]
+    [InlineData(4d)]
+    public async Task PlaybackRate_AcceptsSupportedBoundary(double playbackRate)
+    {
+        await using var controller = new MediaPlaybackController();
+
+        controller.PlaybackRate = playbackRate;
+
+        Assert.Equal(playbackRate, controller.PlaybackRate);
+    }
+
+    [Theory]
+    [InlineData(0.249d)]
+    [InlineData(4.001d)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public async Task PlaybackRate_RejectsUnsupportedValue(double playbackRate)
+    {
+        await using var controller = new MediaPlaybackController();
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => controller.PlaybackRate = playbackRate);
+
+        Assert.Equal("value", exception.ParamName);
+        Assert.Equal(playbackRate, exception.ActualValue);
+    }
+
     [Fact]
     public async Task StartAsync_RequiresPlayerFactory()
     {
