@@ -12,6 +12,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        InitializePlaybackControls();
         Player.PlayerFactory = new FfmpegMediaPlayerFactory();
         var options = new MediaOpenOptions
         {
@@ -39,6 +40,17 @@ public partial class MainWindow : Window
 
     private async void StartButton_Click(object sender, RoutedEventArgs e)
     {
+        if (Player.State == MediaPlaybackState.Playing)
+        {
+            await Player.PauseAsync();
+            return;
+        }
+        if (Player.State == MediaPlaybackState.Paused)
+        {
+            await Player.ResumeAsync();
+            return;
+        }
+
         SetSourceCommandsEnabled(false);
         try
         {

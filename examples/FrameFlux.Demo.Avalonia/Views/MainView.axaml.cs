@@ -20,6 +20,7 @@ public sealed partial class MainView : UserControl
     public MainView()
     {
         InitializeComponent();
+        InitializePlaybackControls();
         Player.PlayerFactory = new FfmpegMediaPlayerFactory();
         Player.PropertyChanged += Player_OnPropertyChanged;
         var options = new MediaOpenOptions
@@ -48,6 +49,17 @@ public sealed partial class MainView : UserControl
 
     private async void StartButton_OnClick(object? sender, RoutedEventArgs e)
     {
+        if (Player.State == MediaPlaybackState.Playing)
+        {
+            await Player.PauseAsync();
+            return;
+        }
+        if (Player.State == MediaPlaybackState.Paused)
+        {
+            await Player.ResumeAsync();
+            return;
+        }
+
         SetSourceCommandsEnabled(false);
         try
         {
