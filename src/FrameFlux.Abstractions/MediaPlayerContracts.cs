@@ -361,6 +361,9 @@ public sealed record MediaDiagnostics(
     public MediaSynchronizationDiagnostics Synchronization { get; init; } =
         MediaSynchronizationDiagnostics.Empty;
 
+    public MediaReconnectDiagnostics Reconnect { get; init; } =
+        MediaReconnectDiagnostics.Empty;
+
     public static MediaDiagnostics Empty { get; } = new(
         false,
         "N/A",
@@ -368,6 +371,19 @@ public sealed record MediaDiagnostics(
         0,
         0,
         null);
+}
+
+public sealed record MediaReconnectDiagnostics(
+    int ConsecutiveFailures,
+    int TotalAttempts,
+    int RecoveryCount,
+    TimeSpan NextDelay)
+{
+    public static MediaReconnectDiagnostics Empty { get; } = new(
+        0,
+        0,
+        0,
+        TimeSpan.Zero);
 }
 
 public sealed record MediaSynchronizationDiagnostics(

@@ -148,7 +148,9 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
                 {
                     Audio = _client?.AudioDiagnostics ?? MediaAudioDiagnostics.Empty,
                     Synchronization = _client?.SynchronizationDiagnostics ??
-                        MediaSynchronizationDiagnostics.Empty
+                        MediaSynchronizationDiagnostics.Empty,
+                    Reconnect = _client?.ReconnectDiagnostics ??
+                        MediaReconnectDiagnostics.Empty
                 };
             }
         }

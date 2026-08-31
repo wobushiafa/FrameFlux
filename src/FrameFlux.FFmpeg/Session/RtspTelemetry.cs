@@ -21,6 +21,15 @@ internal static class RtspTelemetry
     internal static Counter<long> FramesDelivered { get; } =
         Metrics.CreateCounter<long>("rtsp.frames.delivered");
 
+    internal static Counter<long> ReconnectAttempts { get; } =
+        Metrics.CreateCounter<long>("rtsp.reconnect.attempts");
+
+    internal static Counter<long> ReconnectRecoveries { get; } =
+        Metrics.CreateCounter<long>("rtsp.reconnect.recoveries");
+
+    internal static Histogram<double> ReconnectDelay { get; } =
+        Metrics.CreateHistogram<double>("rtsp.reconnect.delay", unit: "ms");
+
     internal static Histogram<double> FrameReadDuration { get; } =
         Metrics.CreateHistogram<double>("rtsp.frame.read.duration", unit: "ms");
 

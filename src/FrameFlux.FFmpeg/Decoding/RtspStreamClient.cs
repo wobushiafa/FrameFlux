@@ -9,8 +9,6 @@ namespace FrameFlux.FFmpeg;
 
 internal sealed class RtspStreamClient : IDisposable
 {
-    private static readonly object OpenSemaphoreLock = new();
-    private static readonly Random ReconnectJitter = new();
     private readonly string _url;
     private readonly IMediaVideoOutput? _videoOutput;
     private RtspStreamOptions _options;
@@ -29,11 +27,13 @@ internal sealed class RtspStreamClient : IDisposable
     private MediaAudioDiagnostics _lastAudioDiagnostics = MediaAudioDiagnostics.Empty;
     private MediaSynchronizationDiagnostics _synchronizationDiagnostics =
         MediaSynchronizationDiagnostics.Empty;
+    private readonly RtspReconnectState _reconnectState;
     public string VideoDecoderDiagnostics => _videoDecoderDiagnostics;
     public MediaAudioDiagnostics AudioDiagnostics =>
         Volatile.Read(ref _audioPlayback)?.Diagnostics ?? _lastAudioDiagnostics;
     public MediaSynchronizationDiagnostics SynchronizationDiagnostics =>
         _synchronizationDiagnostics;
+    public MediaReconnectDiagnostics ReconnectDiagnostics => _reconnectState.Diagnostics;
 
     internal delegate void FrameReceivedHandler(IntPtr buffer, int width, int height, int stride);
     internal delegate void FrameLeaseReceivedHandler(FfmpegMediaFrameLease lease);
@@ -69,6 +69,7 @@ internal sealed class RtspStreamClient : IDisposable
         _url = url;
         _options = options;
         _videoOutput = videoOutput;
+        _reconnectState = new RtspReconnectState(options);
         _volume = options.Volume;
         _muted = options.IsMuted;
         RtspRuntimeDiagnostics.OnStreamClientCreated();
@@ -124,8 +125,6 @@ internal sealed class RtspStreamClient : IDisposable
         CancellationTokenSource threadCancellationTokenSource,
         TaskCompletionSource<object?> completionSource)
     {
-        var consecutiveFailureCount = 0;
-
         try
         {
             while (_isRunning && !threadCancellationTokenSource.IsCancellationRequested)
@@ -164,20 +163,18 @@ internal sealed class RtspStreamClient : IDisposable
                             cancellationToken,
                             out var probeFailureMessage))
                     {
-                        var nextFailureCount = consecutiveFailureCount + 1;
-                        var willRetry = ShouldReconnect(nextFailureCount);
+                        var reconnect = RegisterReconnectFailure();
                         RaiseStreamError(new RtspStreamError(
                             RtspStreamErrorKind.OpenFailed,
                             probeFailureMessage ?? "RTSP endpoint is unavailable.",
-                            WillRetry: willRetry));
-                        if (!willRetry)
+                            WillRetry: reconnect.RetryAllowed));
+                        if (!reconnect.RetryAllowed)
                         {
                             return;
                         }
 
                         RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
-                        consecutiveFailureCount = nextFailureCount;
-                        SleepBeforeReconnect(threadCancellationTokenSource, consecutiveFailureCount);
+                        SleepBeforeReconnect(threadCancellationTokenSource, reconnect.Delay);
                         continue;
                     }
 
@@ -233,7 +230,7 @@ internal sealed class RtspStreamClient : IDisposable
                             var platformDecodeTicks = Stopwatch.GetTimestamp() - decodeStart;
                             if (hasPlatformFrame && platformFrame is not null)
                             {
-                                consecutiveFailureCount = 0;
+                                RegisterReconnectSuccess();
                                 using (platformFrame)
                                 {
                                     if (!SynchronizeVideo(
@@ -274,20 +271,18 @@ internal sealed class RtspStreamClient : IDisposable
                                 break;
                             }
 
-                            var platformFailureCount = consecutiveFailureCount + 1;
-                            var platformWillRetry = ShouldReconnect(platformFailureCount);
+                            var reconnect = RegisterReconnectFailure();
                             RaiseStreamError(new RtspStreamError(
                                 RtspStreamErrorKind.EndOfStream,
                                 "Stream ended or no frame was received.",
-                                WillRetry: platformWillRetry));
-                            if (!platformWillRetry)
+                                WillRetry: reconnect.RetryAllowed));
+                            if (!reconnect.RetryAllowed)
                             {
                                 return;
                             }
 
                             RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
-                            consecutiveFailureCount = platformFailureCount;
-                            SleepBeforeReconnect(threadCancellationTokenSource, consecutiveFailureCount);
+                            SleepBeforeReconnect(threadCancellationTokenSource, reconnect.Delay);
                             break;
                         }
 
@@ -297,7 +292,7 @@ internal sealed class RtspStreamClient : IDisposable
                         var decodeElapsedTicks = Stopwatch.GetTimestamp() - decodeStart;
                         if (hasFrame && frame != null)
                         {
-                            consecutiveFailureCount = 0;
+                            RegisterReconnectSuccess();
                             FfmpegMediaFrameLease? frameLease = null;
                             try
                             {
@@ -474,20 +469,18 @@ internal sealed class RtspStreamClient : IDisposable
                                 break;
                             }
 
-                            var nextFailureCount = consecutiveFailureCount + 1;
-                            var willRetry = ShouldReconnect(nextFailureCount);
+                            var reconnect = RegisterReconnectFailure();
                             RaiseStreamError(new RtspStreamError(
                                 RtspStreamErrorKind.EndOfStream,
                                 "Stream ended or no frame was received.",
-                                WillRetry: willRetry));
-                            if (!willRetry)
+                                WillRetry: reconnect.RetryAllowed));
+                            if (!reconnect.RetryAllowed)
                             {
                                 return;
                             }
 
                             RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
-                            consecutiveFailureCount = nextFailureCount;
-                            SleepBeforeReconnect(threadCancellationTokenSource, consecutiveFailureCount);
+                            SleepBeforeReconnect(threadCancellationTokenSource, reconnect.Delay);
                             break;
                         }
                     }
@@ -501,14 +494,13 @@ internal sealed class RtspStreamClient : IDisposable
 
                     var kind = hasOpened ? RtspStreamErrorKind.DecodeFailed : RtspStreamErrorKind.OpenFailed;
                     var willFallbackToSoftware = ShouldFallbackToSoftware(ex);
-                    var nextFailureCount = consecutiveFailureCount + 1;
-                    var willRetry = ShouldReconnect(nextFailureCount);
+                    var reconnect = RegisterReconnectFailure();
                     var errorMessage = FormatExceptionMessage(ex);
                     RaiseStreamError(new RtspStreamError(
                         kind,
                         willFallbackToSoftware ? $"{errorMessage} Falling back to software decoding." : errorMessage,
                         ex,
-                        WillRetry: willRetry));
+                        WillRetry: reconnect.RetryAllowed));
 
                     if (willFallbackToSoftware)
                     {
@@ -516,14 +508,13 @@ internal sealed class RtspStreamClient : IDisposable
                         HardwareVideoDecodingChanged?.Invoke(this, false);
                     }
 
-                    if (!willRetry)
+                    if (!reconnect.RetryAllowed)
                     {
                         return;
                     }
 
                     RaiseConnectionStateChanged(RtspConnectionState.Reconnecting);
-                    consecutiveFailureCount = nextFailureCount;
-                    SleepBeforeReconnect(threadCancellationTokenSource, consecutiveFailureCount);
+                    SleepBeforeReconnect(threadCancellationTokenSource, reconnect.Delay);
                 }
                 finally
                 {
@@ -808,10 +799,9 @@ internal sealed class RtspStreamClient : IDisposable
         return Math.Clamp(baseTimeout + 1000, 2000, 15000);
     }
 
-    private void SleepBeforeReconnect(CancellationTokenSource threadCancellationTokenSource, int consecutiveFailureCount)
+    private void SleepBeforeReconnect(CancellationTokenSource threadCancellationTokenSource, TimeSpan delay)
     {
-        var delay = CalculateReconnectDelayMilliseconds(consecutiveFailureCount);
-        if (delay == 0)
+        if (delay <= TimeSpan.Zero)
         {
             return;
         }
@@ -819,39 +809,34 @@ internal sealed class RtspStreamClient : IDisposable
         threadCancellationTokenSource.Token.WaitHandle.WaitOne(delay);
     }
 
-    internal int CalculateReconnectDelayMilliseconds(int consecutiveFailureCount)
+    private RtspReconnectDecision RegisterReconnectFailure()
     {
-        var baseDelay = Math.Max(0, _options.ReconnectInitialDelayMilliseconds);
-        if (baseDelay == 0)
+        var decision = _reconnectState.RegisterFailure();
+        if (decision.RetryAllowed)
         {
-            return 0;
+            RtspTelemetry.ReconnectAttempts.Add(1);
+            RtspTelemetry.ReconnectDelay.Record(decision.Delay.TotalMilliseconds);
         }
 
-        var exponent = Math.Clamp(Math.Max(consecutiveFailureCount, 1) - 1, 0, 5);
-        var multiplier = 1 << exponent;
-        var cappedDelay = (int)Math.Min(
-            (long)baseDelay * multiplier,
-            _options.ReconnectMaximumDelayMilliseconds);
-        if (cappedDelay >= _options.ReconnectMaximumDelayMilliseconds)
-        {
-            return Math.Max(0, _options.ReconnectMaximumDelayMilliseconds);
-        }
+        return decision;
+    }
 
-        var jitterRange = Math.Max(250, cappedDelay / 5);
-        lock (OpenSemaphoreLock)
+    private void RegisterReconnectSuccess()
+    {
+        if (_reconnectState.RegisterSuccess())
         {
-            var remainingBeforeMaximum =
-                _options.ReconnectMaximumDelayMilliseconds - cappedDelay;
-            return cappedDelay + ReconnectJitter.Next(
-                Math.Min(jitterRange, remainingBeforeMaximum + 1));
+            RtspTelemetry.ReconnectRecoveries.Add(1);
         }
     }
+
+
+    internal int CalculateReconnectDelayMilliseconds(int consecutiveFailureCount) =>
+        _reconnectState.CalculateDelayMilliseconds(consecutiveFailureCount);
 
     internal bool ShouldReconnect(int failureCount) =>
         _options.ReconnectEnabled &&
         (_options.MaximumReconnectAttempts is null ||
          failureCount <= _options.MaximumReconnectAttempts.Value);
-
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposeSignaled, 1) == 0)

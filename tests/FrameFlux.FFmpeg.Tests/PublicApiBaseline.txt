@@ -84,6 +84,7 @@ class FrameFlux.MediaDiagnostics : System.IEquatable<FrameFlux.MediaDiagnostics>
   property System.String? LastError { get; init; }
   property System.Int32 PerformanceSampleCount { get; init; }
   property System.Double ReadMilliseconds { get; init; }
+  property FrameFlux.MediaReconnectDiagnostics Reconnect { get; init; }
   property FrameFlux.MediaSynchronizationDiagnostics Synchronization { get; init; }
   property System.String VideoDecoderDiagnostics { get; init; }
 struct FrameFlux.MediaDmaBufFrameBuffer : System.IEquatable<FrameFlux.MediaDmaBufFrameBuffer>
@@ -155,6 +156,13 @@ class FrameFlux.MediaPlaybackStateChangedEventArgs : System.EventArgs
   constructor MediaPlaybackStateChangedEventArgs(FrameFlux.MediaPlaybackState oldState, FrameFlux.MediaPlaybackState newState)
   property FrameFlux.MediaPlaybackState NewState { get; }
   property FrameFlux.MediaPlaybackState OldState { get; }
+class FrameFlux.MediaReconnectDiagnostics : System.IEquatable<FrameFlux.MediaReconnectDiagnostics>
+  constructor MediaReconnectDiagnostics(System.Int32 ConsecutiveFailures, System.Int32 TotalAttempts, System.Int32 RecoveryCount, System.TimeSpan NextDelay)
+  property System.Int32 ConsecutiveFailures { get; init; }
+  property FrameFlux.MediaReconnectDiagnostics Empty { get; }
+  property System.TimeSpan NextDelay { get; init; }
+  property System.Int32 RecoveryCount { get; init; }
+  property System.Int32 TotalAttempts { get; init; }
 class FrameFlux.MediaReconnectOptions : System.IEquatable<FrameFlux.MediaReconnectOptions>
   constructor MediaReconnectOptions()
   property System.TimeSpan InitialDelay { get; init; }
