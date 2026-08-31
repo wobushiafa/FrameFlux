@@ -141,7 +141,11 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
     }
 
     internal NativeStreamInfo GetStreamInfo() =>
-        FFmpegAbi.ReadStreamInfo(_stream, _codecParameters, _api.CodecMajorVersion);
+        FFmpegAbi.ReadStreamInfo(
+            _formatContext,
+            _stream,
+            _codecParameters,
+            _api.CodecMajorVersion);
 
     internal int Seek(long timestamp)
     {
@@ -893,6 +897,7 @@ internal static class FFmpegAbi
     }
 
     internal static NativeStreamInfo ReadStreamInfo(
+        IntPtr formatContext,
         IntPtr stream,
         IntPtr codecParameters,
         int codecMajorVersion)
@@ -923,7 +928,7 @@ internal static class FFmpegAbi
             TimeBaseNumerator = timeBase.Numerator,
             TimeBaseDenominator = timeBase.Denominator,
             StartTimestamp = GetStreamStartTimestamp(stream),
-            DurationTimestamp = GetStreamDuration(stream)
+            DurationTimestamp = GetMediaDuration(formatContext, stream)
         };
     }
 
@@ -948,6 +953,46 @@ internal static class FFmpegAbi
         return Marshal.ReadInt64(
             stream,
             Align(timeBaseOffset + sizeof(int) * 2, sizeof(long)) + sizeof(long));
+    }
+
+    internal static long GetMediaDuration(IntPtr formatContext, IntPtr selectedStream)
+    {
+        var selectedTimeBase = GetTimeBase(selectedStream);
+        if (formatContext == IntPtr.Zero ||
+            selectedStream == IntPtr.Zero ||
+            selectedTimeBase.Numerator <= 0 ||
+            selectedTimeBase.Denominator <= 0)
+        {
+            return GetStreamDuration(selectedStream);
+        }
+
+        var longestDurationSeconds = 0d;
+        for (var index = 0; index < 1024; index++)
+        {
+            var stream = GetStream(formatContext, index);
+            if (stream == IntPtr.Zero)
+            {
+                break;
+            }
+
+            var duration = GetStreamDuration(stream);
+            var timeBase = GetTimeBase(stream);
+            if (duration <= 0 || timeBase.Numerator <= 0 || timeBase.Denominator <= 0)
+            {
+                continue;
+            }
+
+            longestDurationSeconds = Math.Max(
+                longestDurationSeconds,
+                duration * (double)timeBase.Numerator / timeBase.Denominator);
+        }
+
+        return longestDurationSeconds > 0
+            ? checked((long)Math.Round(
+                longestDurationSeconds *
+                selectedTimeBase.Denominator /
+                selectedTimeBase.Numerator))
+            : GetStreamDuration(selectedStream);
     }
 
     internal static long GetStreamStartTimestamp(IntPtr stream)
