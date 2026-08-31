@@ -155,8 +155,7 @@ internal sealed class RtspDecoder : IDisposable
 
         if (info.PresentationTimestamp != long.MinValue)
         {
-            Position = TimeSpan.FromSeconds(
-                info.PresentationTimestamp * (double)info.TimeBaseNumerator / info.TimeBaseDenominator);
+            Position = GetRelativePosition(info, _streamInfo) ?? Position;
         }
 
         frame = new NativeDecodedFrame(handle, info);
@@ -171,15 +170,42 @@ internal sealed class RtspDecoder : IDisposable
             throw new ArgumentOutOfRangeException(nameof(position));
         }
 
-        var timestamp = checked((long)Math.Round(
-            position.TotalSeconds * _streamInfo.TimeBaseDenominator /
-            Math.Max(1, _streamInfo.TimeBaseNumerator)));
+        var timestamp = GetSeekTimestamp(position, _streamInfo);
         if (FrameFluxFFmpegNative.Seek(_session, timestamp) < 0)
         {
             throw CreateRuntimeException(FrameFluxFFmpegNative.GetError(_session));
         }
 
         Position = position;
+    }
+
+    internal static TimeSpan? GetRelativePosition(
+        NativeFrameInfo frameInfo,
+        NativeStreamInfo streamInfo)
+    {
+        if (frameInfo.PresentationTimestamp == long.MinValue ||
+            frameInfo.TimeBaseDenominator <= 0)
+        {
+            return null;
+        }
+
+        var startTimestamp = streamInfo.StartTimestamp == long.MinValue
+            ? 0L
+            : streamInfo.StartTimestamp;
+        var seconds = (frameInfo.PresentationTimestamp - (double)startTimestamp) *
+            frameInfo.TimeBaseNumerator / frameInfo.TimeBaseDenominator;
+        return TimeSpan.FromSeconds(Math.Max(0d, seconds));
+    }
+
+    internal static long GetSeekTimestamp(TimeSpan position, NativeStreamInfo streamInfo)
+    {
+        var numerator = Math.Max(1, streamInfo.TimeBaseNumerator);
+        var relativeTimestamp = checked((long)Math.Round(
+            position.TotalSeconds * streamInfo.TimeBaseDenominator / numerator));
+        var startTimestamp = streamInfo.StartTimestamp == long.MinValue
+            ? 0L
+            : streamInfo.StartTimestamp;
+        return checked(relativeTimestamp + startTimestamp);
     }
 
     private TimeSpan? ToTimeSpan(long timestamp) =>

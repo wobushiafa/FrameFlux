@@ -55,6 +55,7 @@ internal struct NativeStreamInfo
     public int CodecExtraDataSize;
     public int TimeBaseNumerator;
     public int TimeBaseDenominator;
+    public long StartTimestamp;
     public long DurationTimestamp;
 }
 

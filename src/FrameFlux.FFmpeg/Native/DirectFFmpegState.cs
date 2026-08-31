@@ -922,6 +922,7 @@ internal static class FFmpegAbi
             CodecExtraDataSize = extraDataSize,
             TimeBaseNumerator = timeBase.Numerator,
             TimeBaseDenominator = timeBase.Denominator,
+            StartTimestamp = GetStreamStartTimestamp(stream),
             DurationTimestamp = GetStreamDuration(stream)
         };
     }
@@ -947,6 +948,20 @@ internal static class FFmpegAbi
         return Marshal.ReadInt64(
             stream,
             Align(timeBaseOffset + sizeof(int) * 2, sizeof(long)) + sizeof(long));
+    }
+
+    internal static long GetStreamStartTimestamp(IntPtr stream)
+    {
+        if (stream == IntPtr.Zero)
+        {
+            return long.MinValue;
+        }
+
+        var codecParametersOffset = Align(IntPtr.Size + sizeof(int) * 2, IntPtr.Size);
+        var timeBaseOffset = codecParametersOffset + IntPtr.Size * 2;
+        return Marshal.ReadInt64(
+            stream,
+            Align(timeBaseOffset + sizeof(int) * 2, sizeof(long)));
     }
 
     internal static int GetPacketStreamIndex(IntPtr packet)

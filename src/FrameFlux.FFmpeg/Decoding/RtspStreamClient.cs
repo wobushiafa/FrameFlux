@@ -319,6 +319,7 @@ internal sealed class RtspStreamClient : IDisposable
                                 {
                                     if (!SynchronizeVideo(
                                             platformFrame.PresentationSeconds,
+                                            platformFrame.PresentationSeconds,
                                             audioPlayback,
                                             clockSynchronizer,
                                             cancellationToken) ||
@@ -389,6 +390,7 @@ internal sealed class RtspStreamClient : IDisposable
                             {
                                 if (!SynchronizeVideo(
                                         frame,
+                                        decoder.Position.TotalSeconds,
                                         audioPlayback,
                                         clockSynchronizer,
                                         cancellationToken))
@@ -866,6 +868,7 @@ internal sealed class RtspStreamClient : IDisposable
 
     private bool SynchronizeVideo(
         NativeDecodedFrame frame,
+        double playbackPosition,
         AudioPlaybackController? audioPlayback,
         MediaClockSynchronizer clockSynchronizer,
         CancellationToken cancellationToken)
@@ -880,6 +883,7 @@ internal sealed class RtspStreamClient : IDisposable
             (double)frame.Info.TimeBaseNumerator / frame.Info.TimeBaseDenominator;
         return SynchronizeVideo(
             videoPosition,
+            playbackPosition,
             audioPlayback,
             clockSynchronizer,
             cancellationToken);
@@ -887,13 +891,16 @@ internal sealed class RtspStreamClient : IDisposable
 
     private bool SynchronizeVideo(
         double? videoPosition,
+        double? playbackPosition,
         AudioPlaybackController? audioPlayback,
         MediaClockSynchronizer clockSynchronizer,
         CancellationToken cancellationToken)
     {
         if (videoPosition is null) return true;
 
-        if (!_isLive && !_playbackClock.WaitUntil(videoPosition.Value, cancellationToken))
+        if (!_isLive && !_playbackClock.WaitUntil(
+                playbackPosition ?? videoPosition.Value,
+                cancellationToken))
         {
             return false;
         }

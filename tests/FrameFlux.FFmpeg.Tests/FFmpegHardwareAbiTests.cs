@@ -98,6 +98,28 @@ public sealed class FFmpegHardwareAbiTests
     }
 
     [Fact]
+    public void GetStreamStartTimestamp_ReadsPublicHeaderLayout()
+    {
+        if (IntPtr.Size != 8)
+        {
+            return;
+        }
+
+        var stream = Marshal.AllocHGlobal(64);
+        try
+        {
+            Marshal.Copy(new byte[64], 0, stream, 64);
+            Marshal.WriteInt64(stream, 40, 90_000);
+
+            Assert.Equal(90_000, FFmpegAbi.GetStreamStartTimestamp(stream));
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(stream);
+        }
+    }
+
+    [Fact]
     public void D3D11FrameLease_HoldsTextureAndArraySliceUntilDisposed()
     {
         var released = false;
