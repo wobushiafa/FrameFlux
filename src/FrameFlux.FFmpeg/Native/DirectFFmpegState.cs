@@ -930,7 +930,7 @@ internal static class FFmpegAbi
             TimeBaseNumerator = timeBase.Numerator,
             TimeBaseDenominator = timeBase.Denominator,
             StartTimestamp = GetStreamStartTimestamp(stream),
-            DurationTimestamp = GetMediaDuration(
+            DurationTimestamp = FFmpegDurationAbi.GetMediaDurationTimestamp(
                 formatContext,
                 stream,
                 formatMajorVersion)
@@ -944,93 +944,6 @@ internal static class FFmpegAbi
         return (
             Marshal.ReadInt32(stream, timeBaseOffset),
             Math.Max(1, Marshal.ReadInt32(stream, timeBaseOffset + sizeof(int))));
-    }
-
-    internal static long GetStreamDuration(IntPtr stream)
-    {
-        if (stream == IntPtr.Zero)
-        {
-            return 0;
-        }
-
-        var codecParametersOffset = Align(IntPtr.Size + sizeof(int) * 2, IntPtr.Size);
-        var timeBaseOffset = codecParametersOffset + IntPtr.Size * 2;
-        return Marshal.ReadInt64(
-            stream,
-            Align(timeBaseOffset + sizeof(int) * 2, sizeof(long)) + sizeof(long));
-    }
-
-    internal static long GetMediaDuration(
-        IntPtr formatContext,
-        IntPtr selectedStream,
-        int formatMajorVersion)
-    {
-        var selectedTimeBase = GetTimeBase(selectedStream);
-        if (formatContext == IntPtr.Zero ||
-            selectedStream == IntPtr.Zero ||
-            selectedTimeBase.Numerator <= 0 ||
-            selectedTimeBase.Denominator <= 0)
-        {
-            return GetStreamDuration(selectedStream);
-        }
-
-        var formatDuration = GetFormatDuration(formatContext, formatMajorVersion);
-        if (formatDuration > 0)
-        {
-            var selectedTimestamp = formatDuration *
-                (double)selectedTimeBase.Denominator /
-                (1_000_000d * selectedTimeBase.Numerator);
-            if (double.IsFinite(selectedTimestamp) &&
-                selectedTimestamp <= long.MaxValue)
-            {
-                return checked((long)Math.Round(selectedTimestamp));
-            }
-        }
-
-        var longestDurationSeconds = 0d;
-        for (var index = 0; index < 1024; index++)
-        {
-            var stream = GetStream(formatContext, index);
-            if (stream == IntPtr.Zero)
-            {
-                break;
-            }
-
-            var duration = GetStreamDuration(stream);
-            var timeBase = GetTimeBase(stream);
-            if (duration <= 0 || timeBase.Numerator <= 0 || timeBase.Denominator <= 0)
-            {
-                continue;
-            }
-
-            longestDurationSeconds = Math.Max(
-                longestDurationSeconds,
-                duration * (double)timeBase.Numerator / timeBase.Denominator);
-        }
-
-        return longestDurationSeconds > 0
-            ? checked((long)Math.Round(
-                longestDurationSeconds *
-                selectedTimeBase.Denominator /
-                selectedTimeBase.Numerator))
-            : GetStreamDuration(selectedStream);
-    }
-
-    internal static long GetFormatDuration(IntPtr formatContext, int formatMajorVersion)
-    {
-        if (formatContext == IntPtr.Zero || IntPtr.Size != 8)
-        {
-            return long.MinValue;
-        }
-
-        return formatMajorVersion switch
-        {
-            60 => Marshal.PtrToStructure<FFmpeg6FormatContextPrefix>(
-                formatContext).Duration,
-            61 or 62 => Marshal.PtrToStructure<FFmpeg7FormatContextPrefix>(
-                formatContext).Duration,
-            _ => long.MinValue
-        };
     }
 
     internal static long GetStreamStartTimestamp(IntPtr stream)
@@ -1195,42 +1108,6 @@ internal static class FFmpegAbi
 
     private static int Align(int value, int alignment) =>
         (value + alignment - 1) & ~(alignment - 1);
-}
-
-[StructLayout(LayoutKind.Sequential)]
-internal struct FFmpeg6FormatContextPrefix
-{
-    internal IntPtr AvClass;
-    internal IntPtr InputFormat;
-    internal IntPtr OutputFormat;
-    internal IntPtr PrivateData;
-    internal IntPtr IoContext;
-    internal int ContextFlags;
-    internal uint StreamCount;
-    internal IntPtr Streams;
-    internal IntPtr Url;
-    internal long StartTime;
-    internal long Duration;
-}
-
-[StructLayout(LayoutKind.Sequential)]
-internal struct FFmpeg7FormatContextPrefix
-{
-    internal IntPtr AvClass;
-    internal IntPtr InputFormat;
-    internal IntPtr OutputFormat;
-    internal IntPtr PrivateData;
-    internal IntPtr IoContext;
-    internal int ContextFlags;
-    internal uint StreamCount;
-    internal IntPtr Streams;
-    internal uint StreamGroupCount;
-    internal IntPtr StreamGroups;
-    internal uint ChapterCount;
-    internal IntPtr Chapters;
-    internal IntPtr Url;
-    internal long StartTime;
-    internal long Duration;
 }
 
 internal sealed record FrameLayout(

@@ -6,7 +6,7 @@ namespace FrameFlux.FFmpeg.Tests;
 public sealed class FFmpegDurationAbiTests
 {
     [Fact]
-    public void GetMediaDuration_UsesLongestTrackAndSelectedStreamTimeBase()
+    public void GetMediaDurationTimestamp_UsesLongestTrackAndSelectedStreamTimeBase()
     {
         if (IntPtr.Size != 8)
         {
@@ -34,7 +34,10 @@ public sealed class FFmpegDurationAbiTests
 
             Assert.Equal(
                 10_000,
-                FFmpegAbi.GetMediaDuration(formatContext, videoStream, formatMajorVersion: 61));
+                FFmpegDurationAbi.GetMediaDurationTimestamp(
+                    formatContext,
+                    videoStream,
+                    formatMajorVersion: 61));
         }
         finally
         {
@@ -46,7 +49,7 @@ public sealed class FFmpegDurationAbiTests
     }
 
     [Fact]
-    public void GetMediaDuration_FallsBackToSelectedStreamWhenContextIsUnavailable()
+    public void GetMediaDurationTimestamp_FallsBackWhenContextIsUnavailable()
     {
         if (IntPtr.Size != 8)
         {
@@ -61,7 +64,7 @@ public sealed class FFmpegDurationAbiTests
 
             Assert.Equal(
                 5_000,
-                FFmpegAbi.GetMediaDuration(
+                FFmpegDurationAbi.GetMediaDurationTimestamp(
                     IntPtr.Zero,
                     videoStream,
                     formatMajorVersion: 61));
@@ -76,7 +79,7 @@ public sealed class FFmpegDurationAbiTests
     [InlineData(60, 72)]
     [InlineData(61, 104)]
     [InlineData(62, 104)]
-    public void GetFormatDuration_ReadsVersionedPublicHeaderLayout(
+    public void GetFormatDurationMicroseconds_ReadsVersionedPublicHeaderLayout(
         int formatMajorVersion,
         int durationOffset)
     {
@@ -93,7 +96,9 @@ public sealed class FFmpegDurationAbiTests
 
             Assert.Equal(
                 8_250_000,
-                FFmpegAbi.GetFormatDuration(formatContext, formatMajorVersion));
+                FFmpegDurationAbi.GetFormatDurationMicroseconds(
+                    formatContext,
+                    formatMajorVersion));
         }
         finally
         {
@@ -102,7 +107,7 @@ public sealed class FFmpegDurationAbiTests
     }
 
     [Fact]
-    public void GetMediaDuration_PrefersContainerDuration()
+    public void GetMediaDurationTimestamp_PrefersContainerDuration()
     {
         if (IntPtr.Size != 8)
         {
@@ -120,7 +125,7 @@ public sealed class FFmpegDurationAbiTests
 
             Assert.Equal(
                 8_250,
-                FFmpegAbi.GetMediaDuration(
+                FFmpegDurationAbi.GetMediaDurationTimestamp(
                     formatContext,
                     videoStream,
                     formatMajorVersion: 61));
@@ -130,6 +135,17 @@ public sealed class FFmpegDurationAbiTests
             Marshal.FreeHGlobal(videoStream);
             Marshal.FreeHGlobal(formatContext);
         }
+    }
+
+    [Fact]
+    public void GetMediaDurationTimestamp_ReturnsZeroWithoutSelectedStream()
+    {
+        Assert.Equal(
+            0,
+            FFmpegDurationAbi.GetMediaDurationTimestamp(
+                IntPtr.Zero,
+                IntPtr.Zero,
+                formatMajorVersion: 61));
     }
 
     private static void WriteTimeline(
