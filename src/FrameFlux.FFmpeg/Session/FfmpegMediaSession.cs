@@ -14,6 +14,10 @@ internal interface IFfmpegMediaSession : IAsyncDisposable
     MediaPlaybackState State { get; }
 
     MediaDiagnostics Diagnostics { get; }
+    TimeSpan Position => TimeSpan.Zero;
+
+    TimeSpan? Duration => null;
+
 
     double Volume { get; set; }
 
@@ -28,6 +32,10 @@ internal interface IFfmpegMediaSession : IAsyncDisposable
     ValueTask StartAsync(CancellationToken cancellationToken = default);
 
     ValueTask StopAsync(CancellationToken cancellationToken = default);
+    ValueTask SeekAsync(TimeSpan position, CancellationToken cancellationToken = default) =>
+        ValueTask.FromException(
+            new NotSupportedException("This media session does not support seeking."));
+
 
     ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default);
 }
@@ -158,6 +166,28 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
 
     public event EventHandler<MediaPlaybackStateChangedEventArgs>? StateChanged;
 
+    public TimeSpan Position
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _client?.Position ?? TimeSpan.Zero;
+            }
+        }
+    }
+
+    public TimeSpan? Duration
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _client?.Duration;
+            }
+        }
+    }
+
     public event EventHandler<MediaPlaybackErrorEventArgs>? Error;
 
     public event EventHandler<MediaVideoFrame>? FrameReceived
@@ -217,7 +247,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             }
 
             var client = new RtspStreamClient(
-                Source.Uri.ToString(),
+                Source.Uri.IsFile ? Source.Uri.LocalPath : Source.Uri.ToString(),
                 CreateEngineOptions(),
                 _videoOutput);
             client.ConnectionStateChanged += OnConnectionStateChanged;
@@ -255,6 +285,21 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         }
 
         await stopTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public ValueTask SeekAsync(
+        TimeSpan position,
+        CancellationToken cancellationToken = default)
+    {
+        RtspStreamClient client;
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            client = _client ?? throw new InvalidOperationException(
+                "Start the media session before seeking.");
+        }
+
+        return client.SeekAsync(position, cancellationToken);
     }
 
     public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default)

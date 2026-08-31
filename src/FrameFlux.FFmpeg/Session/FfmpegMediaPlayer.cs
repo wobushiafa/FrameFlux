@@ -15,6 +15,8 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
     private MediaPlaybackState _state = MediaPlaybackState.Idle;
     private MediaCapabilities _capabilities = MediaCapabilities.None;
     private MediaDiagnostics _diagnostics = MediaDiagnostics.Empty;
+    private TimeSpan _position;
+    private TimeSpan? _duration;
     private double _volume = 1d;
     private bool _isMuted;
     private IMediaVideoOutput? _videoOutput;
@@ -166,9 +168,27 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         }
     }
 
-    public TimeSpan Position => TimeSpan.Zero;
+    public TimeSpan Position
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _session?.Position ?? _position;
+            }
+        }
+    }
 
-    public TimeSpan? Duration => null;
+    public TimeSpan? Duration
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _session?.Duration ?? _duration;
+            }
+        }
+    }
 
     public event EventHandler<MediaPlaybackStateChangedEventArgs>? StateChanged;
 
@@ -219,10 +239,19 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             await StopSessionCoreAsync().ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (source.Uri.Scheme is not ("rtsp" or "rtsps"))
+            var isFile = source.Uri.IsFile;
+            if (!isFile && source.Uri.Scheme is not ("rtsp" or "rtsps"))
             {
                 throw new NotSupportedException(
-                    $"The current FFmpeg backend does not support the '{source.Uri.Scheme}' media scheme yet.");
+                    $"The FFmpeg backend does not support the '{source.Uri.Scheme}' media scheme.");
+            }
+            if (isFile && !File.Exists(source.Uri.LocalPath))
+            {
+                throw new FileNotFoundException("The media file does not exist.", source.Uri.LocalPath);
+            }
+            if (isFile && resolvedOptions.SessionSharing == MediaSessionSharingMode.Shared)
+            {
+                throw new NotSupportedException("Seekable file playback requires a dedicated media session.");
             }
 
             lock (_sync)
@@ -232,13 +261,15 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
                 _source = source;
                 _options = resolvedOptions;
                 _capabilities = new MediaCapabilities(
-                    IsLive: true,
+                    IsLive: !isFile,
                     CanPause: false,
-                    CanSeek: false,
+                    CanSeek: isFile,
                     CanCaptureSnapshots:
                         resolvedOptions.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame &&
                         !usesGpuFrames);
                 _diagnostics = MediaDiagnostics.Empty;
+                _position = TimeSpan.Zero;
+                _duration = null;
             }
             TransitionTo(MediaPlaybackState.Ready);
         }
@@ -270,6 +301,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             ThrowIfDisposed();
             MediaSource source;
             MediaOpenOptions options;
+            TimeSpan initialPosition;
             double volume;
             bool muted;
             IMediaVideoOutput? videoOutput;
@@ -285,6 +317,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
                 source = _source ??
                     throw new InvalidOperationException("Open a media source before starting playback.");
                 options = _options;
+                initialPosition = _position;
                 volume = _volume;
                 muted = _isMuted;
                 videoOutput = _videoOutput;
@@ -308,6 +341,10 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             try
             {
                 await session.StartAsync(cancellationToken).ConfigureAwait(false);
+                if (initialPosition > TimeSpan.Zero && source.Uri.IsFile)
+                {
+                    await session.SeekAsync(initialPosition, cancellationToken).ConfigureAwait(false);
+                }
             }
             catch
             {
@@ -339,7 +376,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
     {
         cancellationToken.ThrowIfCancellationRequested();
         ThrowIfDisposed();
-        throw new NotSupportedException("The current live RTSP source does not support pause.");
+        throw new NotSupportedException("The current media source does not support pause.");
     }
 
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)
@@ -364,16 +401,47 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         }
     }
 
-    public ValueTask SeekAsync(TimeSpan position, CancellationToken cancellationToken = default)
+    public async ValueTask SeekAsync(
+        TimeSpan position,
+        CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        ThrowIfDisposed();
-        if (position < TimeSpan.Zero)
+        await _commands.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            throw new ArgumentOutOfRangeException(nameof(position), "Position cannot be negative.");
-        }
+            ThrowIfDisposed();
+            IFfmpegMediaSession? session;
+            TimeSpan? duration;
+            bool canSeek;
+            lock (_sync)
+            {
+                canSeek = _capabilities.CanSeek;
+                duration = _session?.Duration ?? _duration;
+                session = _session;
+            }
 
-        throw new NotSupportedException("The current live RTSP source does not support seeking.");
+            if (!canSeek)
+            {
+                throw new NotSupportedException("The current media source does not support seeking.");
+            }
+            if (position < TimeSpan.Zero || duration is { } knownDuration && position > knownDuration)
+            {
+                throw new ArgumentOutOfRangeException(nameof(position));
+            }
+
+            if (session is not null)
+            {
+                await session.SeekAsync(position, cancellationToken).ConfigureAwait(false);
+            }
+            lock (_sync)
+            {
+                _position = position;
+                _duration ??= session?.Duration;
+            }
+        }
+        finally
+        {
+            _commands.Release();
+        }
     }
 
     public async ValueTask<MediaSnapshot?> CaptureSnapshotAsync(
@@ -453,6 +521,8 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         {
             lock (_sync)
             {
+                _position = session.Position;
+                _duration = session.Duration ?? _duration;
                 _diagnostics = session.Diagnostics;
             }
         }

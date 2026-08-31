@@ -36,6 +36,7 @@ internal sealed class RtspDecoder : IDisposable
     private readonly RtspStreamOptions _options;
     private readonly NativeRtspSessionHandle _session;
     private readonly CancellationTokenRegistration _cancellationRegistration;
+    private readonly NativeStreamInfo _streamInfo;
     private bool _disposed;
 
     internal RtspDecoder(
@@ -84,7 +85,7 @@ internal sealed class RtspDecoder : IDisposable
         if (result < 0 || session.IsInvalid)
         {
             var message = session.IsInvalid
-                ? $"Unable to open RTSP source (native error {result})."
+                ? $"Unable to open media source (native error {result})."
                 : FrameFluxFFmpegNative.GetError(session);
             session.Dispose();
             throw new ApplicationException(message);
@@ -94,6 +95,12 @@ internal sealed class RtspDecoder : IDisposable
             static state => FrameFluxFFmpegNative.Cancel((NativeRtspSessionHandle)state!),
             session);
         VideoDecoderDiagnostics = FrameFluxFFmpegNative.GetVideoDecoderDiagnostics(session);
+        if (FrameFluxFFmpegNative.GetStreamInfo(session, out _streamInfo) < 0)
+        {
+            session.Dispose();
+            throw new ApplicationException("Unable to read media stream information.");
+        }
+        Duration = ToTimeSpan(_streamInfo.DurationTimestamp);
     }
 
     public bool IsHardwareVideoDecodingActive =>
@@ -105,6 +112,10 @@ internal sealed class RtspDecoder : IDisposable
     public string VideoDecoderDiagnostics { get; }
 
     internal bool HasAudio => FrameFluxFFmpegNative.HasAudio(_session);
+
+    internal TimeSpan Position { get; private set; }
+
+    internal TimeSpan? Duration { get; }
 
     internal bool TryDequeueAudioFrame(out NativeAudioFrame? frame) =>
         FrameFluxFFmpegNative.TryDequeueAudioFrame(_session, out frame);
@@ -142,9 +153,39 @@ internal sealed class RtspDecoder : IDisposable
                 "The native RTSP decoder returned an invalid video frame.");
         }
 
+        if (info.PresentationTimestamp != long.MinValue)
+        {
+            Position = TimeSpan.FromSeconds(
+                info.PresentationTimestamp * (double)info.TimeBaseNumerator / info.TimeBaseDenominator);
+        }
+
         frame = new NativeDecodedFrame(handle, info);
         return true;
     }
+
+    internal void Seek(TimeSpan position)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (position < TimeSpan.Zero || Duration is { } duration && position > duration)
+        {
+            throw new ArgumentOutOfRangeException(nameof(position));
+        }
+
+        var timestamp = checked((long)Math.Round(
+            position.TotalSeconds * _streamInfo.TimeBaseDenominator /
+            Math.Max(1, _streamInfo.TimeBaseNumerator)));
+        if (FrameFluxFFmpegNative.Seek(_session, timestamp) < 0)
+        {
+            throw CreateRuntimeException(FrameFluxFFmpegNative.GetError(_session));
+        }
+
+        Position = position;
+    }
+
+    private TimeSpan? ToTimeSpan(long timestamp) =>
+        timestamp > 0
+            ? TimeSpan.FromSeconds(timestamp * (double)_streamInfo.TimeBaseNumerator / _streamInfo.TimeBaseDenominator)
+            : null;
 
     internal void ConvertFrameToBgra(
         NativeDecodedFrame frame,

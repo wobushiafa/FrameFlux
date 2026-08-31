@@ -64,9 +64,89 @@ public sealed class FfmpegMediaPlayerTests
         await player.OpenAsync(MediaSource.Parse("rtsp://camera/live"));
 
         Assert.Throws<NotSupportedException>(() => player.PauseAsync());
-        Assert.Throws<NotSupportedException>(() => player.SeekAsync(TimeSpan.FromSeconds(1)));
         await Assert.ThrowsAsync<NotSupportedException>(() =>
-            player.OpenAsync(MediaSource.FromFile(Path.Combine(Path.GetTempPath(), "sample.mp4"))).AsTask());
+            player.SeekAsync(TimeSpan.FromSeconds(1)).AsTask());
+    }
+
+    [Fact]
+    public async Task GenericPlayer_OpensAndSeeksLocalFile()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            var duration = TimeSpan.FromSeconds(10);
+            var factory = new FakeMediaSessionFactory { SessionDuration = duration };
+            await using var player = new FfmpegMediaPlayer(factory);
+            await player.OpenAsync(
+                MediaSource.FromFile(path),
+                new MediaOpenOptions
+                {
+                    SessionSharing = MediaSessionSharingMode.Dedicated
+                });
+
+            Assert.False(player.Capabilities.IsLive);
+            Assert.False(player.Capabilities.CanPause);
+            Assert.True(player.Capabilities.CanSeek);
+            Assert.Equal(TimeSpan.Zero, player.Position);
+            Assert.Null(player.Duration);
+
+            await player.PlayAsync();
+            Assert.Equal(duration, player.Duration);
+
+            var position = TimeSpan.FromSeconds(3);
+            await player.SeekAsync(position);
+            var firstSession = Assert.IsType<FakeMediaSession>(factory.LastSession);
+            Assert.Equal(position, firstSession.LastSeekPosition);
+            Assert.Equal(position, player.Position);
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+                player.SeekAsync(TimeSpan.FromSeconds(-1)).AsTask());
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+                player.SeekAsync(duration + TimeSpan.FromTicks(1)).AsTask());
+
+            await player.StopAsync();
+            Assert.Equal(position, player.Position);
+            Assert.Equal(duration, player.Duration);
+
+            await player.PlayAsync();
+            var secondSession = Assert.IsType<FakeMediaSession>(factory.LastSession);
+            Assert.NotSame(firstSession, secondSession);
+            Assert.Equal(position, secondSession.LastSeekPosition);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task GenericPlayer_RejectsMissingLocalFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.mp4");
+        await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory());
+
+        await Assert.ThrowsAsync<FileNotFoundException>(() =>
+            player.OpenAsync(MediaSource.FromFile(path)).AsTask());
+    }
+
+    [Fact]
+    public async Task GenericPlayer_RejectsSharedLocalFileSession()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory());
+            await Assert.ThrowsAsync<NotSupportedException>(() =>
+                player.OpenAsync(
+                    MediaSource.FromFile(path),
+                    new MediaOpenOptions
+                    {
+                        SessionSharing = MediaSessionSharingMode.Shared
+                    }).AsTask());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Fact]
@@ -241,6 +321,7 @@ public sealed class FfmpegMediaPlayerTests
     {
         internal IFfmpegMediaSession? LastSession { get; private set; }
         internal MediaOpenOptions? LastOptions { get; private set; }
+        internal TimeSpan? SessionDuration { get; set; }
         internal double LastVolume { get; private set; }
         internal bool LastIsMuted { get; private set; }
         internal IMediaVideoOutput? LastVideoOutput { get; private set; }
@@ -256,7 +337,10 @@ public sealed class FfmpegMediaPlayerTests
             LastVolume = volume;
             LastIsMuted = isMuted;
             LastVideoOutput = videoOutput;
-            LastSession = new FakeMediaSession(source, options, volume, isMuted);
+            LastSession = new FakeMediaSession(source, options, volume, isMuted)
+            {
+                Duration = SessionDuration
+            };
             return LastSession;
         }
     }
@@ -273,6 +357,9 @@ public sealed class FfmpegMediaPlayerTests
         public MediaDiagnostics Diagnostics { get; } = new(false, "Test", 1, 2, 3, null);
         public double Volume { get; set; } = volume;
         public bool IsMuted { get; set; } = isMuted;
+        public TimeSpan Position { get; private set; }
+        public TimeSpan? Duration { get; init; }
+        internal TimeSpan? LastSeekPosition { get; private set; }
         internal bool Disposed { get; private set; }
         internal Exception? StopException { get; set; }
         internal int FrameSubscriberCount =>
@@ -320,6 +407,15 @@ public sealed class FfmpegMediaPlayerTests
             }
 
             TransitionTo(MediaPlaybackState.Stopped);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask SeekAsync(
+            TimeSpan position,
+            CancellationToken cancellationToken = default)
+        {
+            Position = position;
+            LastSeekPosition = position;
             return ValueTask.CompletedTask;
         }
 

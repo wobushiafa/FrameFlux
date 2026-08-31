@@ -22,6 +22,7 @@ internal sealed class FFmpegApi
         AvFormatFindStreamInfo = Load<FormatFindStreamInfoDelegate>("avformat", "avformat_find_stream_info");
         AvFindBestStream = Load<FindBestStreamDelegate>("avformat", "av_find_best_stream");
         AvReadFrame = Load<ReadFrameDelegate>("avformat", "av_read_frame");
+        AvSeekFrame = Load<SeekFrameDelegate>("avformat", "av_seek_frame");
         AvFormatCloseInput = Load<FormatCloseInputDelegate>("avformat", "avformat_close_input");
         AvDictSet = Load<DictSetDelegate>("avutil", "av_dict_set");
         AvDictFree = Load<DictFreeDelegate>("avutil", "av_dict_free");
@@ -36,6 +37,7 @@ internal sealed class FFmpegApi
         AvCodecOpen2 = Load<CodecOpenDelegate>("avcodec", "avcodec_open2");
         AvCodecSendPacket = Load<CodecPacketDelegate>("avcodec", "avcodec_send_packet");
         AvCodecReceiveFrame = Load<CodecFrameDelegate>("avcodec", "avcodec_receive_frame");
+        AvCodecFlushBuffers = Load<CodecFlushBuffersDelegate>("avcodec", "avcodec_flush_buffers");
         AvCodecFreeContext = Load<FreeContextDelegate>("avcodec", "avcodec_free_context");
         AvPacketAlloc = Load<AllocDelegate>("avcodec", "av_packet_alloc");
         AvPacketClone = Load<CloneDelegate>("avcodec", "av_packet_clone");
@@ -89,6 +91,7 @@ internal sealed class FFmpegApi
     internal FormatFindStreamInfoDelegate AvFormatFindStreamInfo { get; }
     internal FindBestStreamDelegate AvFindBestStream { get; }
     internal ReadFrameDelegate AvReadFrame { get; }
+    internal SeekFrameDelegate AvSeekFrame { get; }
     internal FormatCloseInputDelegate AvFormatCloseInput { get; }
     internal DictSetDelegate AvDictSet { get; }
     internal DictFreeDelegate AvDictFree { get; }
@@ -103,6 +106,7 @@ internal sealed class FFmpegApi
     internal CodecOpenDelegate AvCodecOpen2 { get; }
     internal CodecPacketDelegate AvCodecSendPacket { get; }
     internal CodecFrameDelegate AvCodecReceiveFrame { get; }
+    internal CodecFlushBuffersDelegate AvCodecFlushBuffers { get; }
     internal FreeContextDelegate AvCodecFreeContext { get; }
     internal AllocDelegate AvPacketAlloc { get; }
     internal CloneDelegate AvPacketClone { get; }
@@ -178,6 +182,7 @@ internal sealed class FFmpegApi
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FormatFindStreamInfoDelegate(IntPtr context, IntPtr options);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FindBestStreamDelegate(IntPtr context, int mediaType, int wantedStream, int relatedStream, out IntPtr decoder, int flags);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int ReadFrameDelegate(IntPtr context, IntPtr packet);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int SeekFrameDelegate(IntPtr context, int streamIndex, long timestamp, int flags);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void FormatCloseInputDelegate(ref IntPtr context);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int DictSetDelegate(ref IntPtr dictionary, IntPtr key, IntPtr value, int flags);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void DictFreeDelegate(ref IntPtr dictionary);
@@ -192,6 +197,7 @@ internal sealed class FFmpegApi
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int CodecOpenDelegate(IntPtr codecContext, IntPtr codec, IntPtr options);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int CodecPacketDelegate(IntPtr codecContext, IntPtr packet);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int CodecFrameDelegate(IntPtr codecContext, IntPtr frame);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void CodecFlushBuffersDelegate(IntPtr codecContext);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void FreeContextDelegate(ref IntPtr context);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr AllocDelegate();
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr CloneDelegate(IntPtr value);

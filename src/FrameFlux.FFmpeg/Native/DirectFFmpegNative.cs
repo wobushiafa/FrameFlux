@@ -71,6 +71,17 @@ internal static class FrameFluxFFmpegNative
         return 0;
     }
 
+    internal static int Seek(NativeRtspSessionHandle session, long timestamp)
+    {
+        if (session.IsInvalid)
+        {
+            return -1;
+        }
+
+        return GetTarget<DirectRtspSession>(session.DangerousGetHandle())
+            .Seek(timestamp);
+    }
+
     internal static NativeReadResult ReadFrame(
         NativeRtspSessionHandle session,
         out NativeVideoFrameHandle frame)

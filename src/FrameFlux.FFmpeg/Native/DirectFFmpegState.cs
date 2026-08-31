@@ -143,6 +143,35 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
     internal NativeStreamInfo GetStreamInfo() =>
         FFmpegAbi.ReadStreamInfo(_stream, _codecParameters, _api.CodecMajorVersion);
 
+    internal int Seek(long timestamp)
+    {
+        if (_packetReader || _formatContext == IntPtr.Zero || _codecContext == IntPtr.Zero)
+        {
+            Error = "This FFmpeg session does not support seeking.";
+            return -1;
+        }
+
+        _api.AvPacketUnref(_packet);
+        var result = _api.AvSeekFrame(_formatContext, _videoStreamIndex, timestamp, 1);
+        if (result < 0)
+        {
+            return Fail(result, "av_seek_frame");
+        }
+
+        _api.AvCodecFlushBuffers(_codecContext);
+        if (_audioCodecContext != IntPtr.Zero)
+        {
+            _api.AvCodecFlushBuffers(_audioCodecContext);
+        }
+        _api.AvFrameUnref(_decodeFrame);
+        if (_audioDecodeFrame != IntPtr.Zero)
+        {
+            _api.AvFrameUnref(_audioDecodeFrame);
+        }
+        _audioFrames.Clear();
+        return 0;
+    }
+
     internal bool TryDequeueAudioFrame(out NativeAudioFrame? frame) =>
         _audioFrames.TryDequeue(out frame);
 
@@ -892,7 +921,8 @@ internal static class FFmpegAbi
             CodecExtraData = extraData,
             CodecExtraDataSize = extraDataSize,
             TimeBaseNumerator = timeBase.Numerator,
-            TimeBaseDenominator = timeBase.Denominator
+            TimeBaseDenominator = timeBase.Denominator,
+            DurationTimestamp = GetStreamDuration(stream)
         };
     }
 
@@ -903,6 +933,20 @@ internal static class FFmpegAbi
         return (
             Marshal.ReadInt32(stream, timeBaseOffset),
             Math.Max(1, Marshal.ReadInt32(stream, timeBaseOffset + sizeof(int))));
+    }
+
+    internal static long GetStreamDuration(IntPtr stream)
+    {
+        if (stream == IntPtr.Zero)
+        {
+            return 0;
+        }
+
+        var codecParametersOffset = Align(IntPtr.Size + sizeof(int) * 2, IntPtr.Size);
+        var timeBaseOffset = codecParametersOffset + IntPtr.Size * 2;
+        return Marshal.ReadInt64(
+            stream,
+            Align(timeBaseOffset + sizeof(int) * 2, sizeof(long)) + sizeof(long));
     }
 
     internal static int GetPacketStreamIndex(IntPtr packet)

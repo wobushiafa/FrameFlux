@@ -30,6 +30,8 @@ internal sealed class BoundedAudioFrameQueue
         _frames.Enqueue(frame);
     }
 
+    internal void Clear() => _frames.Clear();
+
     internal bool TryDequeue(out NativeAudioFrame? frame) =>
         _frames.TryDequeue(out frame);
 }
