@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace FrameFlux.FFmpeg;
+
+internal delegate void FrameReceivedHandler(IntPtr buffer, int width, int height, int stride);
+internal delegate void FrameLeaseReceivedHandler(FfmpegMediaFrameLease lease);
 
 internal sealed class FfmpegPlaybackClient : IDisposable
 {
@@ -13,23 +15,20 @@ internal sealed class FfmpegPlaybackClient : IDisposable
     private readonly IMediaVideoOutput? _videoOutput;
     private readonly bool _isLive;
     private readonly ManualResetEventSlim _playbackGate = new(initialState: true);
-    private readonly MediaPlaybackClock _playbackClock = new();
+    private readonly FfmpegPlaybackSynchronizer _playbackSynchronizer;
     private FfmpegPlaybackOptions _options;
     private Thread? _decodeThread;
     private volatile bool _isRunning;
     private CancellationTokenSource? _cancellationTokenSource;
     private TaskCompletionSource<object?> _completionSource = CreateCompletedCompletionSource();
-    private volatile bool _isFrameDeliveryEnabled = true;
     private PlaybackConnectionState _connectionState = PlaybackConnectionState.Idle;
-    private readonly UnmanagedFrameBufferPool _frameBufferPool = new();
+    private readonly FfmpegFrameDispatcher _frameDispatcher = new();
     private int _disposeSignaled;
     private string _videoDecoderDiagnostics = "N/A";
     private double _volume;
     private bool _muted;
     private AudioPlaybackController? _audioPlayback;
     private MediaAudioDiagnostics _lastAudioDiagnostics = MediaAudioDiagnostics.Empty;
-    private MediaSynchronizationDiagnostics _synchronizationDiagnostics =
-        MediaSynchronizationDiagnostics.Empty;
     private readonly MediaReconnectState _reconnectState;
     private MediaSeekRequest? _pendingSeek;
     private long _positionTicks;
@@ -40,14 +39,12 @@ internal sealed class FfmpegPlaybackClient : IDisposable
     public MediaAudioDiagnostics AudioDiagnostics =>
         Volatile.Read(ref _audioPlayback)?.Diagnostics ?? _lastAudioDiagnostics;
     public MediaSynchronizationDiagnostics SynchronizationDiagnostics =>
-        _synchronizationDiagnostics;
+        _playbackSynchronizer.Diagnostics;
     public MediaReconnectDiagnostics ReconnectDiagnostics => _reconnectState.Diagnostics;
 
     internal TimeSpan Position => TimeSpan.FromTicks(Interlocked.Read(ref _positionTicks));
     internal TimeSpan? Duration => Interlocked.Read(ref _durationTicks) is var ticks && ticks >= 0 ? TimeSpan.FromTicks(ticks) : null;
 
-    internal delegate void FrameReceivedHandler(IntPtr buffer, int width, int height, int stride);
-    internal delegate void FrameLeaseReceivedHandler(FfmpegMediaFrameLease lease);
     internal event FrameReceivedHandler? OnFrameReceived;
     internal event FrameLeaseReceivedHandler? OnFrameLeaseReceived;
     internal event FrameLeaseReceivedHandler? OnSnapshotFrameLeaseReceived;
@@ -58,7 +55,7 @@ internal sealed class FfmpegPlaybackClient : IDisposable
 
     internal Task Completion => Volatile.Read(ref _completionSource).Task;
 
-    internal void SetFrameDeliveryEnabled(bool enabled) => _isFrameDeliveryEnabled = enabled;
+    internal void SetFrameDeliveryEnabled(bool enabled) => _frameDispatcher.IsEnabled = enabled;
 
     internal void SetVolume(double volume)
     {
@@ -80,7 +77,7 @@ internal sealed class FfmpegPlaybackClient : IDisposable
         }
 
         Volatile.Read(ref _audioPlayback)?.Reset();
-        _playbackClock.Reset(Position.TotalSeconds);
+        _playbackSynchronizer.ResetPlaybackClock(Position.TotalSeconds);
         if (paused)
         {
             _playbackGate.Reset();
@@ -101,7 +98,7 @@ internal sealed class FfmpegPlaybackClient : IDisposable
 
         Volatile.Write(ref _playbackRate, rate);
         Volatile.Read(ref _audioPlayback)?.Reset();
-        _playbackClock.SetRate(rate, Position.TotalSeconds);
+        _playbackSynchronizer.SetPlaybackRate(rate, Position.TotalSeconds);
     }
 
 
@@ -136,6 +133,7 @@ internal sealed class FfmpegPlaybackClient : IDisposable
         _muted = options.IsMuted;
         _isLive = Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             uri.Scheme is "rtsp" or "rtsps";
+        _playbackSynchronizer = new FfmpegPlaybackSynchronizer(_isLive);
         FfmpegRuntimeDiagnostics.OnStreamClientCreated();
     }
 
@@ -183,7 +181,7 @@ internal sealed class FfmpegPlaybackClient : IDisposable
 
         if (!_isRunning)
         {
-            _frameBufferPool.StopAcceptingReturns();
+            _frameDispatcher.StopAcceptingReturns();
         }
     }
 
@@ -198,26 +196,17 @@ internal sealed class FfmpegPlaybackClient : IDisposable
                 FfmpegDecoder? decoder = null;
                 IPlatformVideoDecoder? platformDecoder = null;
                 AudioPlaybackController? audioPlayback = null;
-                var clockSynchronizer = new MediaClockSynchronizer();
-                _synchronizationDiagnostics = MediaSynchronizationDiagnostics.Empty;
+                _playbackSynchronizer.ResetSession();
+                var performanceTracker = new FfmpegPerformanceTracker(
+                    snapshot => PerformanceUpdated?.Invoke(this, snapshot));
                 var hasOpened = false;
-                IntPtr bgraBuffer = IntPtr.Zero;
-                var bufferSize = 0;
                 var frameInterval = _options.MaxFramesPerSecond > 0
                     ? TimeSpan.FromSeconds(1 / _options.MaxFramesPerSecond)
                     : TimeSpan.Zero;
                 var lastFrameAt = 0L;
                 var openSemaphoreEntered = false;
                 SemaphoreSlim? openSemaphore = null;
-                long totalDecodeTicks = 0;
-                long totalReadTicks = 0;
-                long totalCodecTicks = 0;
-                long totalHardwareTransferTicks = 0;
-                long totalConvertTicks = 0;
-                long totalDispatchTicks = 0;
-                int performanceSamples = 0;
-
-                _frameBufferPool.StartAcceptingReturns();
+                _frameDispatcher.BeginSession();
 
                 try
                 {
@@ -297,7 +286,7 @@ internal sealed class FfmpegPlaybackClient : IDisposable
                         {
                             if (decoder is not null && ProcessPendingSeek(decoder))
                             {
-                                _playbackClock.Reset(Position.TotalSeconds);
+                                _playbackSynchronizer.ResetPlaybackClock(Position.TotalSeconds);
                                 audioPlayback?.Reset();
                             }
                             _playbackGate.Wait(TimeSpan.FromMilliseconds(25), cancellationToken);
@@ -309,22 +298,25 @@ internal sealed class FfmpegPlaybackClient : IDisposable
                         {
                             var hasPlatformFrame = platformDecoder.TryDecodeNextFrame(
                                 out var platformFrame);
-                            DrainAudio(platformDecoder, audioPlayback);
-                            UpdateSynchronizationDiagnostics(clockSynchronizer, audioPlayback);
+                            _playbackSynchronizer.DrainAudio(
+                                platformDecoder,
+                                audioPlayback,
+                                Volatile.Read(ref _playbackRate));
                             var platformDecodeTicks = Stopwatch.GetTimestamp() - decodeStart;
                             if (hasPlatformFrame && platformFrame is not null)
                             {
                                 RegisterReconnectSuccess();
                                 using (platformFrame)
                                 {
-                                    if (!SynchronizeVideo(
+                                    if (!_playbackSynchronizer.SynchronizeVideo(
                                             platformFrame.PresentationSeconds,
                                             platformFrame.PresentationSeconds,
                                             audioPlayback,
-                                            clockSynchronizer,
                                             cancellationToken) ||
-                                        !_isFrameDeliveryEnabled ||
-                                        !ShouldRenderFrame(frameInterval, ref lastFrameAt))
+                                        !_frameDispatcher.IsEnabled ||
+                                        !FfmpegPlaybackPolicy.ShouldRenderFrame(
+                                            frameInterval,
+                                            ref lastFrameAt))
                                     {
                                         continue;
                                     }
@@ -332,14 +324,7 @@ internal sealed class FfmpegPlaybackClient : IDisposable
                                     var dispatchStart = Stopwatch.GetTimestamp();
                                     platformFrame.Present();
                                     var dispatchTicks = Stopwatch.GetTimestamp() - dispatchStart;
-                                    PublishPerformanceSnapshot(
-                                        ref totalReadTicks,
-                                        ref totalCodecTicks,
-                                        ref totalHardwareTransferTicks,
-                                        ref totalDecodeTicks,
-                                        ref totalConvertTicks,
-                                        ref totalDispatchTicks,
-                                        ref performanceSamples,
+                                    performanceTracker.Record(
                                         platformDecoder.LastReadTicks,
                                         platformDecoder.LastCodecTicks,
                                         0,
@@ -375,183 +360,58 @@ internal sealed class FfmpegPlaybackClient : IDisposable
                         var seekProcessed = ProcessPendingSeek(decoder!);
                         if (seekProcessed)
                         {
-                            _playbackClock.Reset(Position.TotalSeconds);
+                            _playbackSynchronizer.ResetPlaybackClock(Position.TotalSeconds);
                             audioPlayback?.Reset();
                         }
-                        DrainAudio(decoder, audioPlayback);
-                        UpdateSynchronizationDiagnostics(clockSynchronizer, audioPlayback);
+                        _playbackSynchronizer.DrainAudio(
+                            decoder,
+                            audioPlayback,
+                            Volatile.Read(ref _playbackRate));
                         var decodeElapsedTicks = Stopwatch.GetTimestamp() - decodeStart;
                         if (hasFrame && frame != null)
                         {
                             RegisterReconnectSuccess();
                             Interlocked.Exchange(ref _positionTicks, decoder.Position.Ticks);
-                            FfmpegMediaFrameLease? frameLease = null;
                             try
                             {
-                                if (!SynchronizeVideo(
+                                if (!_playbackSynchronizer.SynchronizeVideo(
                                         frame,
                                         decoder.Position.TotalSeconds,
                                         audioPlayback,
-                                        clockSynchronizer,
                                         cancellationToken))
                                 {
                                     continue;
                                 }
 
-                                if (!_isFrameDeliveryEnabled)
+                                if (!_frameDispatcher.IsEnabled)
                                 {
                                     continue;
                                 }
 
-                                if (!ShouldRenderFrame(frameInterval, ref lastFrameAt))
+                                if (!FfmpegPlaybackPolicy.ShouldRenderFrame(
+                                        frameInterval,
+                                        ref lastFrameAt))
                                 {
                                     continue;
                                 }
 
-                                var outputSize = CalculateOutputSize(
-                                    frame.Info.Width,
-                                    frame.Info.Height,
-                                    _options.MaxVideoWidth,
-                                    _options.MaxVideoHeight);
-                                var useLeasedFrameDelivery =
-                                    OnFrameLeaseReceived != null ||
-                                    OnSnapshotFrameLeaseReceived != null;
-                                IntPtr targetBuffer;
-                                var dispatchedNativeFrame = false;
-
-                                if (useLeasedFrameDelivery &&
-                                    (_options.FrameDeliveryMode is FfmpegFrameDeliveryMode.D3D11Texture or
-                                        FfmpegFrameDeliveryMode.DmaBuf) &&
-                                    decoder.TryGetNativePixelFormat(frame, out var nativePixelFormat) &&
-                                    NativeFrameMatchesDeliveryMode(
-                                        _options.FrameDeliveryMode,
-                                        nativePixelFormat))
-                                {
-                                    var nativeConvertStart = Stopwatch.GetTimestamp();
-                                    if (_options.CreateSnapshotFrames &&
-                                        OnSnapshotFrameLeaseReceived is { } snapshotHandler)
-                                    {
-                                        var snapshotStride = outputSize.Width * 4;
-                                        var snapshotSize = snapshotStride * outputSize.Height;
-                                        FfmpegMediaFrameLease? snapshotLease =
-                                            RentFrameLease(snapshotSize);
-                                        try
-                                        {
-                                            decoder.ConvertFrameToBgra(
-                                                frame,
-                                                snapshotLease.Buffer,
-                                                outputSize.Width,
-                                                outputSize.Height,
-                                                snapshotStride);
-                                            snapshotLease.ResetBgra(
-                                                outputSize.Width,
-                                                outputSize.Height,
-                                                snapshotStride);
-                                            snapshotHandler.Invoke(snapshotLease);
-                                            snapshotLease = null;
-                                        }
-                                        finally
-                                        {
-                                            snapshotLease?.Dispose();
-                                        }
-                                    }
-
-                                    frameLease = decoder.CreateNativeFrameLease(frame, nativePixelFormat);
-                                    var nativeConvertElapsedTicks = Stopwatch.GetTimestamp() - nativeConvertStart;
-                                    var nativeDispatchStart = Stopwatch.GetTimestamp();
-                                    var nativeHandler = OnFrameLeaseReceived;
-                                    if (nativeHandler is not null)
-                                    {
-                                        nativeHandler.Invoke(frameLease);
-                                        frameLease = null;
-                                    }
-                                    var nativeDispatchElapsedTicks = Stopwatch.GetTimestamp() - nativeDispatchStart;
-                                    PublishPerformanceSnapshot(
-                                        ref totalReadTicks,
-                                        ref totalCodecTicks,
-                                        ref totalHardwareTransferTicks,
-                                        ref totalDecodeTicks,
-                                        ref totalConvertTicks,
-                                        ref totalDispatchTicks,
-                                        ref performanceSamples,
-                                        decoder.LastReadTicks,
-                                        decoder.LastCodecTicks,
-                                        decoder.LastHardwareTransferTicks,
-                                        decodeElapsedTicks,
-                                        nativeConvertElapsedTicks,
-                                        nativeDispatchElapsedTicks);
-                                    dispatchedNativeFrame = true;
-                                }
-
-                                if (dispatchedNativeFrame)
-                                {
-                                    continue;
-                                }
-
-                                int dstStride = outputSize.Width * 4;
-                                int requiredBufferSize = dstStride * outputSize.Height;
-                                if (useLeasedFrameDelivery)
-                                {
-                                    frameLease = RentFrameLease(requiredBufferSize);
-                                    targetBuffer = frameLease.Buffer;
-                                }
-                                else
-                                {
-                                    if (bgraBuffer == IntPtr.Zero || bufferSize != requiredBufferSize)
-                                    {
-                                        if (bgraBuffer != IntPtr.Zero)
-                                        {
-                                            Marshal.FreeHGlobal(bgraBuffer);
-                                        }
-
-                                        bgraBuffer = Marshal.AllocHGlobal(requiredBufferSize);
-                                        bufferSize = requiredBufferSize;
-                                    }
-
-                                    targetBuffer = bgraBuffer;
-                                }
-
-                                var convertStart = Stopwatch.GetTimestamp();
-                                decoder.ConvertFrameToBgra(frame, targetBuffer, outputSize.Width, outputSize.Height, dstStride);
-                                var convertElapsedTicks = Stopwatch.GetTimestamp() - convertStart;
-                                var dispatchStart = Stopwatch.GetTimestamp();
-                                if (frameLease != null)
-                                {
-                                    frameLease.ResetBgra(outputSize.Width, outputSize.Height, dstStride);
-                                    var handler = OnFrameLeaseReceived;
-                                    if (handler is null)
-                                    {
-                                        frameLease.Dispose();
-                                    }
-                                    else
-                                    {
-                                        handler.Invoke(frameLease);
-                                    }
-                                    frameLease = null;
-                                }
-                                else
-                                {
-                                    OnFrameReceived?.Invoke(targetBuffer, outputSize.Width, outputSize.Height, dstStride);
-                                }
-                                var dispatchElapsedTicks = Stopwatch.GetTimestamp() - dispatchStart;
-                                PublishPerformanceSnapshot(
-                                    ref totalReadTicks,
-                                    ref totalCodecTicks,
-                                    ref totalHardwareTransferTicks,
-                                    ref totalDecodeTicks,
-                                    ref totalConvertTicks,
-                                    ref totalDispatchTicks,
-                                    ref performanceSamples,
+                                var dispatchMetrics = _frameDispatcher.Dispatch(
+                                    frame,
+                                    decoder,
+                                    _options,
+                                    OnFrameReceived,
+                                    OnFrameLeaseReceived,
+                                    OnSnapshotFrameLeaseReceived);
+                                performanceTracker.Record(
                                     decoder.LastReadTicks,
                                     decoder.LastCodecTicks,
                                     decoder.LastHardwareTransferTicks,
                                     decodeElapsedTicks,
-                                    convertElapsedTicks,
-                                    dispatchElapsedTicks);
+                                    dispatchMetrics.ConvertTicks,
+                                    dispatchMetrics.DispatchTicks);
                             }
                             finally
                             {
-                                frameLease?.Dispose();
                                 frame.Dispose();
                             }
                         }
@@ -566,8 +426,7 @@ internal sealed class FfmpegPlaybackClient : IDisposable
                             {
                                 if (seekProcessed)
                                 {
-                                    clockSynchronizer = new MediaClockSynchronizer();
-                                    _synchronizationDiagnostics = MediaSynchronizationDiagnostics.Empty;
+                                    _playbackSynchronizer.ResetSession();
                                     continue;
                                 }
 
@@ -585,8 +444,7 @@ internal sealed class FfmpegPlaybackClient : IDisposable
                                 }
 
                                 _ = ProcessPendingSeek(decoder);
-                                clockSynchronizer = new MediaClockSynchronizer();
-                                _synchronizationDiagnostics = MediaSynchronizationDiagnostics.Empty;
+                                _playbackSynchronizer.ResetSession();
                                 continue;
                             }
 
@@ -614,9 +472,10 @@ internal sealed class FfmpegPlaybackClient : IDisposable
                     }
 
                     var kind = hasOpened ? FfmpegPlaybackErrorKind.DecodeFailed : FfmpegPlaybackErrorKind.OpenFailed;
-                    var willFallbackToSoftware = ShouldFallbackToSoftware(ex);
+                    var willFallbackToSoftware =
+                        FfmpegPlaybackPolicy.ShouldFallbackToSoftware(_options, ex);
                     var reconnect = _isLive ? RegisterReconnectFailure() : default;
-                    var errorMessage = FormatExceptionMessage(ex);
+                    var errorMessage = FfmpegPlaybackPolicy.FormatExceptionMessage(ex);
                     RaiseStreamError(new FfmpegPlaybackError(
                         kind,
                         willFallbackToSoftware ? $"{errorMessage} Falling back to software decoding." : errorMessage,
@@ -625,7 +484,7 @@ internal sealed class FfmpegPlaybackClient : IDisposable
 
                     if (willFallbackToSoftware)
                     {
-                        _options = CreateSoftwareFallbackOptions(_options);
+                        _options = FfmpegPlaybackPolicy.CreateSoftwareFallbackOptions(_options);
                         HardwareVideoDecodingChanged?.Invoke(this, false);
                     }
 
@@ -647,7 +506,7 @@ internal sealed class FfmpegPlaybackClient : IDisposable
                     {
                         _lastAudioDiagnostics = audioPlayback.Diagnostics;
                     }
-                    UpdateSynchronizationDiagnostics(clockSynchronizer, audioPlayback);
+                    _playbackSynchronizer.RefreshDiagnostics(audioPlayback);
                     audioPlayback?.Dispose();
                     if (openSemaphoreEntered)
                     {
@@ -656,11 +515,7 @@ internal sealed class FfmpegPlaybackClient : IDisposable
 
                     decoder?.Dispose();
                     platformDecoder?.Dispose();
-                    if (bgraBuffer != IntPtr.Zero)
-                    {
-                        Marshal.FreeHGlobal(bgraBuffer);
-                    }
-                    DisposeLeasePool();
+                    _frameDispatcher.EndSession();
                 }
             }
         }
@@ -690,17 +545,6 @@ internal sealed class FfmpegPlaybackClient : IDisposable
         return completionSource;
     }
 
-    private FfmpegMediaFrameLease RentFrameLease(int requiredSize)
-    {
-        var buffer = _frameBufferPool.Rent(requiredSize);
-        return new FfmpegMediaFrameLease(buffer, requiredSize, ReturnFrameLease);
-    }
-
-    private void ReturnFrameLease(FfmpegMediaFrameLease lease)
-    {
-        _frameBufferPool.Return(lease.Buffer, lease.Size);
-    }
-
     private bool ProcessPendingSeek(FfmpegDecoder decoder)
     {
         var request = Interlocked.Exchange(ref _pendingSeek, null);
@@ -723,11 +567,6 @@ internal sealed class FfmpegPlaybackClient : IDisposable
         return true;
     }
 
-    private void DisposeLeasePool()
-    {
-        _frameBufferPool.StopAcceptingReturns();
-    }
-
     private void RaiseConnectionStateChanged(PlaybackConnectionState state)
     {
         var oldState = _connectionState;
@@ -743,215 +582,6 @@ internal sealed class FfmpegPlaybackClient : IDisposable
     private void RaiseStreamError(FfmpegPlaybackError error)
     {
         StreamError?.Invoke(this, new FfmpegPlaybackErrorEventArgs(error));
-    }
-
-    private bool ShouldFallbackToSoftware(Exception exception)
-    {
-        return FfmpegPlaybackConfiguration.UsesHardwareDecoding(_options.VideoDecodingMode) &&
-               FfmpegPlaybackConfiguration.AllowsSoftwareFallback(_options.VideoDecodingMode) &&
-               exception is FfmpegDecoderRuntimeException { IsHardwareVideoDecodingActive: true };
-    }
-
-    private static string FormatExceptionMessage(Exception exception)
-    {
-        var message = exception.Message;
-        var inner = exception.InnerException;
-        while (inner != null)
-        {
-            message = $"{message} Inner: {inner.Message}";
-            inner = inner.InnerException;
-        }
-
-        return message;
-    }
-
-    private static FfmpegPlaybackOptions CreateSoftwareFallbackOptions(FfmpegPlaybackOptions options)
-    {
-        return new FfmpegPlaybackOptions
-        {
-            VideoDecodingMode = FfmpegVideoDecodingMode.SoftwareOnly,
-            FrameDeliveryMode = options.FrameDeliveryMode,
-            Transport = options.Transport,
-            OpenTimeoutMilliseconds = options.OpenTimeoutMilliseconds,
-            EndpointProbeTimeoutMilliseconds = options.EndpointProbeTimeoutMilliseconds,
-            ReadTimeoutMilliseconds = options.ReadTimeoutMilliseconds,
-            ReconnectEnabled = options.ReconnectEnabled,
-            ReconnectInitialDelayMilliseconds = options.ReconnectInitialDelayMilliseconds,
-            ReconnectMaximumDelayMilliseconds = options.ReconnectMaximumDelayMilliseconds,
-            MaximumReconnectAttempts = options.MaximumReconnectAttempts,
-            OpenOperationSemaphore = options.OpenOperationSemaphore,
-            MaxFramesPerSecond = options.MaxFramesPerSecond,
-            MaxVideoWidth = options.MaxVideoWidth,
-            MaxVideoHeight = options.MaxVideoHeight,
-            LowLatency = options.LowLatency,
-            EnableAudio = options.EnableAudio,
-            CreateSnapshotFrames = options.CreateSnapshotFrames,
-            AudioGainDecibels = options.AudioGainDecibels,
-            AudioOutputDeviceId = options.AudioOutputDeviceId,
-            AudioBufferDurationMilliseconds = options.AudioBufferDurationMilliseconds,
-            Volume = options.Volume,
-            IsMuted = options.IsMuted,
-            ForceOpaqueAlpha = options.ForceOpaqueAlpha,
-            ScaleQuality = options.ScaleQuality
-        };
-    }
-
-    private static bool NativeFrameMatchesDeliveryMode(
-        FfmpegFrameDeliveryMode deliveryMode,
-        FfmpegNativePixelFormat pixelFormat) =>
-        (deliveryMode == FfmpegFrameDeliveryMode.D3D11Texture &&
-         pixelFormat == FfmpegNativePixelFormat.D3D11Texture) ||
-        (deliveryMode == FfmpegFrameDeliveryMode.DmaBuf &&
-         pixelFormat == FfmpegNativePixelFormat.DmaBuf);
-
-    private static bool ShouldRenderFrame(TimeSpan frameInterval, ref long lastFrameAt)
-    {
-        if (frameInterval <= TimeSpan.Zero)
-        {
-            return true;
-        }
-
-        var now = Stopwatch.GetTimestamp();
-        if (lastFrameAt == 0)
-        {
-            lastFrameAt = now;
-            return true;
-        }
-
-        var elapsed = Stopwatch.GetElapsedTime(lastFrameAt, now);
-        if (elapsed < frameInterval)
-        {
-            return false;
-        }
-
-        lastFrameAt = now;
-        return true;
-    }
-
-    private void DrainAudio(
-        FfmpegDecoder decoder,
-        AudioPlaybackController? audioPlayback)
-    {
-        if (audioPlayback is null)
-        {
-            while (decoder.TryDequeueAudioFrame(out _)) { }
-            return;
-        }
-
-        while (decoder.TryDequeueAudioFrame(out var audioFrame) && audioFrame is not null)
-        {
-            if (Volatile.Read(ref _playbackRate) == 1d)
-            {
-                audioPlayback.Write(audioFrame);
-            }
-        }
-    }
-
-    private void DrainAudio(
-        IPlatformVideoDecoder decoder,
-        AudioPlaybackController? audioPlayback)
-    {
-        if (audioPlayback is null)
-        {
-            while (decoder.TryDequeueAudioFrame(out _)) { }
-            return;
-        }
-
-        while (decoder.TryDequeueAudioFrame(out var audioFrame) && audioFrame is not null)
-        {
-            if (Volatile.Read(ref _playbackRate) == 1d)
-            {
-                audioPlayback.Write(audioFrame);
-            }
-        }
-    }
-
-    private bool SynchronizeVideo(
-        NativeDecodedFrame frame,
-        double playbackPosition,
-        AudioPlaybackController? audioPlayback,
-        MediaClockSynchronizer clockSynchronizer,
-        CancellationToken cancellationToken)
-    {
-        if (frame.Info.PresentationTimestamp == long.MinValue ||
-            frame.Info.TimeBaseDenominator <= 0)
-        {
-            return true;
-        }
-
-        var videoPosition = frame.Info.PresentationTimestamp *
-            (double)frame.Info.TimeBaseNumerator / frame.Info.TimeBaseDenominator;
-        return SynchronizeVideo(
-            videoPosition,
-            playbackPosition,
-            audioPlayback,
-            clockSynchronizer,
-            cancellationToken);
-    }
-
-    private bool SynchronizeVideo(
-        double? videoPosition,
-        double? playbackPosition,
-        AudioPlaybackController? audioPlayback,
-        MediaClockSynchronizer clockSynchronizer,
-        CancellationToken cancellationToken)
-    {
-        if (videoPosition is null) return true;
-
-        if (!_isLive && !_playbackClock.WaitUntil(
-                playbackPosition ?? videoPosition.Value,
-                cancellationToken))
-        {
-            return false;
-        }
-
-        var decision = clockSynchronizer.EvaluateVideo(
-            videoPosition.Value,
-            audioPlayback?.PositionSeconds);
-        UpdateSynchronizationDiagnostics(clockSynchronizer, audioPlayback);
-        if (decision.Action == MediaVideoSynchronizationAction.Drop)
-        {
-            return false;
-        }
-
-        if (decision.Action == MediaVideoSynchronizationAction.Delay)
-        {
-            if (cancellationToken.WaitHandle.WaitOne(decision.Delay))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private void UpdateSynchronizationDiagnostics(
-        MediaClockSynchronizer clockSynchronizer,
-        AudioPlaybackController? audioPlayback)
-    {
-        _synchronizationDiagnostics = clockSynchronizer.GetDiagnostics(
-            audioPlayback?.ClockResetCount ?? 0);
-    }
-
-    private static (int Width, int Height) CalculateOutputSize(int sourceWidth, int sourceHeight, int maxWidth, int maxHeight)
-    {
-        if (sourceWidth <= 0 || sourceHeight <= 0)
-        {
-            return (Math.Max(1, sourceWidth), Math.Max(1, sourceHeight));
-        }
-
-        if (maxWidth <= 0 && maxHeight <= 0)
-        {
-            return (sourceWidth, sourceHeight);
-        }
-
-        var widthScale = maxWidth > 0 ? (double)maxWidth / sourceWidth : double.PositiveInfinity;
-        var heightScale = maxHeight > 0 ? (double)maxHeight / sourceHeight : double.PositiveInfinity;
-        var scale = Math.Min(1d, Math.Min(widthScale, heightScale));
-
-        var width = Math.Max(1, (int)Math.Round(sourceWidth * scale));
-        var height = Math.Max(1, (int)Math.Round(sourceHeight * scale));
-        return (width, height);
     }
 
     private int GetStopWaitTimeoutMilliseconds()
@@ -1008,50 +638,4 @@ internal sealed class FfmpegPlaybackClient : IDisposable
         Stop(waitForExit: true);
     }
 
-    private void PublishPerformanceSnapshot(
-        ref long totalReadTicks,
-        ref long totalCodecTicks,
-        ref long totalHardwareTransferTicks,
-        ref long totalDecodeTicks,
-        ref long totalConvertTicks,
-        ref long totalDispatchTicks,
-        ref int performanceSamples,
-        long readTicks,
-        long codecTicks,
-        long hardwareTransferTicks,
-        long decodeTicks,
-        long convertTicks,
-        long dispatchTicks)
-    {
-        totalReadTicks += readTicks;
-        totalCodecTicks += codecTicks;
-        totalHardwareTransferTicks += hardwareTransferTicks;
-        totalDecodeTicks += decodeTicks;
-        totalConvertTicks += convertTicks;
-        totalDispatchTicks += dispatchTicks;
-        performanceSamples++;
-
-        if (performanceSamples < 30)
-        {
-            return;
-        }
-
-        var snapshot = new FfmpegPerformanceSnapshot(
-            ReadMilliseconds: totalReadTicks * 1000d / Stopwatch.Frequency / performanceSamples,
-            CodecMilliseconds: totalCodecTicks * 1000d / Stopwatch.Frequency / performanceSamples,
-            HardwareTransferMilliseconds: totalHardwareTransferTicks * 1000d / Stopwatch.Frequency / performanceSamples,
-            DecodeMilliseconds: totalDecodeTicks * 1000d / Stopwatch.Frequency / performanceSamples,
-            ConvertMilliseconds: totalConvertTicks * 1000d / Stopwatch.Frequency / performanceSamples,
-            DispatchMilliseconds: totalDispatchTicks * 1000d / Stopwatch.Frequency / performanceSamples,
-            SampleCount: performanceSamples);
-
-        totalReadTicks = 0;
-        totalCodecTicks = 0;
-        totalHardwareTransferTicks = 0;
-        totalDecodeTicks = 0;
-        totalConvertTicks = 0;
-        totalDispatchTicks = 0;
-        performanceSamples = 0;
-        PerformanceUpdated?.Invoke(this, snapshot);
-    }
 }
