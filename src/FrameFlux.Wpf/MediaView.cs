@@ -504,7 +504,6 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
             DispatcherPriority.DataBind,
             new Action(() =>
             {
-                SetState(args.NewState);
                 var diagnostics = _playback.Diagnostics;
                 SetValue(
                     IsHardwareVideoDecodingActivePropertyKey,
@@ -512,6 +511,7 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
                 SetValue(
                     VideoDecoderDiagnosticsPropertyKey,
                     diagnostics.VideoDecoderDiagnostics);
+                SetState(args.NewState);
             }));
 
     private void OnPlayerError(object? sender, MediaPlaybackErrorEventArgs args) =>

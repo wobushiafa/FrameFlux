@@ -143,6 +143,7 @@
         </Grid>
         <TextBlock x:Name="StatusTextBlock"
                    Grid.Row="4"
+                   TextWrapping="Wrap"
                    Text="Enter an RTSP URL or open a local media file." />
     </Grid>
 </Window>

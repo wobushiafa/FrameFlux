@@ -172,7 +172,7 @@ public partial class MainWindow : Window
 
     private void Player_PlaybackStateChanged(object? sender, MediaPlaybackStateChangedEventArgs eventArgs) =>
         StatusTextBlock.Text =
-            $"State: {eventArgs.NewState} | Presentation: {Player.EffectivePresentationMode?.ToString() ?? "none"} | HW decode: {Player.IsHardwareVideoDecodingActive}";
+            $"State: {eventArgs.NewState} | Presentation: {Player.EffectivePresentationMode?.ToString() ?? "none"} | HW decode: {Player.IsHardwareVideoDecodingActive} | Decoder: {Player.VideoDecoderDiagnostics}";
 
     private void Player_PlaybackError(object? sender, MediaPlaybackErrorEventArgs eventArgs) =>
         StatusTextBlock.Text = $"{eventArgs.Error.Code}: {eventArgs.Error.Message}";
