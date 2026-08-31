@@ -95,7 +95,12 @@ internal sealed class AdaptiveMediaVideoOutput(
 internal sealed record MediaPresentationFailure(
     Exception Exception,
     int ConsecutiveFailureCount,
-    bool RequiresSoftwareFallback);
+    bool RequiresSoftwareFallback)
+{
+    internal bool RequiresBackendRestart { get; init; }
+
+    internal int RestartAttemptCount { get; init; }
+}
 
 internal sealed class MediaPresentationFailureTracker(int maximumAttempts = 3)
 {
@@ -108,10 +113,16 @@ internal sealed class MediaPresentationFailureTracker(int maximumAttempts = 3)
     {
         ArgumentNullException.ThrowIfNull(exception);
         var failureCount = Interlocked.Increment(ref _consecutiveFailureCount);
+        var requiresFallback = failureCount == maximumAttempts;
+        var requiresBackendRestart = failureCount < maximumAttempts;
         return new MediaPresentationFailure(
             exception,
             failureCount,
-            failureCount == maximumAttempts);
+            requiresFallback)
+        {
+            RequiresBackendRestart = requiresBackendRestart,
+            RestartAttemptCount = requiresBackendRestart ? failureCount : maximumAttempts - 1
+        };
     }
 
     internal void ReportSuccess() =>
