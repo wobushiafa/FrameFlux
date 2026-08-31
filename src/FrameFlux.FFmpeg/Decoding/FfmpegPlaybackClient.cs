@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -9,7 +8,7 @@ namespace FrameFlux.FFmpeg;
 internal delegate void FrameReceivedHandler(IntPtr buffer, int width, int height, int stride);
 internal delegate void FrameLeaseReceivedHandler(FfmpegMediaFrameLease lease);
 
-internal sealed class FfmpegPlaybackClient : IDisposable
+internal sealed partial class FfmpegPlaybackClient : IDisposable
 {
     private readonly string _url;
     private readonly IMediaVideoOutput? _videoOutput;
@@ -203,7 +202,6 @@ internal sealed class FfmpegPlaybackClient : IDisposable
                 var frameInterval = _options.MaxFramesPerSecond > 0
                     ? TimeSpan.FromSeconds(1 / _options.MaxFramesPerSecond)
                     : TimeSpan.Zero;
-                var lastFrameAt = 0L;
                 var openSemaphoreEntered = false;
                 SemaphoreSlim? openSemaphore = null;
                 _frameDispatcher.BeginSession();
@@ -280,188 +278,22 @@ internal sealed class FfmpegPlaybackClient : IDisposable
                         this,
                         platformDecoder?.IsHardwareVideoDecodingActive ?? decoder!.IsHardwareVideoDecodingActive);
                     RaiseConnectionStateChanged(PlaybackConnectionState.Connected);
-                    while (_isRunning && !threadCancellationTokenSource.IsCancellationRequested)
-                    {
-                        if (!_isLive && !_playbackGate.IsSet)
-                        {
-                            if (decoder is not null && ProcessPendingSeek(decoder))
-                            {
-                                _playbackSynchronizer.ResetPlaybackClock(Position.TotalSeconds);
-                                audioPlayback?.Reset();
-                            }
-                            _playbackGate.Wait(TimeSpan.FromMilliseconds(25), cancellationToken);
-                            continue;
-                        }
-
-                        var decodeStart = Stopwatch.GetTimestamp();
-                        if (platformDecoder is not null)
-                        {
-                            var hasPlatformFrame = platformDecoder.TryDecodeNextFrame(
-                                out var platformFrame);
-                            _playbackSynchronizer.DrainAudio(
-                                platformDecoder,
-                                audioPlayback,
-                                Volatile.Read(ref _playbackRate));
-                            var platformDecodeTicks = Stopwatch.GetTimestamp() - decodeStart;
-                            if (hasPlatformFrame && platformFrame is not null)
-                            {
-                                RegisterReconnectSuccess();
-                                using (platformFrame)
-                                {
-                                    if (!_playbackSynchronizer.SynchronizeVideo(
-                                            platformFrame.PresentationSeconds,
-                                            platformFrame.PresentationSeconds,
-                                            audioPlayback,
-                                            cancellationToken) ||
-                                        !_frameDispatcher.IsEnabled ||
-                                        !FfmpegPlaybackPolicy.ShouldRenderFrame(
-                                            frameInterval,
-                                            ref lastFrameAt))
-                                    {
-                                        continue;
-                                    }
-
-                                    var dispatchStart = Stopwatch.GetTimestamp();
-                                    platformFrame.Present();
-                                    var dispatchTicks = Stopwatch.GetTimestamp() - dispatchStart;
-                                    performanceTracker.Record(
-                                        platformDecoder.LastReadTicks,
-                                        platformDecoder.LastCodecTicks,
-                                        0,
-                                        platformDecodeTicks,
-                                        0,
-                                        dispatchTicks);
-                                }
-
-                                continue;
-                            }
-
-                            if (!_isRunning || threadCancellationTokenSource.IsCancellationRequested)
-                            {
-                                break;
-                            }
-
-                            var reconnect = RegisterReconnectFailure();
-                            RaiseStreamError(new FfmpegPlaybackError(
-                                FfmpegPlaybackErrorKind.EndOfStream,
-                                "Stream ended or no frame was received.",
-                                WillRetry: reconnect.RetryAllowed));
-                            if (!reconnect.RetryAllowed)
-                            {
-                                return;
-                            }
-
-                            RaiseConnectionStateChanged(PlaybackConnectionState.Reconnecting);
-                            SleepBeforeReconnect(threadCancellationTokenSource, reconnect.Delay);
-                            break;
-                        }
-
-                        var hasFrame = decoder!.TryDecodeNextFrame(out var frame);
-                        var seekProcessed = ProcessPendingSeek(decoder!);
-                        if (seekProcessed)
-                        {
-                            _playbackSynchronizer.ResetPlaybackClock(Position.TotalSeconds);
-                            audioPlayback?.Reset();
-                        }
-                        _playbackSynchronizer.DrainAudio(
-                            decoder,
+                    var loopOutcome = platformDecoder is not null
+                        ? RunPlatformDecodeLoop(
+                            platformDecoder,
                             audioPlayback,
-                            Volatile.Read(ref _playbackRate));
-                        var decodeElapsedTicks = Stopwatch.GetTimestamp() - decodeStart;
-                        if (hasFrame && frame != null)
-                        {
-                            RegisterReconnectSuccess();
-                            Interlocked.Exchange(ref _positionTicks, decoder.Position.Ticks);
-                            try
-                            {
-                                if (!_playbackSynchronizer.SynchronizeVideo(
-                                        frame,
-                                        decoder.Position.TotalSeconds,
-                                        audioPlayback,
-                                        cancellationToken))
-                                {
-                                    continue;
-                                }
-
-                                if (!_frameDispatcher.IsEnabled)
-                                {
-                                    continue;
-                                }
-
-                                if (!FfmpegPlaybackPolicy.ShouldRenderFrame(
-                                        frameInterval,
-                                        ref lastFrameAt))
-                                {
-                                    continue;
-                                }
-
-                                var dispatchMetrics = _frameDispatcher.Dispatch(
-                                    frame,
-                                    decoder,
-                                    _options,
-                                    OnFrameReceived,
-                                    OnFrameLeaseReceived,
-                                    OnSnapshotFrameLeaseReceived);
-                                performanceTracker.Record(
-                                    decoder.LastReadTicks,
-                                    decoder.LastCodecTicks,
-                                    decoder.LastHardwareTransferTicks,
-                                    decodeElapsedTicks,
-                                    dispatchMetrics.ConvertTicks,
-                                    dispatchMetrics.DispatchTicks);
-                            }
-                            finally
-                            {
-                                frame.Dispose();
-                            }
-                        }
-                        else
-                        {
-                            if (!_isRunning || threadCancellationTokenSource.IsCancellationRequested)
-                            {
-                                break;
-                            }
-
-                            if (!_isLive)
-                            {
-                                if (seekProcessed)
-                                {
-                                    _playbackSynchronizer.ResetSession();
-                                    continue;
-                                }
-
-                                while (_isRunning &&
-                                       !threadCancellationTokenSource.IsCancellationRequested &&
-                                       Volatile.Read(ref _pendingSeek) is null)
-                                {
-                                    threadCancellationTokenSource.Token.WaitHandle.WaitOne(25);
-                                }
-
-                                if (!_isRunning ||
-                                    threadCancellationTokenSource.IsCancellationRequested)
-                                {
-                                    break;
-                                }
-
-                                _ = ProcessPendingSeek(decoder);
-                                _playbackSynchronizer.ResetSession();
-                                continue;
-                            }
-
-                            var reconnect = RegisterReconnectFailure();
-                            RaiseStreamError(new FfmpegPlaybackError(
-                                FfmpegPlaybackErrorKind.EndOfStream,
-                                "Stream ended or no frame was received.",
-                                WillRetry: reconnect.RetryAllowed));
-                            if (!reconnect.RetryAllowed)
-                            {
-                                return;
-                            }
-
-                            RaiseConnectionStateChanged(PlaybackConnectionState.Reconnecting);
-                            SleepBeforeReconnect(threadCancellationTokenSource, reconnect.Delay);
-                            break;
-                        }
+                            performanceTracker,
+                            frameInterval,
+                            threadCancellationTokenSource)
+                        : RunFfmpegDecodeLoop(
+                            decoder!,
+                            audioPlayback,
+                            performanceTracker,
+                            frameInterval,
+                            threadCancellationTokenSource);
+                    if (loopOutcome == DecodeLoopOutcome.Terminate)
+                    {
+                        return;
                     }
                 }
                 catch (Exception ex)
