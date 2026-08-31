@@ -211,6 +211,18 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         set => SetValue(StretchProperty, value);
     }
 
+    public TimeSpan Position => _playback.Position;
+
+    public TimeSpan? Duration => _playback.Duration;
+
+    public MediaCapabilities Capabilities => _playback.Capabilities;
+
+    public double PlaybackRate
+    {
+        get => _playback.PlaybackRate;
+        set => _playback.PlaybackRate = value;
+    }
+
     public MediaPlaybackState State => (MediaPlaybackState)GetValue(StateProperty);
 
     public MediaPlaybackError? LastError => (MediaPlaybackError?)GetValue(LastErrorProperty);
@@ -252,6 +264,11 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
     {
         VerifyAccess();
         ThrowIfDisposed();
+        if (State == MediaPlaybackState.Paused)
+        {
+            await _playback.ResumeAsync(cancellationToken);
+            return;
+        }
         _presentation.Reset();
         var options = OpenOptions;
         var output = _presentation.Configure(
@@ -275,6 +292,15 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         _presentation.Reset();
         _presentation.ClearSoftwareFallback();
     }
+
+    public ValueTask PauseAsync(CancellationToken cancellationToken = default) =>
+        _playback.PauseAsync(cancellationToken);
+
+    public ValueTask ResumeAsync(CancellationToken cancellationToken = default) =>
+        _playback.ResumeAsync(cancellationToken);
+
+    public ValueTask SeekAsync(TimeSpan position, CancellationToken cancellationToken = default) =>
+        _playback.SeekAsync(position, cancellationToken);
 
     public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default) =>
         _playback.CaptureSnapshotAsync(cancellationToken);

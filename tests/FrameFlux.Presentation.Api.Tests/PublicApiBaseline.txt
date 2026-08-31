@@ -17,6 +17,8 @@ class FrameFlux.Avalonia.MediaView : Avalonia.Controls.Control, Avalonia.Collect
   field Avalonia.DirectProperty<FrameFlux.Avalonia.MediaView, System.String> VideoDecoderDiagnosticsProperty
   field Avalonia.StyledProperty<System.Double> VolumeProperty
   property System.Boolean AutoPlay { get; set; }
+  property FrameFlux.MediaCapabilities Capabilities { get; }
+  property System.TimeSpan? Duration { get; }
   property FrameFlux.MediaVideoPresentationMode? EffectivePresentationMode { get; }
   property System.Boolean IsHardwareVideoDecodingActive { get; }
   property System.Boolean IsMuted { get; set; }
@@ -24,7 +26,9 @@ class FrameFlux.Avalonia.MediaView : Avalonia.Controls.Control, Avalonia.Collect
   property FrameFlux.MediaPlaybackError? LastError { get; }
   property FrameFlux.MediaOpenOptions OpenOptions { get; set; }
   property Avalonia.Controls.Control? Overlay { get; set; }
+  property System.Double PlaybackRate { get; set; }
   property FrameFlux.IMediaPlayerFactory? PlayerFactory { get; set; }
+  property System.TimeSpan Position { get; }
   property FrameFlux.MediaVideoPresentationMode PresentationMode { get; set; }
   property FrameFlux.MediaSource? Source { get; set; }
   property FrameFlux.MediaPlaybackState State { get; }
@@ -35,6 +39,9 @@ class FrameFlux.Avalonia.MediaView : Avalonia.Controls.Control, Avalonia.Collect
   event System.EventHandler<FrameFlux.MediaPlaybackErrorEventArgs>? PlaybackError
   event System.EventHandler<FrameFlux.MediaPlaybackStateChangedEventArgs>? PlaybackStateChanged
   method System.Threading.Tasks.ValueTask DisposeAsync()
+  method System.Threading.Tasks.ValueTask PauseAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask ResumeAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask SeekAsync(System.TimeSpan position, System.Threading.CancellationToken cancellationToken = default)
   method System.Threading.Tasks.ValueTask StartAsync(System.Threading.CancellationToken cancellationToken = default)
   method System.Threading.Tasks.ValueTask StopAsync(System.Threading.CancellationToken cancellationToken = default)
   method System.Threading.Tasks.ValueTask<FrameFlux.MediaSnapshot?> CaptureSnapshotAsync(System.Threading.CancellationToken cancellationToken = default)
@@ -64,13 +71,17 @@ class FrameFlux.Wpf.MediaView : System.Windows.Controls.Grid, System.ComponentMo
   field System.Windows.DependencyProperty VideoDecoderDiagnosticsProperty
   field System.Windows.DependencyProperty VolumeProperty
   property System.Boolean AutoPlay { get; set; }
+  property FrameFlux.MediaCapabilities Capabilities { get; }
+  property System.TimeSpan? Duration { get; }
   property FrameFlux.MediaVideoPresentationMode? EffectivePresentationMode { get; }
   property System.Boolean IsHardwareVideoDecodingActive { get; }
   property System.Boolean IsMuted { get; set; }
   property System.Boolean KeepPlaybackAlive { get; set; }
   property FrameFlux.MediaPlaybackError? LastError { get; }
   property FrameFlux.MediaOpenOptions OpenOptions { get; set; }
+  property System.Double PlaybackRate { get; set; }
   property FrameFlux.IMediaPlayerFactory? PlayerFactory { get; set; }
+  property System.TimeSpan Position { get; }
   property FrameFlux.MediaVideoPresentationMode PresentationMode { get; set; }
   property FrameFlux.MediaSource? Source { get; set; }
   property FrameFlux.MediaPlaybackState State { get; }
@@ -81,6 +92,9 @@ class FrameFlux.Wpf.MediaView : System.Windows.Controls.Grid, System.ComponentMo
   event System.EventHandler<FrameFlux.MediaPlaybackErrorEventArgs>? PlaybackError
   event System.EventHandler<FrameFlux.MediaPlaybackStateChangedEventArgs>? PlaybackStateChanged
   method System.Threading.Tasks.ValueTask DisposeAsync()
+  method System.Threading.Tasks.ValueTask PauseAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask ResumeAsync(System.Threading.CancellationToken cancellationToken = default)
+  method System.Threading.Tasks.ValueTask SeekAsync(System.TimeSpan position, System.Threading.CancellationToken cancellationToken = default)
   method System.Threading.Tasks.ValueTask StartAsync(System.Threading.CancellationToken cancellationToken = default)
   method System.Threading.Tasks.ValueTask StopAsync(System.Threading.CancellationToken cancellationToken = default)
   method System.Threading.Tasks.ValueTask<FrameFlux.MediaSnapshot?> CaptureSnapshotAsync(System.Threading.CancellationToken cancellationToken = default)

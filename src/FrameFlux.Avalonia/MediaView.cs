@@ -147,6 +147,18 @@ public sealed class MediaView : Control, IAsyncDisposable
         set => SetValue(OverlayProperty, value);
     }
 
+    public TimeSpan Position => _playback.Position;
+
+    public TimeSpan? Duration => _playback.Duration;
+
+    public MediaCapabilities Capabilities => _playback.Capabilities;
+
+    public double PlaybackRate
+    {
+        get => _playback.PlaybackRate;
+        set => _playback.PlaybackRate = value;
+    }
+
     public MediaPlaybackState State
     {
         get => _state;
@@ -215,6 +227,11 @@ public sealed class MediaView : Control, IAsyncDisposable
     {
         Dispatcher.UIThread.VerifyAccess();
         ThrowIfDisposed();
+        if (State == MediaPlaybackState.Paused)
+        {
+            await _playback.ResumeAsync(cancellationToken);
+            return;
+        }
         _presentation.Reset();
         var options = OpenOptions;
         var output = _presentation.Configure(
@@ -238,6 +255,15 @@ public sealed class MediaView : Control, IAsyncDisposable
         await _presentation.ReleaseResourcesAsync();
         _presentation.ClearSoftwareFallback();
     }
+
+    public ValueTask PauseAsync(CancellationToken cancellationToken = default) =>
+        _playback.PauseAsync(cancellationToken);
+
+    public ValueTask ResumeAsync(CancellationToken cancellationToken = default) =>
+        _playback.ResumeAsync(cancellationToken);
+
+    public ValueTask SeekAsync(TimeSpan position, CancellationToken cancellationToken = default) =>
+        _playback.SeekAsync(position, cancellationToken);
 
     public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default) =>
         _playback.CaptureSnapshotAsync(cancellationToken);

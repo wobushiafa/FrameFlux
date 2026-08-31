@@ -11,6 +11,7 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
     private MediaPlaybackState _state = MediaPlaybackState.Idle;
     private MediaPlaybackError? _lastError;
     private MediaDiagnostics _diagnostics = MediaDiagnostics.Empty;
+    private double _playbackRate = 1d;
     private double _volume = 1d;
     private bool _isMuted;
     private bool _disposed;
@@ -22,6 +23,33 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
     public MediaDiagnostics Diagnostics => _diagnostics;
 
     public bool HasPlayer => _player is not null;
+
+    public TimeSpan Position => _player?.Position ?? TimeSpan.Zero;
+
+    public TimeSpan? Duration => _player?.Duration;
+
+    public MediaCapabilities Capabilities => _player?.Capabilities ?? MediaCapabilities.None;
+
+    public double PlaybackRate
+    {
+        get => _player?.PlaybackRate ?? _playbackRate;
+        set
+        {
+            if (!double.IsFinite(value) || value is < 0.5d or > 2d)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value),
+                    value,
+                    "Playback rate must be between 0.5 and 2.0.");
+            }
+
+            _playbackRate = value;
+            if (_player is not null)
+            {
+                _player.PlaybackRate = value;
+            }
+        }
+    }
 
     public double Volume
     {
@@ -138,6 +166,7 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
                 }
 
                 await player.OpenAsync(source, options, cancellationToken).ConfigureAwait(false);
+                player.PlaybackRate = _playbackRate;
                 await player.PlayAsync(cancellationToken).ConfigureAwait(false);
             }
             catch
@@ -184,6 +213,25 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
         {
             _lifecycleGate.Release();
         }
+    }
+
+    public ValueTask PauseAsync(CancellationToken cancellationToken = default) =>
+        _player?.PauseAsync(cancellationToken) ?? ValueTask.CompletedTask;
+
+    public ValueTask ResumeAsync(CancellationToken cancellationToken = default) =>
+        _player?.PlayAsync(cancellationToken) ?? ValueTask.CompletedTask;
+
+    public ValueTask SeekAsync(
+        TimeSpan position,
+        CancellationToken cancellationToken = default)
+    {
+        var player = _player;
+        if (player is null)
+        {
+            throw new InvalidOperationException("Start playback before seeking.");
+        }
+
+        return player.SeekAsync(position, cancellationToken);
     }
 
     public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default) =>
