@@ -17,6 +17,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
     private MediaDiagnostics _diagnostics = MediaDiagnostics.Empty;
     private TimeSpan _position;
     private TimeSpan? _duration;
+    private double _playbackRate = 1d;
     private double _volume = 1d;
     private bool _isMuted;
     private IMediaVideoOutput? _videoOutput;
@@ -90,6 +91,36 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             }
 
             return session is null ? diagnostics : session.Diagnostics;
+        }
+    }
+
+    public double PlaybackRate
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _playbackRate;
+            }
+        }
+        set
+        {
+            MediaPlaybackClock.ValidateRate(value);
+            lock (_sync)
+            {
+                ThrowIfDisposed();
+                if (_source is not null && !_source.Uri.IsFile && value != 1d)
+                {
+                    throw new NotSupportedException(
+                        "Live RTSP sources do not support playback-rate changes.");
+                }
+
+                _playbackRate = value;
+                if (_session is not null)
+                {
+                    _session.PlaybackRate = value;
+                }
+            }
         }
     }
 
@@ -260,10 +291,15 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
                     _videoOutput?.PreferredFrameStorage == MediaFrameStorageKind.D3D11Texture;
                 _source = source;
                 _options = resolvedOptions;
+                if (!isFile)
+                {
+                    _playbackRate = 1d;
+                }
                 _capabilities = new MediaCapabilities(
                     IsLive: !isFile,
-                    CanPause: false,
+                    CanPause: isFile,
                     CanSeek: isFile,
+                    CanChangePlaybackRate: isFile,
                     CanCaptureSnapshots:
                         resolvedOptions.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame &&
                         !usesGpuFrames);
@@ -299,11 +335,23 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         try
         {
             ThrowIfDisposed();
+            IFfmpegMediaSession? pausedSession;
+            lock (_sync)
+            {
+                pausedSession = _state == MediaPlaybackState.Paused ? _session : null;
+            }
+            if (pausedSession is not null)
+            {
+                await pausedSession.SetPausedAsync(false, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
             MediaSource source;
             MediaOpenOptions options;
             TimeSpan initialPosition;
             double volume;
             bool muted;
+            double playbackRate;
             IMediaVideoOutput? videoOutput;
             lock (_sync)
             {
@@ -320,12 +368,14 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
                 initialPosition = _position;
                 volume = _volume;
                 muted = _isMuted;
+                playbackRate = _playbackRate;
                 videoOutput = _videoOutput;
             }
 
             await StopSessionCoreAsync().ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             var session = _sessionFactory.Create(source, options, volume, muted, videoOutput);
+            session.PlaybackRate = playbackRate;
             session.StateChanged += OnSessionStateChanged;
             session.Error += OnSessionError;
             lock (_sync)
@@ -372,11 +422,34 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         }
     }
 
-    public ValueTask PauseAsync(CancellationToken cancellationToken = default)
+    public async ValueTask PauseAsync(CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        ThrowIfDisposed();
-        throw new NotSupportedException("The current media source does not support pause.");
+        await _commands.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            IFfmpegMediaSession? session;
+            bool canPause;
+            lock (_sync)
+            {
+                canPause = _capabilities.CanPause;
+                session = _session;
+            }
+            if (!canPause)
+            {
+                throw new NotSupportedException("The current media source does not support pause.");
+            }
+            if (session is null || State == MediaPlaybackState.Paused)
+            {
+                return;
+            }
+
+            await session.SetPausedAsync(true, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _commands.Release();
+        }
     }
 
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)

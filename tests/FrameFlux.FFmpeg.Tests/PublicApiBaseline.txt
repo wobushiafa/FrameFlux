@@ -13,6 +13,7 @@ interface FrameFlux.IMediaPlayer : System.IAsyncDisposable
   property System.TimeSpan? Duration { get; }
   property System.Boolean IsMuted { get; set; }
   property FrameFlux.MediaOpenOptions Options { get; }
+  property System.Double PlaybackRate { get; set; }
   property System.TimeSpan Position { get; }
   property FrameFlux.MediaSource? Source { get; }
   property FrameFlux.MediaPlaybackState State { get; }
@@ -55,8 +56,9 @@ class FrameFlux.MediaAudioOptions : System.IEquatable<FrameFlux.MediaAudioOption
   property System.Boolean IsEnabled { get; init; }
   property System.String? OutputDeviceId { get; init; }
 class FrameFlux.MediaCapabilities : System.IEquatable<FrameFlux.MediaCapabilities>
-  constructor MediaCapabilities(System.Boolean IsLive, System.Boolean CanPause, System.Boolean CanSeek, System.Boolean CanCaptureSnapshots)
+  constructor MediaCapabilities(System.Boolean IsLive, System.Boolean CanPause, System.Boolean CanSeek, System.Boolean CanChangePlaybackRate, System.Boolean CanCaptureSnapshots)
   property System.Boolean CanCaptureSnapshots { get; init; }
+  property System.Boolean CanChangePlaybackRate { get; init; }
   property System.Boolean CanPause { get; init; }
   property System.Boolean CanSeek { get; init; }
   property System.Boolean IsLive { get; init; }
@@ -245,6 +247,7 @@ class FrameFlux.FFmpeg.FfmpegMediaPlayer : FrameFlux.IMediaPlayer, System.IAsync
   property System.TimeSpan? Duration { get; }
   property System.Boolean IsMuted { get; set; }
   property FrameFlux.MediaOpenOptions Options { get; }
+  property System.Double PlaybackRate { get; set; }
   property System.TimeSpan Position { get; }
   property FrameFlux.MediaSource? Source { get; }
   property FrameFlux.MediaPlaybackState State { get; }

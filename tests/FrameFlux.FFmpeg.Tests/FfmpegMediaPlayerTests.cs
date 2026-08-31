@@ -63,9 +63,11 @@ public sealed class FfmpegMediaPlayerTests
         await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory());
         await player.OpenAsync(MediaSource.Parse("rtsp://camera/live"));
 
-        Assert.Throws<NotSupportedException>(() => player.PauseAsync());
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            player.PauseAsync().AsTask());
         await Assert.ThrowsAsync<NotSupportedException>(() =>
             player.SeekAsync(TimeSpan.FromSeconds(1)).AsTask());
+        Assert.Throws<NotSupportedException>(() => player.PlaybackRate = 2d);
     }
 
     [Fact]
@@ -85,8 +87,9 @@ public sealed class FfmpegMediaPlayerTests
                 });
 
             Assert.False(player.Capabilities.IsLive);
-            Assert.False(player.Capabilities.CanPause);
+            Assert.True(player.Capabilities.CanPause);
             Assert.True(player.Capabilities.CanSeek);
+            Assert.True(player.Capabilities.CanChangePlaybackRate);
             Assert.Equal(TimeSpan.Zero, player.Position);
             Assert.Null(player.Duration);
 
@@ -94,6 +97,14 @@ public sealed class FfmpegMediaPlayerTests
             Assert.Equal(duration, player.Duration);
 
             var position = TimeSpan.FromSeconds(3);
+            player.PlaybackRate = 2d;
+            var activeSession = Assert.IsType<FakeMediaSession>(factory.LastSession);
+            Assert.Equal(2d, activeSession.PlaybackRate);
+            await player.PauseAsync();
+            Assert.Equal(MediaPlaybackState.Paused, player.State);
+            await player.PlayAsync();
+            Assert.Same(activeSession, factory.LastSession);
+            Assert.Equal(MediaPlaybackState.Playing, player.State);
             await player.SeekAsync(position);
             var firstSession = Assert.IsType<FakeMediaSession>(factory.LastSession);
             Assert.Equal(position, firstSession.LastSeekPosition);
@@ -356,6 +367,7 @@ public sealed class FfmpegMediaPlayerTests
         public MediaPlaybackState State { get; private set; } = MediaPlaybackState.Idle;
         public MediaDiagnostics Diagnostics { get; } = new(false, "Test", 1, 2, 3, null);
         public double Volume { get; set; } = volume;
+        public double PlaybackRate { get; set; } = 1d;
         public bool IsMuted { get; set; } = isMuted;
         public TimeSpan Position { get; private set; }
         public TimeSpan? Duration { get; init; }
@@ -398,6 +410,12 @@ public sealed class FfmpegMediaPlayerTests
                 "Test error.",
                 IsRecoverable: true,
                 Exception: null)));
+
+        public ValueTask SetPausedAsync(bool paused, CancellationToken cancellationToken = default)
+        {
+            TransitionTo(paused ? MediaPlaybackState.Paused : MediaPlaybackState.Playing);
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask StopAsync(CancellationToken cancellationToken = default)
         {

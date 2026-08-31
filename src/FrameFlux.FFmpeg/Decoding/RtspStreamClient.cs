@@ -12,6 +12,8 @@ internal sealed class RtspStreamClient : IDisposable
     private readonly string _url;
     private readonly IMediaVideoOutput? _videoOutput;
     private readonly bool _isLive;
+    private readonly ManualResetEventSlim _playbackGate = new(initialState: true);
+    private readonly MediaPlaybackClock _playbackClock = new();
     private RtspStreamOptions _options;
     private Thread? _decodeThread;
     private volatile bool _isRunning;
@@ -32,6 +34,7 @@ internal sealed class RtspStreamClient : IDisposable
     private MediaSeekRequest? _pendingSeek;
     private long _positionTicks;
     private long _durationTicks = -1;
+    private double _playbackRate = 1d;
 
     public string VideoDecoderDiagnostics => _videoDecoderDiagnostics;
     public MediaAudioDiagnostics AudioDiagnostics =>
@@ -67,6 +70,38 @@ internal sealed class RtspStreamClient : IDisposable
     {
         Volatile.Write(ref _muted, muted);
         Volatile.Read(ref _audioPlayback)?.SetMuted(muted);
+    }
+
+    internal void SetPaused(bool paused)
+    {
+        if (_isLive)
+        {
+            throw new NotSupportedException("Live RTSP sources do not support pausing.");
+        }
+
+        Volatile.Read(ref _audioPlayback)?.Reset();
+        _playbackClock.Reset(Position.TotalSeconds);
+        if (paused)
+        {
+            _playbackGate.Reset();
+        }
+        else
+        {
+            _playbackGate.Set();
+        }
+    }
+
+    internal void SetPlaybackRate(double rate)
+    {
+        MediaPlaybackClock.ValidateRate(rate);
+        if (_isLive && rate != 1d)
+        {
+            throw new NotSupportedException("Live RTSP sources do not support playback-rate changes.");
+        }
+
+        Volatile.Write(ref _playbackRate, rate);
+        Volatile.Read(ref _audioPlayback)?.Reset();
+        _playbackClock.SetRate(rate, Position.TotalSeconds);
     }
 
 
@@ -124,6 +159,7 @@ internal sealed class RtspStreamClient : IDisposable
     public void Stop(bool waitForExit = false)
     {
         _isRunning = false;
+        _playbackGate.Set();
         var cancellationTokenSource = _cancellationTokenSource;
         cancellationTokenSource?.Cancel();
         Interlocked.Exchange(ref _pendingSeek, null)?.Completion.TrySetCanceled();
@@ -257,6 +293,17 @@ internal sealed class RtspStreamClient : IDisposable
                     RaiseConnectionStateChanged(RtspConnectionState.Connected);
                     while (_isRunning && !threadCancellationTokenSource.IsCancellationRequested)
                     {
+                        if (!_isLive && !_playbackGate.IsSet)
+                        {
+                            if (decoder is not null && ProcessPendingSeek(decoder))
+                            {
+                                _playbackClock.Reset(Position.TotalSeconds);
+                                audioPlayback?.Reset();
+                            }
+                            _playbackGate.Wait(TimeSpan.FromMilliseconds(25), cancellationToken);
+                            continue;
+                        }
+
                         var decodeStart = Stopwatch.GetTimestamp();
                         if (platformDecoder is not null)
                         {
@@ -325,6 +372,11 @@ internal sealed class RtspStreamClient : IDisposable
 
                         var hasFrame = decoder!.TryDecodeNextFrame(out var frame);
                         var seekProcessed = ProcessPendingSeek(decoder!);
+                        if (seekProcessed)
+                        {
+                            _playbackClock.Reset(Position.TotalSeconds);
+                            audioPlayback?.Reset();
+                        }
                         DrainAudio(decoder, audioPlayback);
                         UpdateSynchronizationDiagnostics(clockSynchronizer, audioPlayback);
                         var decodeElapsedTicks = Stopwatch.GetTimestamp() - decodeStart;
@@ -774,7 +826,7 @@ internal sealed class RtspStreamClient : IDisposable
         return true;
     }
 
-    private static void DrainAudio(
+    private void DrainAudio(
         RtspDecoder decoder,
         AudioPlaybackController? audioPlayback)
     {
@@ -786,11 +838,14 @@ internal sealed class RtspStreamClient : IDisposable
 
         while (decoder.TryDequeueAudioFrame(out var audioFrame) && audioFrame is not null)
         {
-            audioPlayback.Write(audioFrame);
+            if (Volatile.Read(ref _playbackRate) == 1d)
+            {
+                audioPlayback.Write(audioFrame);
+            }
         }
     }
 
-    private static void DrainAudio(
+    private void DrainAudio(
         IPlatformRtspDecoder decoder,
         AudioPlaybackController? audioPlayback)
     {
@@ -802,7 +857,10 @@ internal sealed class RtspStreamClient : IDisposable
 
         while (decoder.TryDequeueAudioFrame(out var audioFrame) && audioFrame is not null)
         {
-            audioPlayback.Write(audioFrame);
+            if (Volatile.Read(ref _playbackRate) == 1d)
+            {
+                audioPlayback.Write(audioFrame);
+            }
         }
     }
 
@@ -834,6 +892,12 @@ internal sealed class RtspStreamClient : IDisposable
         CancellationToken cancellationToken)
     {
         if (videoPosition is null) return true;
+
+        if (!_isLive && !_playbackClock.WaitUntil(videoPosition.Value, cancellationToken))
+        {
+            return false;
+        }
+
         var decision = clockSynchronizer.EvaluateVideo(
             videoPosition.Value,
             audioPlayback?.PositionSeconds);

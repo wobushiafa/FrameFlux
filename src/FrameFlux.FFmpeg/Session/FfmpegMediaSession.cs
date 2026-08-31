@@ -18,6 +18,16 @@ internal interface IFfmpegMediaSession : IAsyncDisposable
 
     TimeSpan? Duration => null;
 
+    double PlaybackRate
+    {
+        get => 1d;
+        set
+        {
+            if (value != 1d)
+                throw new NotSupportedException("This media session does not support playback-rate changes.");
+        }
+    }
+
 
     double Volume { get; set; }
 
@@ -32,6 +42,10 @@ internal interface IFfmpegMediaSession : IAsyncDisposable
     ValueTask StartAsync(CancellationToken cancellationToken = default);
 
     ValueTask StopAsync(CancellationToken cancellationToken = default);
+
+    ValueTask SetPausedAsync(bool paused, CancellationToken cancellationToken = default) =>
+        ValueTask.FromException(new NotSupportedException("This media session does not support pausing."));
+
     ValueTask SeekAsync(TimeSpan position, CancellationToken cancellationToken = default) =>
         ValueTask.FromException(
             new NotSupportedException("This media session does not support seeking."));
@@ -56,6 +70,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
     private RtspPerformanceSnapshot _lastPerformance;
     private string? _lastError;
     private bool _isHardwareVideoDecodingActive;
+    private double _playbackRate = 1d;
     private double _volume;
     private bool _isMuted;
     private long _frameSequence;
@@ -83,6 +98,33 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
     public MediaSource Source { get; }
 
     public MediaOpenOptions Options { get; }
+
+    public double PlaybackRate
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _playbackRate;
+            }
+        }
+        set
+        {
+            MediaPlaybackClock.ValidateRate(value);
+            lock (_sync)
+            {
+                ThrowIfDisposed();
+                if (!Source.Uri.IsFile && value != 1d)
+                {
+                    throw new NotSupportedException(
+                        "Live RTSP sources do not support playback-rate changes.");
+                }
+
+                _playbackRate = value;
+                _client?.SetPlaybackRate(value);
+            }
+        }
+    }
 
     public double Volume
     {
@@ -250,6 +292,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
                 Source.Uri.IsFile ? Source.Uri.LocalPath : Source.Uri.ToString(),
                 CreateEngineOptions(),
                 _videoOutput);
+            client.SetPlaybackRate(_playbackRate);
             client.ConnectionStateChanged += OnConnectionStateChanged;
             client.StreamError += OnStreamError;
             client.HardwareVideoDecodingChanged += OnHardwareVideoDecodingChanged;
@@ -285,6 +328,26 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         }
 
         await stopTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public ValueTask SetPausedAsync(bool paused, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (!Source.Uri.IsFile)
+            {
+                throw new NotSupportedException("Live RTSP sources do not support pausing.");
+            }
+
+            var client = _client ?? throw new InvalidOperationException(
+                "Start the media session before changing pause state.");
+            client.SetPaused(paused);
+        }
+
+        TransitionTo(paused ? MediaPlaybackState.Paused : MediaPlaybackState.Playing);
+        return ValueTask.CompletedTask;
     }
 
     public ValueTask SeekAsync(

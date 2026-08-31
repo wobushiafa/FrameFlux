@@ -12,6 +12,16 @@ public interface IMediaPlayer : IAsyncDisposable
 
     MediaDiagnostics Diagnostics { get; }
 
+    double PlaybackRate
+    {
+        get => 1d;
+        set
+        {
+            if (value != 1d)
+                throw new NotSupportedException("This media player does not support playback-rate changes.");
+        }
+    }
+
     double Volume { get; set; }
 
     bool IsMuted { get; set; }
@@ -247,9 +257,10 @@ public sealed record MediaCapabilities(
     bool IsLive,
     bool CanPause,
     bool CanSeek,
+    bool CanChangePlaybackRate,
     bool CanCaptureSnapshots)
 {
-    public static MediaCapabilities None { get; } = new(false, false, false, false);
+    public static MediaCapabilities None { get; } = new(false, false, false, false, false);
 }
 
 public enum MediaPixelFormat

@@ -137,6 +137,22 @@ internal sealed class AudioPlaybackController : IDisposable
         Volatile.Write(ref _muted, muted);
     }
 
+    internal void Reset()
+    {
+        while (_frames.Reader.TryRead(out _))
+        {
+        }
+
+        lock (_clockSync)
+        {
+            _output.Reset();
+            _mediaStartSeconds = null;
+            _lastSubmittedEndSeconds = null;
+            _outputFramesAtMediaStart = _output.PlayedFrames;
+            Interlocked.Increment(ref _clockResetCount);
+        }
+    }
+
     internal void Write(NativeAudioFrame frame)
     {
         if (frame.Data.Length == 0 ||
