@@ -81,7 +81,9 @@ internal sealed class FfmpegPlaybackSynchronizer
         if (frame.Info.PresentationTimestamp == long.MinValue ||
             frame.Info.TimeBaseDenominator <= 0)
         {
-            return true;
+            return _isLive || _playbackClock.WaitUntil(
+                playbackPosition,
+                cancellationToken);
         }
 
         var videoPosition = frame.Info.PresentationTimestamp *

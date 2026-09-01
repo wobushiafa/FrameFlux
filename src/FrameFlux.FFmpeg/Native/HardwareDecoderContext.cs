@@ -197,7 +197,11 @@ internal sealed class FFmpegHardwareDecoderContext : IHardwareDecoderContext
         var result = _hardwareApi.AvHardwareFrameMap(destination, source, 1);
         if (result >= 0)
         {
-            return result;
+            result = _api.AvFrameCopyProperties(destination, source);
+            if (result >= 0)
+            {
+                return result;
+            }
         }
 
         _api.AvFrameFree(ref destination);

@@ -57,6 +57,15 @@ internal struct NativeStreamInfo
     public int TimeBaseDenominator;
     public long StartTimestamp;
     public long DurationTimestamp;
+    public int FrameRateNumerator;
+    public int FrameRateDenominator;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal readonly struct NativeRational
+{
+    public readonly int Numerator;
+    public readonly int Denominator;
 }
 
 [StructLayout(LayoutKind.Sequential)]

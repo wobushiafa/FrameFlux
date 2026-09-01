@@ -59,11 +59,54 @@ public sealed class MediaTimelineTests
         Assert.Null(FfmpegDecoder.GetRelativePosition(frame, stream));
     }
 
-    private static NativeStreamInfo CreateStreamInfo(long startTimestamp) => new()
+    [Fact]
+    public void MissingPresentationTimestamp_AdvancesUsingFrameRateFallback()
+    {
+        var stream = CreateStreamInfo(
+            startTimestamp: 0,
+            frameRateNumerator: 25,
+            frameRateDenominator: 1);
+        var frame = CreateFrameInfo(presentationTimestamp: long.MinValue);
+
+        var position = FfmpegDecoder.ResolvePlaybackPosition(
+            frame,
+            stream,
+            TimeSpan.FromSeconds(2),
+            hasPlaybackPosition: true,
+            FfmpegDecoder.GetFallbackFrameDuration(stream));
+
+        Assert.Equal(TimeSpan.FromMilliseconds(2040), position);
+    }
+
+    [Fact]
+    public void RepeatedPresentationTimestamp_AdvancesUsingFrameRateFallback()
+    {
+        var stream = CreateStreamInfo(
+            startTimestamp: 0,
+            frameRateNumerator: 50,
+            frameRateDenominator: 1);
+        var frame = CreateFrameInfo(presentationTimestamp: 1_000);
+
+        var position = FfmpegDecoder.ResolvePlaybackPosition(
+            frame,
+            stream,
+            TimeSpan.FromSeconds(1),
+            hasPlaybackPosition: true,
+            FfmpegDecoder.GetFallbackFrameDuration(stream));
+
+        Assert.Equal(TimeSpan.FromMilliseconds(1020), position);
+    }
+
+    private static NativeStreamInfo CreateStreamInfo(
+        long startTimestamp,
+        int frameRateNumerator = 0,
+        int frameRateDenominator = 0) => new()
     {
         TimeBaseNumerator = 1,
         TimeBaseDenominator = 1_000,
-        StartTimestamp = startTimestamp
+        StartTimestamp = startTimestamp,
+        FrameRateNumerator = frameRateNumerator,
+        FrameRateDenominator = frameRateDenominator
     };
 
     private static NativeFrameInfo CreateFrameInfo(long presentationTimestamp) => new()

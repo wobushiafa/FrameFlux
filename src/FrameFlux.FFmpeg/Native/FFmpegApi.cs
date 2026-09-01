@@ -18,6 +18,7 @@ internal sealed class FFmpegApi
         SwResampleVersion = Load<VersionDelegate>("swresample", "swresample_version");
         AvFilterVersion = Load<VersionDelegate>("avfilter", "avfilter_version");
         AvFormatNetworkInit = Load<NetworkInitDelegate>("avformat", "avformat_network_init");
+        AvGuessFrameRate = Load<GuessFrameRateDelegate>("avformat", "av_guess_frame_rate");
         AvFormatAllocContext = Load<AllocDelegate>("avformat", "avformat_alloc_context");
         AvFormatOpenInput = Load<FormatOpenInputDelegate>("avformat", "avformat_open_input");
         AvFormatFindStreamInfo = Load<FormatFindStreamInfoDelegate>("avformat", "avformat_find_stream_info");
@@ -104,6 +105,7 @@ internal sealed class FFmpegApi
     internal VersionDelegate SwResampleVersion { get; }
     internal VersionDelegate AvFilterVersion { get; }
     internal NetworkInitDelegate AvFormatNetworkInit { get; }
+    internal GuessFrameRateDelegate AvGuessFrameRate { get; }
     internal AllocDelegate AvFormatAllocContext { get; }
     internal FormatOpenInputDelegate AvFormatOpenInput { get; }
     internal FormatFindStreamInfoDelegate AvFormatFindStreamInfo { get; }
@@ -208,6 +210,7 @@ internal sealed class FFmpegApi
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate uint VersionDelegate();
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int NetworkInitDelegate();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate NativeRational GuessFrameRateDelegate(IntPtr formatContext, IntPtr stream, IntPtr frame);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FormatOpenInputDelegate(ref IntPtr context, IntPtr url, IntPtr format, ref IntPtr options);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FormatFindStreamInfoDelegate(IntPtr context, IntPtr options);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FindBestStreamDelegate(IntPtr context, int mediaType, int wantedStream, int relatedStream, out IntPtr decoder, int flags);

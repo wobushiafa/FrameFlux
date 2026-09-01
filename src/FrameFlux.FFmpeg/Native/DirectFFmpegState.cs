@@ -992,6 +992,7 @@ internal static class FFmpegAbi
 
         var widthOffset = GetCodecParametersWidthOffset(codecMajorVersion);
         var timeBase = GetTimeBase(stream);
+        var frameRate = FFmpegApi.Instance.AvGuessFrameRate(formatContext, stream, IntPtr.Zero);
         return new NativeStreamInfo
         {
             Width = Marshal.ReadInt32(codecParameters, widthOffset),
@@ -1010,7 +1011,9 @@ internal static class FFmpegAbi
             DurationTimestamp = FFmpegDurationAbi.GetMediaDurationTimestamp(
                 formatContext,
                 stream,
-                formatMajorVersion)
+                formatMajorVersion),
+            FrameRateNumerator = frameRate.Numerator,
+            FrameRateDenominator = frameRate.Denominator
         };
     }
 

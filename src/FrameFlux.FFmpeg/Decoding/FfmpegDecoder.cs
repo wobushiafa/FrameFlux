@@ -37,6 +37,8 @@ internal sealed class FfmpegDecoder : IDisposable
     private readonly NativeRtspSessionHandle _session;
     private readonly CancellationTokenRegistration _cancellationRegistration;
     private readonly NativeStreamInfo _streamInfo;
+    private readonly TimeSpan _fallbackFrameDuration;
+    private bool _hasPlaybackPosition;
     private bool _disposed;
 
     internal FfmpegDecoder(
@@ -101,6 +103,7 @@ internal sealed class FfmpegDecoder : IDisposable
             throw new ApplicationException("Unable to read media stream information.");
         }
         Duration = ToTimeSpan(_streamInfo.DurationTimestamp);
+        _fallbackFrameDuration = GetFallbackFrameDuration(_streamInfo);
     }
 
     public bool IsHardwareVideoDecodingActive =>
@@ -153,10 +156,13 @@ internal sealed class FfmpegDecoder : IDisposable
                 "The native RTSP decoder returned an invalid video frame.");
         }
 
-        if (info.PresentationTimestamp != long.MinValue)
-        {
-            Position = GetRelativePosition(info, _streamInfo) ?? Position;
-        }
+        Position = ResolvePlaybackPosition(
+            info,
+            _streamInfo,
+            Position,
+            _hasPlaybackPosition,
+            _fallbackFrameDuration);
+        _hasPlaybackPosition = true;
 
         frame = new NativeDecodedFrame(handle, info);
         return true;
@@ -177,6 +183,7 @@ internal sealed class FfmpegDecoder : IDisposable
         }
 
         Position = position;
+        _hasPlaybackPosition = false;
     }
 
     internal void SetPlaybackRate(double playbackRate)
@@ -212,6 +219,33 @@ internal sealed class FfmpegDecoder : IDisposable
             ? 0L
             : streamInfo.StartTimestamp;
         return checked(relativeTimestamp + startTimestamp);
+    }
+
+    internal static TimeSpan ResolvePlaybackPosition(
+        NativeFrameInfo frameInfo,
+        NativeStreamInfo streamInfo,
+        TimeSpan previousPosition,
+        bool hasPlaybackPosition,
+        TimeSpan fallbackFrameDuration)
+    {
+        var timestampPosition = GetRelativePosition(frameInfo, streamInfo);
+        if (!hasPlaybackPosition && timestampPosition is not null)
+        {
+            return timestampPosition.Value;
+        }
+
+        return timestampPosition > previousPosition
+            ? timestampPosition.Value
+            : previousPosition + fallbackFrameDuration;
+    }
+
+    internal static TimeSpan GetFallbackFrameDuration(NativeStreamInfo streamInfo)
+    {
+        var frameRate = streamInfo.FrameRateDenominator > 0
+            ? streamInfo.FrameRateNumerator / (double)streamInfo.FrameRateDenominator
+            : 0d;
+        return TimeSpan.FromSeconds(
+            double.IsFinite(frameRate) && frameRate > 0d ? 1d / frameRate : 1d / 30d);
     }
 
     private TimeSpan? ToTimeSpan(long timestamp) =>

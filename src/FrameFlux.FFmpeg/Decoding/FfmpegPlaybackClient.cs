@@ -319,6 +319,7 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                     {
                         _options = FfmpegPlaybackPolicy.CreateSoftwareFallbackOptions(_options);
                         HardwareVideoDecodingChanged?.Invoke(this, false);
+                        continue;
                     }
 
                     if (!reconnect.RetryAllowed)
