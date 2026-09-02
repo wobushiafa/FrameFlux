@@ -761,7 +761,15 @@ public sealed class FfmpegMediaPlayerFactory : IMediaPlayerFactory
 
 public sealed record FfmpegMediaPlayerFactoryOptions
 {
-    public int? MaximumConcurrentOpenOperations { get; init; } = 8;
+    public int? MaximumConcurrentOpenOperations { get; init; } =
+        CalculateRecommendedMaximumConcurrentOpenOperations(Environment.ProcessorCount);
+
+    internal static int CalculateRecommendedMaximumConcurrentOpenOperations(
+        int processorCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(processorCount, 1);
+        return Math.Clamp((processorCount + 3) / 4, 2, 4);
+    }
 
     internal void Validate()
     {

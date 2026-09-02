@@ -78,8 +78,10 @@ or dropping every subsequent frame. Current positions, A/V offset, delayed and
 dropped frame counts, and clock reset count are available from
 `player.Diagnostics.Synchronization`. Reconnects create a fresh synchronizer.
 
-Limit simultaneous FFmpeg open operations per factory when many players start
-together:
+Limit simultaneous endpoint probes and FFmpeg open operations when many players
+start together. Factories configured with the same limit share one process-wide
+limiter, but applications should still reuse one factory for consistent player
+configuration:
 
 ```csharp
 var factory = new FfmpegMediaPlayerFactory(
@@ -89,7 +91,9 @@ var factory = new FfmpegMediaPlayerFactory(
     });
 ```
 
-The default limit is 8. Set it to `null` for no factory-level limit.
+The default is selected from the logical processor count: two concurrent opens
+on systems with up to 8 processors, three with 9 to 12, and four with 13 or
+more. Set an explicit value to override it, or `null` to disable limiting.
 
 Platform-specific native binaries are distributed separately in
 `FrameFlux.FFmpeg.NativeAssets.Windows`, `FrameFlux.FFmpeg.NativeAssets.Linux`,

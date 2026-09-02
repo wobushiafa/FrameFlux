@@ -39,7 +39,7 @@ internal sealed class FfmpegMediaSessionFactory : IFfmpegMediaSessionFactory
         _loggerFactory = loggerFactory;
         _sharedPool = sharedPool;
         _openOperationSemaphore = options.MaximumConcurrentOpenOperations is { } limit
-            ? new SemaphoreSlim(limit, limit)
+            ? FfmpegOpenStreamLimiter.GetSemaphore(limit)
             : null;
     }
 

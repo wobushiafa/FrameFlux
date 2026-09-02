@@ -210,6 +210,13 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                 {
                     RaiseConnectionStateChanged(PlaybackConnectionState.Connecting);
                     var cancellationToken = threadCancellationTokenSource.Token;
+                    openSemaphore = _options.OpenOperationSemaphore;
+                    if (openSemaphore != null)
+                    {
+                        openSemaphore.Wait(cancellationToken);
+                        openSemaphoreEntered = true;
+                    }
+
                     if (_isLive && !RtspEndpointProbe.IsReachable(
                             _url,
                             _options.EndpointProbeTimeoutMilliseconds,
@@ -229,13 +236,6 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                         RaiseConnectionStateChanged(PlaybackConnectionState.Reconnecting);
                         SleepBeforeReconnect(threadCancellationTokenSource, reconnect.Delay);
                         continue;
-                    }
-
-                    openSemaphore = _options.OpenOperationSemaphore;
-                    if (openSemaphore != null)
-                    {
-                        openSemaphore.Wait(cancellationToken);
-                        openSemaphoreEntered = true;
                     }
 
                     platformDecoder = _isLive

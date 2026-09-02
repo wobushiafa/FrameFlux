@@ -165,7 +165,7 @@ public sealed class MediaConfigurationTests
     }
 
     [Fact]
-    public void PlayerFactoryOptions_ValidateAndCreateFactoryScopedOpenLimit()
+    public void PlayerFactoryOptions_ValidateAndCreateProcessSharedOpenLimit()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             new FfmpegMediaPlayerFactory(
@@ -174,7 +174,12 @@ public sealed class MediaConfigurationTests
                     MaximumConcurrentOpenOperations = 0
                 }));
 
-        var factory = new FfmpegMediaSessionFactory(
+        var firstFactory = new FfmpegMediaSessionFactory(
+            options: new FfmpegMediaPlayerFactoryOptions
+            {
+                MaximumConcurrentOpenOperations = 3
+            });
+        var secondFactory = new FfmpegMediaSessionFactory(
             options: new FfmpegMediaPlayerFactoryOptions
             {
                 MaximumConcurrentOpenOperations = 3
@@ -182,9 +187,30 @@ public sealed class MediaConfigurationTests
         var semaphoreField = typeof(FfmpegMediaSessionFactory).GetField(
             "_openOperationSemaphore",
             BindingFlags.Instance | BindingFlags.NonPublic);
-        var semaphore = Assert.IsType<SemaphoreSlim>(semaphoreField?.GetValue(factory));
+        var firstSemaphore = Assert.IsType<SemaphoreSlim>(
+            semaphoreField?.GetValue(firstFactory));
+        var secondSemaphore = Assert.IsType<SemaphoreSlim>(
+            semaphoreField?.GetValue(secondFactory));
 
-        Assert.Equal(3, semaphore.CurrentCount);
+        Assert.Same(firstSemaphore, secondSemaphore);
+        Assert.Equal(3, firstSemaphore.CurrentCount);
+    }
+
+    [Theory]
+    [InlineData(1, 2)]
+    [InlineData(8, 2)]
+    [InlineData(9, 3)]
+    [InlineData(12, 3)]
+    [InlineData(13, 4)]
+    [InlineData(64, 4)]
+    public void PlayerFactoryOptions_RecommendedOpenLimitScalesFromTwoToFour(
+        int processorCount,
+        int expected)
+    {
+        Assert.Equal(
+            expected,
+            FfmpegMediaPlayerFactoryOptions
+                .CalculateRecommendedMaximumConcurrentOpenOperations(processorCount));
     }
 
     [Theory]
