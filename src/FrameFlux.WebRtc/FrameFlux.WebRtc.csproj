@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+    <PackageId>FrameFlux.WebRtc</PackageId>
+    <Description>WebRTC real-time media engine for FrameFlux using SIPSorcery.</Description>
+    <PackageTags>media;video;playback;webrtc;whep;whip;sipsorcery;streaming;cross-platform</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
+    <ProjectReference Include="..\FrameFlux.Presentation\FrameFlux.Presentation.csproj" />
+    <PackageReference Include="SIPSorcery" />
+    <InternalsVisibleTo Include="FrameFlux.WebRtc.Tests" />
+  </ItemGroup>
+</Project>

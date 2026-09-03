@@ -1,6 +1,7 @@
 using System.Windows;
 using FrameFlux;
 using FrameFlux.FFmpeg;
+using FrameFlux.WebRtc;
 using Microsoft.Win32;
 
 namespace FrameFlux.Demo.Wpf;
@@ -13,7 +14,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         InitializePlaybackControls();
-        Player.PlayerFactory = new FfmpegMediaPlayerFactory();
+        Player.PlayerFactory = new WebRtcMediaPlayerFactory();
         var options = new MediaOpenOptions
         {
             Network = new MediaNetworkOptions
