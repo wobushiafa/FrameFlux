@@ -29,6 +29,10 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
     private long _importedGeneration;
     private int _sourceWidth;
     private int _sourceHeight;
+
+    private bool _hadPresentationFailure;
+    private bool _surfaceIsVisible;
+    private bool _gpuPresentationNotified;
     private bool _disposed;
 
     internal WindowsD3D11CompositionMediaOutput()
@@ -92,6 +96,9 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
     {
         _failureTracker.Reset();
         _frameSlot.Clear();
+
+        _surfaceIsVisible = false;
+        _gpuPresentationNotified = false;
         if (_surfaceVisual is not null)
         {
             _surfaceVisual.Visible = false;
@@ -167,6 +174,7 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
         IMediaFrameLease? frame = null;
         try
         {
+
             frame = _frameSlot.Take();
             if (frame is null)
             {
@@ -179,13 +187,20 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
             }
 
             await EnsureCompositionAsync();
-            if (_texture.RequiresReset(frame.Width, frame.Height, texture))
+            if (_texture.RequiresReset(
+                    frame.Width,
+                    frame.Height,
+                    frame.Width,
+                    frame.Height,
+                    texture))
             {
                 await ReleaseImportedImageAsync();
                 _texture.Reset();
             }
 
             if (!_texture.TryPresent(
+                    frame.Width,
+                    frame.Height,
                     frame.Width,
                     frame.Height,
                     texture,
@@ -213,16 +228,30 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
                 _importedGeneration = compositionFrame.Generation;
                 _sourceWidth = compositionFrame.Width;
                 _sourceHeight = compositionFrame.Height;
+                UpdateVisualLayout(Bounds.Size);
             }
 
             await _drawingSurface!.UpdateWithKeyedMutexAsync(
                 _importedImage,
                 checked((uint)ConsumerKey),
                 checked((uint)ProducerKey));
-            _surfaceVisual!.Visible = true;
-            UpdateVisualLayout(Bounds.Size);
-            _failureTracker.ReportSuccess();
-            FramePresented?.Invoke(this, EventArgs.Empty);
+            if (!_surfaceIsVisible)
+            {
+                _surfaceVisual!.Visible = true;
+                _surfaceIsVisible = true;
+            }
+
+
+            if (_hadPresentationFailure)
+            {
+                _failureTracker.ReportSuccess();
+                _hadPresentationFailure = false;
+            }
+            if (!_gpuPresentationNotified)
+            {
+                _gpuPresentationNotified = true;
+                FramePresented?.Invoke(this, EventArgs.Empty);
+            }
         }
         catch (Exception exception)
         {
@@ -231,6 +260,9 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
                 exception);
             await ReleaseImportedImageAsync();
             _texture.Reset();
+            _surfaceIsVisible = false;
+            _gpuPresentationNotified = false;
+            _hadPresentationFailure = true;
             PresentationFailed?.Invoke(this, _failureTracker.Register(exception));
         }
         finally

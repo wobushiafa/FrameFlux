@@ -121,6 +121,13 @@ internal sealed class MediaPresentationCoordinator : IDisposable
 
     private void OnCompositedFramePresented(object? sender, EventArgs args)
     {
+        if (_compositedOutput.Visibility == Visibility.Visible &&
+            _softwareOutput.Visibility == Visibility.Collapsed &&
+            _nativePresenter.Visibility == Visibility.Collapsed)
+        {
+            return;
+        }
+
         _nativePresenter.Visibility = Visibility.Collapsed;
         _softwareOutput.Visibility = Visibility.Collapsed;
         _compositedOutput.Visibility = Visibility.Visible;

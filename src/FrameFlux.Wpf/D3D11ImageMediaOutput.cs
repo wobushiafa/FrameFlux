@@ -28,6 +28,7 @@ internal sealed class D3D11ImageMediaOutput :
     private int _width;
     private int _height;
     private bool _backBufferAttached;
+    private bool _hadPresentationFailure;
     private bool _disposed;
 
     internal D3D11ImageMediaOutput()
@@ -125,6 +126,8 @@ internal sealed class D3D11ImageMediaOutput :
             if (_texture.RequiresReset(
                     frame.Width,
                     frame.Height,
+                    frame.Width,
+                    frame.Height,
                     sourceTexture))
             {
                 ResetPresentationResources();
@@ -140,6 +143,8 @@ internal sealed class D3D11ImageMediaOutput :
                 }
 
                 if (!_texture.TryPresent(
+                        frame.Width,
+                        frame.Height,
                         frame.Width,
                         frame.Height,
                         sourceTexture,
@@ -170,7 +175,10 @@ internal sealed class D3D11ImageMediaOutput :
                         imageLocked = true;
                     }
 
-                    AttachBackBufferLocked();
+                    if (!_backBufferAttached)
+                    {
+                        AttachBackBufferLocked();
+                    }
                     _image.AddDirtyRect(
                         new Int32Rect(0, 0, _width, _height));
                 }
@@ -183,7 +191,11 @@ internal sealed class D3D11ImageMediaOutput :
                 }
             }
 
-            _failureTracker.ReportSuccess();
+            if (_hadPresentationFailure)
+            {
+                _failureTracker.ReportSuccess();
+                _hadPresentationFailure = false;
+            }
             FramePresented?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception exception)
@@ -192,6 +204,7 @@ internal sealed class D3D11ImageMediaOutput :
                 "WPF D3D11 composition presentation failed: {0}",
                 exception);
             ResetPresentationResources();
+            _hadPresentationFailure = true;
             PresentationFailed?.Invoke(this, _failureTracker.Register(exception));
         }
         finally

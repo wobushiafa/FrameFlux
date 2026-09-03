@@ -71,4 +71,4 @@ internal static class AvaloniaPlatformMediaOutputRegistry
 
 internal readonly record struct AvaloniaPlatformMediaOutputs(
     IAvaloniaPlatformMediaOutput? GpuComposition,
-    IAvaloniaPlatformMediaOutput? NativeSurface);
+    Func<IAvaloniaPlatformMediaOutput?>? CreateNativeSurface);

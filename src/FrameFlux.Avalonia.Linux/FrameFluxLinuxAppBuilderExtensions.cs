@@ -7,7 +7,7 @@ public static class FrameFluxLinuxAppBuilderExtensions
     private static readonly Func<AvaloniaPlatformMediaOutputs> OutputFactory =
         static () => new AvaloniaPlatformMediaOutputs(
             new LinuxOpenGlMediaOutput(),
-            new LinuxNativeSurfaceMediaOutput());
+            static () => new LinuxNativeSurfaceMediaOutput());
 
     public static AppBuilder UseFrameFluxLinux(this AppBuilder builder)
     {

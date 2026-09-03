@@ -10,7 +10,8 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
     private readonly Action<MediaPresentationFailure> _presentationFailed;
     private readonly SoftwareBitmapMediaOutput _softwareOutput = new();
     private readonly IAvaloniaPlatformMediaOutput? _gpuOutput;
-    private readonly IAvaloniaPlatformMediaOutput? _nativeOutput;
+    private readonly Func<IAvaloniaPlatformMediaOutput?>? _nativeOutputFactory;
+    private IAvaloniaPlatformMediaOutput? _nativeOutput;
     private Control? _overlay;
     private MediaVideoPresentationMode? _presentationFallbackMode;
     private bool _disposed;
@@ -26,7 +27,7 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         Surface.Children.Add(_softwareOutput);
         var platformOutputs = AvaloniaPlatformMediaOutputRegistry.TryCreate();
         _gpuOutput = platformOutputs.GpuComposition;
-        _nativeOutput = platformOutputs.NativeSurface;
+        _nativeOutputFactory = platformOutputs.CreateNativeSurface;
         if (_gpuOutput is not null)
         {
             _gpuOutput.Surface.IsVisible = false;
@@ -34,13 +35,7 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
             _gpuOutput.PresentationFailed += OnPlatformPresentationFailed;
             Surface.Children.Add(_gpuOutput.Surface);
         }
-        if (_nativeOutput is not null)
-        {
-            _nativeOutput.Surface.IsVisible = false;
-            _nativeOutput.FramePresented += OnNativeFramePresented;
-            _nativeOutput.PresentationFailed += OnPlatformPresentationFailed;
-            Surface.Children.Add(_nativeOutput.Surface);
-        }
+
     }
 
     internal Grid Surface { get; }
@@ -53,13 +48,17 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         var presentationMode = _presentationFallbackMode ?? requestedMode;
         var platformGpuPresentationAvailable =
             presentationMode == MediaVideoPresentationMode.NativeSurface
-                ? _nativeOutput is not null
+                ? _nativeOutputFactory is not null
                 : _gpuOutput is not null;
         var plan = MediaPresentationPolicy.Resolve(
             presentationMode,
             options,
             platformGpuPresentationAvailable,
             _overlay is not null);
+        if (plan.UsesNativeSurface)
+        {
+            EnsureNativeOutput();
+        }
         SetStretch(stretch);
         if (_gpuOutput is not null)
         {
@@ -166,10 +165,28 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
         }
     }
 
+    private void EnsureNativeOutput()
+    {
+        if (_nativeOutput is not null)
+        {
+            return;
+        }
+
+        var nativeOutput = _nativeOutputFactory?.Invoke() ??
+            throw new PlatformNotSupportedException(
+                "The active Avalonia renderer cannot create a native media surface.");
+        nativeOutput.Surface.IsVisible = false;
+        nativeOutput.FramePresented += OnNativeFramePresented;
+        nativeOutput.PresentationFailed += OnPlatformPresentationFailed;
+        Surface.Children.Add(nativeOutput.Surface);
+        _nativeOutput = nativeOutput;
+    }
+
     private void OnSoftwareFramePresented(object? sender, EventArgs args)
     {
-        if (_gpuOutput is not null)
+        if (_gpuOutput?.Surface.IsVisible == true)
         {
+            _gpuOutput.Clear();
             _gpuOutput.Surface.IsVisible = false;
         }
         if (_nativeOutput is not null)
@@ -182,6 +199,13 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
 
     private void OnGpuFramePresented(object? sender, EventArgs args)
     {
+        if (_gpuOutput?.Surface.IsVisible == true &&
+            !_softwareOutput.IsVisible &&
+            _nativeOutput?.Surface.IsVisible != true)
+        {
+            return;
+        }
+
         if (_nativeOutput is not null)
         {
             _nativeOutput.Surface.IsVisible = false;
