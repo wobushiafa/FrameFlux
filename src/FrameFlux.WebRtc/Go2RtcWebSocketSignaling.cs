@@ -67,7 +67,7 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
         {
             Type = "webrtc/offer",
             Value = offerSdp
-        });
+        }, WebRtcJsonSerializerContext.Default.Go2RtcSignalingMessage);
 
         await SendTextAsync(offerPayload, linkedCts.Token).ConfigureAwait(false);
     }
@@ -120,7 +120,7 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
         {
             Type = "webrtc/candidate",
             Value = candidateStr
-        });
+        }, WebRtcJsonSerializerContext.Default.Go2RtcSignalingMessage);
 
         _ = SendTextAsync(payload, _cts.Token);
     }
@@ -168,7 +168,7 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
     {
         try
         {
-            var msg = JsonSerializer.Deserialize<Go2RtcSignalingMessage>(json);
+            var msg = JsonSerializer.Deserialize(json, WebRtcJsonSerializerContext.Default.Go2RtcSignalingMessage);
             if (msg is null || string.IsNullOrEmpty(msg.Type))
             {
                 return;
@@ -278,7 +278,7 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
         }
     }
 
-    private sealed class Go2RtcSignalingMessage
+    internal sealed class Go2RtcSignalingMessage
     {
         [System.Text.Json.Serialization.JsonPropertyName("type")]
         public string? Type { get; set; }

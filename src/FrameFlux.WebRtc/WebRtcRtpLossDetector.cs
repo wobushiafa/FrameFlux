@@ -24,7 +24,7 @@ public sealed class WebRtcRtpLossDetector
     /// <summary>
     /// Minimum interval between consecutive RTCP PLI requests in milliseconds.
     /// </summary>
-    public int MinPliIntervalMs { get; set; } = 250;
+    public int MinPliIntervalMs { get; set; } = 1000;
 
     /// <summary>
     /// Gets the total number of processed RTP packets.
@@ -45,7 +45,7 @@ public sealed class WebRtcRtpLossDetector
     /// <summary>
     /// Processes an incoming RTP packet sequence number.
     /// </summary>
-    public void ProcessRtpPacket(uint senderSsrc, uint mediaSsrc, ushort seqNum)
+    public bool ProcessRtpPacket(uint senderSsrc, uint mediaSsrc, ushort seqNum)
     {
         Interlocked.Increment(ref _packetCount);
 
@@ -58,7 +58,7 @@ public sealed class WebRtcRtpLossDetector
             {
                 _lastSeqNum = seqNum;
                 _initialized = true;
-                return;
+                return false;
             }
 
             var diff = (ushort)(seqNum - _lastSeqNum);
@@ -67,13 +67,13 @@ public sealed class WebRtcRtpLossDetector
             {
                 // Normal sequential progression
                 _lastSeqNum = seqNum;
-                return;
+                return false;
             }
 
             if (diff == 0)
             {
                 // Duplicate packet
-                return;
+                return false;
             }
 
             if (diff < 3000)
@@ -84,24 +84,20 @@ public sealed class WebRtcRtpLossDetector
 
                 SendNackBatch((ushort)(_lastSeqNum + 1), missingCount);
                 _lastSeqNum = seqNum;
-
-                // If massive packet burst loss, also request an immediate keyframe refresh
-                if (missingCount >= 10)
-                {
-                    RequestKeyFrameRateLimited();
-                }
-                return;
+                RequestKeyFrameRateLimited();
+                return true;
             }
 
             if (diff > 60000)
             {
                 // Late retransmission or out-of-order packet arrived, ignore for advancing _lastSeqNum
-                return;
+                return false;
             }
 
             // Severe sequence discontinuity (e.g. SSRC reset or link reset)
             _lastSeqNum = seqNum;
             RequestKeyFrameRateLimited();
+            return true;
         }
     }
 

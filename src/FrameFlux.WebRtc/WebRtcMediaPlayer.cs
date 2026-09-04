@@ -13,11 +13,14 @@ namespace FrameFlux.WebRtc;
 /// </summary>
 public sealed class WebRtcMediaPlayer : IMediaPlayer
 {
+    private static readonly TimeSpan VideoRtpReorderTimeout = TimeSpan.FromMilliseconds(80);
+
     private readonly object _sync = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly WebRtcPlayerOptions _webrtcOptions;
     private readonly WebRtcFrameBufferPool _framePool;
     private readonly WebRtcVideoSink _videoSink;
+    private readonly WebRtcEncodedFrameGate _encodedFrameGate = new();
 
     private RTCPeerConnection? _peerConnection;
     private Uri? _sessionResourceUri;
@@ -38,6 +41,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
     private long _frameSequence;
     private uint _lastVideoSsrc;
     private volatile bool _hasReceivedKeyFrame;
+    private volatile bool _decoderRefreshPending;
     private CancellationTokenSource? _keyFrameRequestCts;
     private readonly WebRtcRtpLossDetector _lossDetector;
     private bool _disposed;
@@ -345,6 +349,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                 _videoSink.GetVideoSinkFormats(),
                 MediaStreamStatusEnum.RecvOnly);
             pc.addTrack(videoTrack);
+            pc.VideoStream?.AddBuffer(VideoRtpReorderTimeout);
 
             // Configure audio receive track if audio enabled
             if (_options.Audio.IsEnabled)
@@ -375,7 +380,27 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                     var firstTime = _lastVideoSsrc == 0;
                     _lastVideoSsrc = rtpPacket.Header.SyncSource;
                     var localSsrc = pc.VideoLocalTrack?.Ssrc ?? 12345678u;
-                    _lossDetector.ProcessRtpPacket(localSsrc, rtpPacket.Header.SyncSource, (ushort)rtpPacket.Header.SequenceNumber);
+                    var packetLossDetected = _lossDetector.ProcessRtpPacket(
+                        localSsrc,
+                        rtpPacket.Header.SyncSource,
+                        (ushort)rtpPacket.Header.SequenceNumber);
+                    if (packetLossDetected)
+                    {
+                        _decoderRefreshPending = true;
+                    }
+
+                    var completedFrame = _encodedFrameGate.CompletePacket(
+                        rtpPacket.Header.Timestamp,
+                        rtpPacket.Header.MarkerBit == 1,
+                        packetLossDetected);
+                    if (completedFrame is { } frame)
+                    {
+                        DecodeVideoFrame(
+                            frame.Endpoint,
+                            frame.Timestamp,
+                            frame.Payload,
+                            frame.Format);
+                    }
 
                     if (firstTime && !_hasReceivedKeyFrame)
                     {
@@ -753,27 +778,55 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
 
     private void OnVideoFrameReceived(IPEndPoint endpoint, uint timestamp, byte[] payload, VideoFormat format)
     {
+        bool deferUntilRtpValidation;
+        lock (_sync)
+        {
+            deferUntilRtpValidation = _peerConnection is not null;
+        }
+
+        if (deferUntilRtpValidation)
+        {
+            _encodedFrameGate.Queue(new WebRtcEncodedFrame(endpoint, timestamp, payload, format));
+            return;
+        }
+
+        DecodeVideoFrame(endpoint, timestamp, payload, format);
+    }
+
+    private void DecodeVideoFrame(IPEndPoint endpoint, uint timestamp, byte[] payload, VideoFormat format)
+    {
         if (_disposed || _state != MediaPlaybackState.Playing)
         {
             return;
         }
 
-        if (!_hasReceivedKeyFrame && IsKeyFrame(payload, format.Codec))
+        var requiresKeyFrameRecovery = format.Codec is VideoCodecsEnum.H264 or VideoCodecsEnum.H265;
+        var isKeyFrame = IsKeyFrame(payload, format.Codec);
+
+        if (requiresKeyFrameRecovery &&
+            (!_hasReceivedKeyFrame || _decoderRefreshPending) &&
+            !isKeyFrame)
         {
+            return;
+        }
+
+        if (requiresKeyFrameRecovery && isKeyFrame)
+        {
+            if ((!_hasReceivedKeyFrame || _decoderRefreshPending) &&
+                _decoder is FfmpegWebRtcVideoDecoder ffmpegDecoder)
+            {
+                ffmpegDecoder.Flush();
+            }
+
+            _decoderRefreshPending = false;
             _hasReceivedKeyFrame = true;
         }
 
-        if (_decoder.CanDecode(format))
+        if (_decoder.CanDecode(format) &&
+            _decoder.TryDecode(payload, format, _framePool, out var decodedFrame) &&
+            decodedFrame is not null)
         {
-            if (_decoder.TryDecode(payload, format, _framePool, out var decodedFrame) && decodedFrame is not null)
-            {
-                DeliverFrame(decodedFrame);
-            }
-            else
-            {
-                // Decode failed or corrupt frame dropped - trigger rate-limited keyframe refresh
-                _lossDetector.RequestKeyFrameRateLimited();
-            }
+            DeliverFrame(decodedFrame);
         }
     }
 
@@ -930,6 +983,8 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
     private void StartKeyFrameRequester()
     {
         _hasReceivedKeyFrame = false;
+        _decoderRefreshPending = false;
+        _encodedFrameGate.Reset();
         _keyFrameRequestCts?.Cancel();
         _keyFrameRequestCts?.Dispose();
         var cts = new CancellationTokenSource();
@@ -937,7 +992,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
 
         _ = Task.Run(async () =>
         {
-            for (var i = 0; i < 10 && !cts.IsCancellationRequested; i++)
+            for (var i = 0; i < 10 && !cts.IsCancellationRequested && !_hasReceivedKeyFrame; i++)
             {
                 RequestKeyFrame();
                 try
@@ -952,40 +1007,81 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         });
     }
 
-    private static bool IsKeyFrame(ReadOnlySpan<byte> payload, VideoCodecsEnum codec)
+    private static bool IsKeyFrame(byte[] payload, VideoCodecsEnum codec)
     {
-        if (payload.Length < 5)
+        if (payload.Length == 0)
+        {
+            return false;
+        }
+
+        if (codec is not (VideoCodecsEnum.H264 or VideoCodecsEnum.H265))
+        {
+            return true;
+        }
+
+        var foundStartCode = false;
+        for (var index = 0; index + 3 < payload.Length; index++)
+        {
+            var startCodeLength = payload[index] == 0 && payload[index + 1] == 0 && payload[index + 2] == 1
+                ? 3
+                : index + 4 < payload.Length &&
+                  payload[index] == 0 && payload[index + 1] == 0 &&
+                  payload[index + 2] == 0 && payload[index + 3] == 1
+                    ? 4
+                    : 0;
+
+            if (startCodeLength == 0)
+            {
+                continue;
+            }
+
+            foundStartCode = true;
+            var nalIndex = index + startCodeLength;
+            if (nalIndex < payload.Length && IsRecoveryNal(payload[nalIndex], codec))
+            {
+                return true;
+            }
+
+            index = nalIndex;
+        }
+
+        if (foundStartCode)
         {
             return false;
         }
 
         var offset = 0;
-        if (payload[0] == 0 && payload[1] == 0 && payload[2] == 1)
+        while (offset + 4 < payload.Length)
         {
-            offset = 3;
-        }
-        else if (payload[0] == 0 && payload[1] == 0 && payload[2] == 0 && payload[3] == 1)
-        {
-            offset = 4;
+            var nalLength = (payload[offset] << 24) |
+                (payload[offset + 1] << 16) |
+                (payload[offset + 2] << 8) |
+                payload[offset + 3];
+            if (nalLength <= 0 || nalLength > payload.Length - offset - 4)
+            {
+                break;
+            }
+
+            if (IsRecoveryNal(payload[offset + 4], codec))
+            {
+                return true;
+            }
+
+            offset += 4 + nalLength;
         }
 
-        if (offset >= payload.Length)
-        {
-            return false;
-        }
+        return IsRecoveryNal(payload[0], codec);
+    }
 
+    private static bool IsRecoveryNal(byte nalHeader, VideoCodecsEnum codec)
+    {
         if (codec == VideoCodecsEnum.H265)
         {
-            var nalType = (payload[offset] >> 1) & 0x3F;
-            return nalType is 19 or 20 or 21;
-        }
-        else if (codec == VideoCodecsEnum.H264)
-        {
-            var nalType = payload[offset] & 0x1F;
-            return nalType == 5;
+            var nalType = (nalHeader >> 1) & 0x3F;
+            return nalType is >= 16 and <= 21;
         }
 
-        return true;
+        return (nalHeader & 0x1F) == 5;
     }
 
     private static string EnhanceSdpOffer(string sdp)
@@ -1027,6 +1123,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         _keyFrameRequestCts?.Cancel();
         _keyFrameRequestCts = null;
         _lossDetector.Reset();
+        _encodedFrameGate.Reset();
         await _videoSink.CloseVideoSink().ConfigureAwait(false);
 
         Go2RtcWebSocketSignaling? wsSignaling;
@@ -1160,3 +1257,65 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         Error?.Invoke(this, new MediaPlaybackErrorEventArgs(error));
     }
 }
+
+internal sealed class WebRtcEncodedFrameGate
+{
+    private const int MaximumTrackedDamagedFrames = 32;
+
+    private readonly object _sync = new();
+    private readonly HashSet<uint> _damagedTimestamps = [];
+    private WebRtcEncodedFrame? _pendingFrame;
+
+    public void Queue(WebRtcEncodedFrame frame)
+    {
+        lock (_sync)
+        {
+            _pendingFrame = frame;
+        }
+    }
+
+    public WebRtcEncodedFrame? CompletePacket(uint timestamp, bool isMarker, bool packetLossDetected)
+    {
+        lock (_sync)
+        {
+            if (packetLossDetected)
+            {
+                if (_damagedTimestamps.Count >= MaximumTrackedDamagedFrames)
+                {
+                    _damagedTimestamps.Clear();
+                }
+
+                _damagedTimestamps.Add(timestamp);
+            }
+
+            if (!isMarker)
+            {
+                return null;
+            }
+
+            var isDamaged = _damagedTimestamps.Remove(timestamp);
+            if (_pendingFrame is not { } frame || frame.Timestamp != timestamp)
+            {
+                return null;
+            }
+
+            _pendingFrame = null;
+            return isDamaged ? null : frame;
+        }
+    }
+
+    public void Reset()
+    {
+        lock (_sync)
+        {
+            _pendingFrame = null;
+            _damagedTimestamps.Clear();
+        }
+    }
+}
+
+internal readonly record struct WebRtcEncodedFrame(
+    IPEndPoint Endpoint,
+    uint Timestamp,
+    byte[] Payload,
+    VideoFormat Format);
