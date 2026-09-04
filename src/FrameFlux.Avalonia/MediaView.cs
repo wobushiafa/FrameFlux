@@ -79,7 +79,8 @@ public sealed class MediaView : Control, IAsyncDisposable
     {
         _presentation = new MediaPresentationCoordinator(
             mode => EffectivePresentationMode = mode,
-            OnPresentationFailed);
+            OnPresentationFailed,
+            RefreshDiagnostics);
         _playback.StateChanged += OnPlayerStateChanged;
         _playback.Error += OnPlayerError;
         _presentation.SetStretch(Stretch);
@@ -389,11 +390,16 @@ public sealed class MediaView : Control, IAsyncDisposable
             () =>
             {
                 SetState(args.NewState);
-                var diagnostics = _playback.Diagnostics;
-                IsHardwareVideoDecodingActive = diagnostics.IsHardwareVideoDecodingActive;
-                VideoDecoderDiagnostics = diagnostics.VideoDecoderDiagnostics;
+                RefreshDiagnostics();
             },
             DispatcherPriority.Normal);
+
+    private void RefreshDiagnostics()
+    {
+        var diagnostics = _playback.RefreshDiagnostics();
+        IsHardwareVideoDecodingActive = diagnostics.IsHardwareVideoDecodingActive;
+        VideoDecoderDiagnostics = diagnostics.VideoDecoderDiagnostics;
+    }
 
     private void OnPlayerError(object? sender, MediaPlaybackErrorEventArgs args) =>
         Dispatcher.UIThread.Post(() => ReportError(args.Error), DispatcherPriority.Background);

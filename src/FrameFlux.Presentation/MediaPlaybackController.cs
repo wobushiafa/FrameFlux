@@ -22,6 +22,12 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
 
     public MediaDiagnostics Diagnostics => _diagnostics;
 
+    internal MediaDiagnostics RefreshDiagnostics()
+    {
+        _diagnostics = _player?.Diagnostics ?? MediaDiagnostics.Empty;
+        return _diagnostics;
+    }
+
     public bool HasPlayer => _player is not null;
 
     public TimeSpan Position => _player?.Position ?? TimeSpan.Zero;

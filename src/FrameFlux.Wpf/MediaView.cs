@@ -151,7 +151,8 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         _presentation = new MediaPresentationCoordinator(
             this,
             mode => SetValue(EffectivePresentationModePropertyKey, mode),
-            OnPresentationFailed);
+            OnPresentationFailed,
+            RefreshDiagnostics);
         _presentation.SetStretch(Stretch);
         _hasOverlayChildren = _presentation.HasOverlayChildren();
         _presentationReady = true;
@@ -504,15 +505,20 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
             DispatcherPriority.DataBind,
             new Action(() =>
             {
-                var diagnostics = _playback.Diagnostics;
-                SetValue(
-                    IsHardwareVideoDecodingActivePropertyKey,
-                    diagnostics.IsHardwareVideoDecodingActive);
-                SetValue(
-                    VideoDecoderDiagnosticsPropertyKey,
-                    diagnostics.VideoDecoderDiagnostics);
+                RefreshDiagnostics();
                 SetState(args.NewState);
             }));
+
+    private void RefreshDiagnostics()
+    {
+        var diagnostics = _playback.RefreshDiagnostics();
+        SetValue(
+            IsHardwareVideoDecodingActivePropertyKey,
+            diagnostics.IsHardwareVideoDecodingActive);
+        SetValue(
+            VideoDecoderDiagnosticsPropertyKey,
+            diagnostics.VideoDecoderDiagnostics);
+    }
 
     private void OnPlayerError(object? sender, MediaPlaybackErrorEventArgs args) =>
         Dispatcher.BeginInvoke(

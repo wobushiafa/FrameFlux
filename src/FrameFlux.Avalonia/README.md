@@ -48,7 +48,14 @@ backend package and set `PlayerFactory` before playback starts:
 
 ```csharp
 Player.PlayerFactory = new FfmpegMediaPlayerFactory();
+// Or, for WHEP/WebRTC sources:
+Player.PlayerFactory = new WebRtcMediaPlayerFactory();
 ```
+
+Both factories use the same Avalonia presentation outputs. On Windows,
+WebRTC software decoding feeds `SoftwareBitmap`; D3D11VA decoding can either
+transfer frames to `SoftwareBitmap` or deliver D3D11 textures directly to
+`GpuComposition` and `NativeSurface`.
 
 Software rendering supports snapshots and frame subscriptions on every
 target. On Windows, dedicated playback can select

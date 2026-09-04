@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Windows;
 using FrameFlux;
 using FrameFlux.FFmpeg;
@@ -8,13 +9,26 @@ namespace FrameFlux.Demo.Wpf;
 
 public partial class MainWindow : Window
 {
+    private static readonly IMediaPlayerFactory FfmpegPlayerFactory = new FfmpegMediaPlayerFactory();
+    private static readonly IMediaPlayerFactory WebRtcPlayerFactory = new WebRtcMediaPlayerFactory();
+
     private bool _configuringPlaybackModes;
+    private readonly DependencyPropertyDescriptor _hardwareDiagnosticsDescriptor;
+    private readonly DependencyPropertyDescriptor _decoderDiagnosticsDescriptor;
 
     public MainWindow()
     {
         InitializeComponent();
         InitializePlaybackControls();
-        Player.PlayerFactory = new WebRtcMediaPlayerFactory();
+        Player.PlayerFactory = FfmpegPlayerFactory;
+        _hardwareDiagnosticsDescriptor = DependencyPropertyDescriptor.FromProperty(
+            FrameFlux.Wpf.MediaView.IsHardwareVideoDecodingActiveProperty,
+            typeof(FrameFlux.Wpf.MediaView))!;
+        _decoderDiagnosticsDescriptor = DependencyPropertyDescriptor.FromProperty(
+            FrameFlux.Wpf.MediaView.VideoDecoderDiagnosticsProperty,
+            typeof(FrameFlux.Wpf.MediaView))!;
+        _hardwareDiagnosticsDescriptor.AddValueChanged(Player, Player_DiagnosticsChanged);
+        _decoderDiagnosticsDescriptor.AddValueChanged(Player, Player_DiagnosticsChanged);
         var options = new MediaOpenOptions
         {
             Network = new MediaNetworkOptions
@@ -99,6 +113,9 @@ public partial class MainWindow : Window
     private async Task StartSourceAsync(MediaSource source)
     {
         await Player.StopAsync();
+        Player.PlayerFactory = IsWebRtcSource(source)
+            ? WebRtcPlayerFactory
+            : FfmpegPlayerFactory;
         Player.Source = source;
         SourceKindTextBlock.Text = source.Uri.IsFile ? "FILE" : "LIVE";
         SourceKindIndicator.Background = source.Uri.IsFile
@@ -106,6 +123,17 @@ public partial class MainWindow : Window
             : System.Windows.Media.Brushes.Red;
         StatusTextBlock.Text = source.Uri.IsFile ? "Opening file" : "Opening stream";
         await Player.StartAsync();
+    }
+
+    private static bool IsWebRtcSource(MediaSource source)
+    {
+        var uri = source.Uri;
+        return uri.Scheme.Equals("webrtc", StringComparison.OrdinalIgnoreCase) ||
+               uri.Scheme.Equals("ws", StringComparison.OrdinalIgnoreCase) ||
+               uri.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase) ||
+               uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ||
+               uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ||
+               uri.Scheme.Equals("data", StringComparison.OrdinalIgnoreCase);
     }
 
     private void SetSourceCommandsEnabled(bool enabled)
@@ -172,8 +200,14 @@ public partial class MainWindow : Window
     }
 
     private void Player_PlaybackStateChanged(object? sender, MediaPlaybackStateChangedEventArgs eventArgs) =>
+        RefreshPlaybackStatus(eventArgs.NewState);
+
+    private void Player_DiagnosticsChanged(object? sender, EventArgs eventArgs) =>
+        RefreshPlaybackStatus(Player.State);
+
+    private void RefreshPlaybackStatus(MediaPlaybackState state) =>
         StatusTextBlock.Text =
-            $"State: {eventArgs.NewState} | Presentation: {Player.EffectivePresentationMode?.ToString() ?? "none"} | HW decode: {Player.IsHardwareVideoDecodingActive} | Decoder: {Player.VideoDecoderDiagnostics}";
+            $"State: {state} | Presentation: {Player.EffectivePresentationMode?.ToString() ?? "none"} | HW decode: {Player.IsHardwareVideoDecodingActive} | Decoder: {Player.VideoDecoderDiagnostics}";
 
     private void Player_PlaybackError(object? sender, MediaPlaybackErrorEventArgs eventArgs) =>
         StatusTextBlock.Text = $"{eventArgs.Error.Code}: {eventArgs.Error.Message}";
@@ -181,6 +215,8 @@ public partial class MainWindow : Window
     protected override async void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
+        _hardwareDiagnosticsDescriptor.RemoveValueChanged(Player, Player_DiagnosticsChanged);
+        _decoderDiagnosticsDescriptor.RemoveValueChanged(Player, Player_DiagnosticsChanged);
         await Player.DisposeAsync();
     }
 }

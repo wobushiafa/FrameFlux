@@ -99,6 +99,31 @@ public sealed class MediaPlaybackControllerTests
     }
 
     [Fact]
+    public async Task RefreshDiagnostics_ReadsCurrentPlayerDiagnostics()
+    {
+        var player = new TestMediaPlayer();
+        await using var controller = new MediaPlaybackController();
+        await controller.StartAsync(
+            new TestMediaPlayerFactory(player),
+            MediaSource.Parse("rtsp://localhost/live"),
+            new MediaOpenOptions(),
+            new TestVideoOutput());
+
+        player.Diagnostics = new MediaDiagnostics(
+            true,
+            "D3D11VA active",
+            0,
+            0,
+            1,
+            null);
+
+        var diagnostics = controller.RefreshDiagnostics();
+
+        Assert.True(diagnostics.IsHardwareVideoDecodingActive);
+        Assert.Equal("D3D11VA active", controller.Diagnostics.VideoDecoderDiagnostics);
+    }
+
+    [Fact]
     public async Task StartAsync_DisposesPlayerWhenConfigurationFails()
     {
         var player = new TestMediaPlayer
@@ -211,7 +236,7 @@ public sealed class MediaPlaybackControllerTests
 
         public MediaCapabilities Capabilities { get; } = MediaCapabilities.None;
 
-        public MediaDiagnostics Diagnostics { get; } = MediaDiagnostics.Empty;
+        public MediaDiagnostics Diagnostics { get; set; } = MediaDiagnostics.Empty;
 
         public double Volume
         {

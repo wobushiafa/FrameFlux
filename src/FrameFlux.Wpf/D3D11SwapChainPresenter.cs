@@ -25,6 +25,8 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
 
     internal event Action<object?, MediaPresentationFailure>? PresentationFailed;
 
+    internal event EventHandler? FramePresented;
+
     public bool TryPresent(IMediaFrameLease frame)
     {
         if (_disposed || _failureTracker.IsExhausted ||
@@ -119,6 +121,7 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
                     Volatile.Read(ref _targetHeight),
                     (MediaStretchMode)Volatile.Read(ref _stretchMode));
                 _failureTracker.ReportSuccess();
+                FramePresented?.Invoke(this, EventArgs.Empty);
             }
         }
         catch (Exception exception)

@@ -8,6 +8,7 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
 {
     private readonly Action<MediaVideoPresentationMode?> _modeChanged;
     private readonly Action<MediaPresentationFailure> _presentationFailed;
+    private readonly Action _framePresented;
     private readonly SoftwareBitmapMediaOutput _softwareOutput = new();
     private readonly IAvaloniaPlatformMediaOutput? _gpuOutput;
     private readonly Func<IAvaloniaPlatformMediaOutput?>? _nativeOutputFactory;
@@ -18,10 +19,12 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
 
     internal MediaPresentationCoordinator(
         Action<MediaVideoPresentationMode?> modeChanged,
-        Action<MediaPresentationFailure> presentationFailed)
+        Action<MediaPresentationFailure> presentationFailed,
+        Action framePresented)
     {
         _modeChanged = modeChanged;
         _presentationFailed = presentationFailed;
+        _framePresented = framePresented;
         Surface = new Grid();
         _softwareOutput.FramePresented += OnSoftwareFramePresented;
         Surface.Children.Add(_softwareOutput);
@@ -184,6 +187,7 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
 
     private void OnSoftwareFramePresented(object? sender, EventArgs args)
     {
+        _framePresented();
         if (_gpuOutput?.Surface.IsVisible == true)
         {
             _gpuOutput.Clear();
@@ -199,6 +203,7 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
 
     private void OnGpuFramePresented(object? sender, EventArgs args)
     {
+        _framePresented();
         if (_gpuOutput?.Surface.IsVisible == true &&
             !_softwareOutput.IsVisible &&
             _nativeOutput?.Surface.IsVisible != true)
@@ -220,6 +225,7 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
 
     private void OnNativeFramePresented(object? sender, EventArgs args)
     {
+        _framePresented();
         if (_gpuOutput is not null)
         {
             _gpuOutput.Surface.IsVisible = false;
