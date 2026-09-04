@@ -1,27 +1,22 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
+using NAudio.Wave;
 
 namespace FrameFlux.WebRtc;
 
 /// <summary>
-/// Low latency, lightweight Windows waveOut audio output.
-/// Plays 16-bit linear PCM audio streams directly to the default Windows sound device
-/// without requiring any third-party audio packages.
+/// Buffered Windows audio output for decoded WebRTC PCM samples.
 /// </summary>
 public sealed class WebRtcWaveOutAudioOutput : IWebRtcAudioOutput
 {
-    private const uint WaveMapper = unchecked((uint)-1);
-    private const uint WhdrDone = 0x00000001;
-    private const ushort WaveFormatPcm = 1;
-    private const int MaximumQueuedBuffers = 16;
-
+    private static readonly TimeSpan MaximumBufferedDuration = TimeSpan.FromMilliseconds(250);
     private readonly object _sync = new();
-    private readonly Queue<PendingBuffer> _pendingBuffers = [];
-    private IntPtr _handle;
+    private WaveOutEvent? _output;
+    private BufferedWaveProvider? _provider;
     private int _sampleRate;
     private int _channels;
-    private double _volume = 1.0;
+    private double _volume = 1d;
     private bool _isMuted;
-    private bool _started;
     private bool _disposed;
 
     public bool IsSupported => OperatingSystem.IsWindows();
@@ -38,36 +33,44 @@ public sealed class WebRtcWaveOutAudioOutput : IWebRtcAudioOutput
 
         lock (_sync)
         {
-            if (_handle != IntPtr.Zero && _sampleRate == sampleRate && _channels == channels)
+            if (_disposed)
             {
                 return;
             }
 
-            CloseDeviceUnsafe();
-
-            _sampleRate = sampleRate;
-            _channels = channels;
-
-            var format = new WaveFormat
+            if (_output is not null && _sampleRate == sampleRate && _channels == channels)
             {
-                FormatTag = WaveFormatPcm,
-                Channels = checked((ushort)channels),
-                SamplesPerSecond = checked((uint)sampleRate),
-                AverageBytesPerSecond = checked((uint)(sampleRate * channels * sizeof(short))),
-                BlockAlign = checked((ushort)(channels * sizeof(short))),
-                BitsPerSample = 16,
-                ExtraSize = 0
-            };
-
-            var res = waveOutOpen(out _handle, WaveMapper, ref format, IntPtr.Zero, IntPtr.Zero, 0);
-            if (res != 0)
-            {
-                _handle = IntPtr.Zero;
                 return;
             }
 
-            waveOutPause(_handle);
-            _started = false;
+            ReleaseBackendUnsafe();
+
+            try
+            {
+                var provider = new BufferedWaveProvider(new WaveFormat(sampleRate, 16, channels))
+                {
+                    BufferDuration = TimeSpan.FromMilliseconds(500),
+                    DiscardOnBufferOverflow = true,
+                    ReadFully = true
+                };
+                var output = new WaveOutEvent
+                {
+                    DesiredLatency = 100,
+                    NumberOfBuffers = 3
+                };
+                output.Init(provider);
+                output.Volume = GetEffectiveVolumeUnsafe();
+
+                _sampleRate = sampleRate;
+                _channels = channels;
+                _provider = provider;
+                _output = output;
+                output.Play();
+            }
+            catch
+            {
+                ReleaseBackendUnsafe();
+            }
         }
     }
 
@@ -80,70 +83,29 @@ public sealed class WebRtcWaveOutAudioOutput : IWebRtcAudioOutput
 
         lock (_sync)
         {
-            if (_disposed || _handle == IntPtr.Zero)
+            var provider = _provider;
+            if (_disposed || provider is null)
             {
                 return;
             }
 
-            ReclaimCompletedBuffersUnsafe();
-
-            // To avoid latency accumulation in live streaming, cap queue depth
-            if (_pendingBuffers.Count >= MaximumQueuedBuffers)
+            // Sender and sound-device clocks drift independently. Drop accumulated
+            // latency before the bounded buffer overflows instead of retaining stale audio.
+            if (provider.BufferedDuration >= MaximumBufferedDuration)
             {
-                ReclaimAllBuffersUnsafe();
+                provider.ClearBuffer();
             }
 
-            var byteLength = samples.Length * sizeof(short);
-            var byteBuffer = new byte[byteLength];
-
-            // Apply software volume/mute attenuation
-            var vol = _isMuted ? 0.0 : Math.Clamp(_volume, 0.0, 1.0);
-            if (vol < 0.999)
+            var byteLength = checked(samples.Length * sizeof(short));
+            var buffer = ArrayPool<byte>.Shared.Rent(byteLength);
+            try
             {
-                for (var i = 0; i < samples.Length; i++)
-                {
-                    var scaled = (short)Math.Clamp((int)(samples[i] * vol), short.MinValue, short.MaxValue);
-                    byteBuffer[i * 2] = (byte)(scaled & 0xFF);
-                    byteBuffer[i * 2 + 1] = (byte)((scaled >> 8) & 0xFF);
-                }
+                MemoryMarshal.AsBytes(samples).CopyTo(buffer);
+                provider.AddSamples(buffer, 0, byteLength);
             }
-            else
+            finally
             {
-                MemoryMarshal.AsBytes(samples).CopyTo(byteBuffer);
-            }
-
-            var pinnedHandle = GCHandle.Alloc(byteBuffer, GCHandleType.Pinned);
-            var headerPtr = Marshal.AllocHGlobal(Marshal.SizeOf<WaveHeader>());
-
-            var header = new WaveHeader
-            {
-                Data = pinnedHandle.AddrOfPinnedObject(),
-                BufferLength = (uint)byteLength
-            };
-
-            Marshal.StructureToPtr(header, headerPtr, false);
-
-            if (waveOutPrepareHeader(_handle, headerPtr, Marshal.SizeOf<WaveHeader>()) != 0)
-            {
-                pinnedHandle.Free();
-                Marshal.FreeHGlobal(headerPtr);
-                return;
-            }
-
-            if (waveOutWrite(_handle, headerPtr, Marshal.SizeOf<WaveHeader>()) != 0)
-            {
-                waveOutUnprepareHeader(_handle, headerPtr, Marshal.SizeOf<WaveHeader>());
-                pinnedHandle.Free();
-                Marshal.FreeHGlobal(headerPtr);
-                return;
-            }
-
-            _pendingBuffers.Enqueue(new PendingBuffer(headerPtr, pinnedHandle));
-
-            if (!_started && _pendingBuffers.Count >= 2)
-            {
-                waveOutRestart(_handle);
-                _started = true;
+                ArrayPool<byte>.Shared.Return(buffer);
             }
         }
     }
@@ -152,47 +114,59 @@ public sealed class WebRtcWaveOutAudioOutput : IWebRtcAudioOutput
     {
         lock (_sync)
         {
-            _volume = Math.Clamp(volume, 0.0, 1.0);
+            _volume = Math.Clamp(volume, 0d, 1d);
             _isMuted = isMuted;
+            if (_output is not null)
+            {
+                _output.Volume = GetEffectiveVolumeUnsafe();
+            }
         }
     }
 
     public void Pause()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         lock (_sync)
         {
-            if (_handle != IntPtr.Zero && _started)
+            if (!_disposed)
             {
-                waveOutPause(_handle);
-                _started = false;
+                _output?.Pause();
             }
         }
     }
 
     public void Resume()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         lock (_sync)
         {
-            if (_handle != IntPtr.Zero && !_started && _pendingBuffers.Count > 0)
+            if (!_disposed)
             {
-                waveOutRestart(_handle);
-                _started = true;
+                _output?.Play();
             }
         }
     }
 
     public void Reset()
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         lock (_sync)
         {
-            if (_handle != IntPtr.Zero)
+            if (!_disposed)
             {
-                waveOutReset(_handle);
-                ReclaimAllBuffersUnsafe();
-                _started = false;
+                _provider?.ClearBuffer();
             }
         }
     }
@@ -201,118 +175,41 @@ public sealed class WebRtcWaveOutAudioOutput : IWebRtcAudioOutput
     {
         lock (_sync)
         {
-            if (_disposed) return;
+            if (_disposed)
+            {
+                return;
+            }
+
             _disposed = true;
-            CloseDeviceUnsafe();
+            ReleaseBackendUnsafe();
         }
     }
 
-    private void ReclaimCompletedBuffersUnsafe()
+    private float GetEffectiveVolumeUnsafe() =>
+        _isMuted ? 0f : (float)_volume;
+
+    private void ReleaseBackendUnsafe()
     {
-        while (_pendingBuffers.Count > 0)
+        var output = _output;
+        _output = null;
+        _provider = null;
+        _sampleRate = 0;
+        _channels = 0;
+
+        if (output is null)
         {
-            var peek = _pendingBuffers.Peek();
-            var header = Marshal.PtrToStructure<WaveHeader>(peek.HeaderPointer);
-            if ((header.Flags & WhdrDone) != 0)
-            {
-                var buffer = _pendingBuffers.Dequeue();
-                ReleaseBufferUnsafe(buffer);
-            }
-            else
-            {
-                break;
-            }
+            return;
         }
-    }
 
-    private void ReclaimAllBuffersUnsafe()
-    {
-        while (_pendingBuffers.TryDequeue(out var buffer))
+        try
         {
-            ReleaseBufferUnsafe(buffer);
+            output.Stop();
         }
-    }
-
-    private void ReleaseBufferUnsafe(PendingBuffer buffer)
-    {
-        if (_handle != IntPtr.Zero)
+        catch
         {
-            waveOutUnprepareHeader(_handle, buffer.HeaderPointer, Marshal.SizeOf<WaveHeader>());
+            // The audio device may already be unavailable.
         }
 
-        if (buffer.PinnedHandle.IsAllocated)
-        {
-            buffer.PinnedHandle.Free();
-        }
-
-        Marshal.FreeHGlobal(buffer.HeaderPointer);
+        output.Dispose();
     }
-
-    private void CloseDeviceUnsafe()
-    {
-        if (_handle == IntPtr.Zero) return;
-
-        waveOutReset(_handle);
-        ReclaimAllBuffersUnsafe();
-        waveOutClose(_handle);
-        _handle = IntPtr.Zero;
-        _started = false;
-    }
-
-    private readonly record struct PendingBuffer(IntPtr HeaderPointer, GCHandle PinnedHandle);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WaveFormat
-    {
-        public ushort FormatTag;
-        public ushort Channels;
-        public uint SamplesPerSecond;
-        public uint AverageBytesPerSecond;
-        public ushort BlockAlign;
-        public ushort BitsPerSample;
-        public ushort ExtraSize;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct WaveHeader
-    {
-        public IntPtr Data;
-        public uint BufferLength;
-        public uint BytesRecorded;
-        public IntPtr User;
-        public uint Flags;
-        public uint Loops;
-        public IntPtr Next;
-        public IntPtr Reserved;
-    }
-
-    [DllImport("winmm.dll")]
-    private static extern int waveOutOpen(
-        out IntPtr hWaveOut,
-        uint uDeviceID,
-        ref WaveFormat lpFormat,
-        IntPtr dwCallback,
-        IntPtr dwInstance,
-        uint fdwOpen);
-
-    [DllImport("winmm.dll")]
-    private static extern int waveOutPrepareHeader(IntPtr hWaveOut, IntPtr lpWaveOutHdr, int uSize);
-
-    [DllImport("winmm.dll")]
-    private static extern int waveOutUnprepareHeader(IntPtr hWaveOut, IntPtr lpWaveOutHdr, int uSize);
-
-    [DllImport("winmm.dll")]
-    private static extern int waveOutWrite(IntPtr hWaveOut, IntPtr lpWaveOutHdr, int uSize);
-
-    [DllImport("winmm.dll")]
-    private static extern int waveOutPause(IntPtr hWaveOut);
-
-    [DllImport("winmm.dll")]
-    private static extern int waveOutRestart(IntPtr hWaveOut);
-
-    [DllImport("winmm.dll")]
-    private static extern int waveOutReset(IntPtr hWaveOut);
-
-    [DllImport("winmm.dll")]
-    private static extern int waveOutClose(IntPtr hWaveOut);
 }

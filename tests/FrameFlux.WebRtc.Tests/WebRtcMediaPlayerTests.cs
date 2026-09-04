@@ -362,6 +362,46 @@ public sealed class WebRtcMediaPlayerTests
     }
 
     [Fact]
+    public async Task Player_ForwardsVolumeAndMuteToAudioOutput()
+    {
+        var audioOutput = new TrackingWebRtcAudioOutput();
+        await using var player = new WebRtcMediaPlayer(new WebRtcPlayerOptions
+        {
+            AudioOutput = audioOutput
+        });
+
+        player.Volume = 0.25;
+        player.IsMuted = true;
+
+        Assert.Equal(0.25, audioOutput.Volume);
+        Assert.True(audioOutput.IsMuted);
+    }
+
+    [Fact]
+    public void AudioOutput_SustainedWritesAndVolumeChanges_DoNotFail()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var output = new WebRtcWaveOutAudioOutput();
+        output.EnsureFormat(8000, 1);
+        var silence = new short[160];
+
+        for (var index = 0; index < 20000; index++)
+        {
+            if (index % 100 == 0)
+            {
+                output.SetVolume((index % 500) / 500d, index % 400 == 0);
+            }
+
+            output.WriteSamples(silence);
+        }
+
+        output.Reset();
+    }
+    [Fact]
     public async Task Test_KeyFrame_And_Sdp_Enhancement()
     {
         await using var player = new WebRtcMediaPlayer();
@@ -971,6 +1011,44 @@ public sealed class WebRtcMediaPlayerTests
         Assert.False(field.IsStatic);
     }
 
+    private sealed class TrackingWebRtcAudioOutput : IWebRtcAudioOutput
+    {
+        public bool IsSupported => true;
+
+        public double Volume { get; private set; }
+
+        public bool IsMuted { get; private set; }
+
+        public void EnsureFormat(int sampleRate, int channels)
+        {
+        }
+
+        public void WriteSamples(ReadOnlySpan<short> samples)
+        {
+        }
+
+        public void SetVolume(double volume, bool isMuted)
+        {
+            Volume = volume;
+            IsMuted = isMuted;
+        }
+
+        public void Pause()
+        {
+        }
+
+        public void Resume()
+        {
+        }
+
+        public void Reset()
+        {
+        }
+
+        public void Dispose()
+        {
+        }
+    }
     private sealed class DeferredOutputVideoDecoder : IWebRtcVideoDecoder
     {
         public MediaVideoDecodingPolicy DecodingPolicy { get; set; }

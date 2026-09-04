@@ -16,6 +16,7 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
     <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
     <ProjectReference Include="..\FrameFlux.Presentation\FrameFlux.Presentation.csproj" />
+    <PackageReference Include="NAudio" />
     <PackageReference Include="SIPSorcery" />
     <InternalsVisibleTo Include="FrameFlux.WebRtc.Tests" />
   </ItemGroup>

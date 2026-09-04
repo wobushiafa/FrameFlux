@@ -361,8 +361,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                     new List<AudioFormat>
                     {
                         new(AudioCodecsEnum.PCMA, 8),
-                        new(AudioCodecsEnum.PCMU, 0),
-                        new(AudioCodecsEnum.OPUS, 111)
+                        new(AudioCodecsEnum.PCMU, 0)
                     },
                     MediaStreamStatusEnum.RecvOnly);
                 pc.addTrack(audioTrack);
