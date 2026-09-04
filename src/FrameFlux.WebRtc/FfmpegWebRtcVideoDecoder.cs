@@ -144,7 +144,16 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                     // offset 64..79: int linesize[4]
                     // offset 104: int width
                     // offset 108: int height
+                    // offset 112: int flags (AV_FRAME_FLAG_CORRUPT = 1)
                     var sourceFrame = _frame;
+                    var frameFlags = Marshal.ReadInt32(sourceFrame, 112);
+                    if ((frameFlags & 1) != 0)
+                    {
+                        // Frame is marked corrupt due to packet loss; drop it to eliminate macroblock artifacts
+                        _frameUnref!(_frame);
+                        return false;
+                    }
+
                     var pixFmt = Marshal.ReadInt32(sourceFrame, 116);
                     var width = Marshal.ReadInt32(sourceFrame, 104);
                     var height = Marshal.ReadInt32(sourceFrame, 108);
@@ -197,6 +206,13 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                                 data0 = Marshal.ReadIntPtr(sourceFrame, 0);
                                 data1 = Marshal.ReadIntPtr(sourceFrame, IntPtr.Size);
                                 data2 = Marshal.ReadIntPtr(sourceFrame, IntPtr.Size * 2);
+                                var transFlags = Marshal.ReadInt32(sourceFrame, 112);
+                                if ((transFlags & 1) != 0)
+                                {
+                                    _frameUnref!(_frame);
+                                    _frameUnref!(_transferFrame);
+                                    return false;
+                                }
                                 transferred = true;
                             }
                         }

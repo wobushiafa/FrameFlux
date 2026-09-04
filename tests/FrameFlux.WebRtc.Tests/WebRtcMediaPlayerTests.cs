@@ -123,6 +123,73 @@ public sealed class WebRtcMediaPlayerTests
     }
 
     [Fact]
+    public void RTCPFeedback_Nack_Serialization_Succeeds()
+    {
+        var nack = new RTCPFeedback(12345u, 67890u, RTCPFeedbackTypesEnum.NACK, (ushort)42, (ushort)0);
+        var bytes = nack.GetBytes();
+        Assert.NotNull(bytes);
+        Assert.Equal(16, bytes.Length);
+        Assert.Equal(0x81, bytes[0]); // Version 2, FMT=1
+        Assert.Equal(205, bytes[1]);  // Payload Type 205 (RTPFB)
+    }
+
+    [Fact]
+    public void WebRtcRtpLossDetector_SequentialPackets_NoNackGenerated()
+    {
+        var nacks = new List<RTCPFeedback>();
+        var pliCount = 0;
+        var detector = new WebRtcRtpLossDetector(nacks.Add, () => pliCount++);
+
+        detector.ProcessRtpPacket(100, 200, 1);
+        detector.ProcessRtpPacket(100, 200, 2);
+        detector.ProcessRtpPacket(100, 200, 3);
+        detector.ProcessRtpPacket(100, 200, 4);
+
+        Assert.Empty(nacks);
+        Assert.Equal(0, pliCount);
+        Assert.Equal(4, detector.PacketCount);
+        Assert.Equal(0, detector.LostPacketCount);
+    }
+
+    [Fact]
+    public void WebRtcRtpLossDetector_GapDetected_GeneratesNack()
+    {
+        var nacks = new List<RTCPFeedback>();
+        var pliCount = 0;
+        var detector = new WebRtcRtpLossDetector(nacks.Add, () => pliCount++);
+
+        detector.ProcessRtpPacket(100, 200, 10);
+        // Gap: 11, 12, 13 are missing!
+        detector.ProcessRtpPacket(100, 200, 14);
+
+        Assert.Single(nacks);
+        Assert.Equal(3, detector.LostPacketCount);
+        Assert.Equal(0, pliCount);
+    }
+
+    [Fact]
+    public void WebRtcRtpLossDetector_LargeGap_RequestsKeyFrameRateLimited()
+    {
+        var nacks = new List<RTCPFeedback>();
+        var pliCount = 0;
+        var detector = new WebRtcRtpLossDetector(nacks.Add, () => pliCount++)
+        {
+            MinPliIntervalMs = 50
+        };
+
+        detector.ProcessRtpPacket(100, 200, 10);
+        // Huge gap of 15 missing packets:
+        detector.ProcessRtpPacket(100, 200, 26);
+
+        Assert.NotEmpty(nacks);
+        Assert.Equal(1, pliCount);
+
+        // Immediate subsequent call within interval is rate-limited
+        detector.RequestKeyFrameRateLimited();
+        Assert.Equal(1, pliCount);
+    }
+
+    [Fact]
     public void G711Decoder_DecodesAlawAndUlaw_Correctly()
     {
         byte[] alaw = [0x55, 0x00, 0xFF, 0x7F, 0xD5];

@@ -39,6 +39,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
     private uint _lastVideoSsrc;
     private volatile bool _hasReceivedKeyFrame;
     private CancellationTokenSource? _keyFrameRequestCts;
+    private readonly WebRtcRtpLossDetector _lossDetector;
     private bool _disposed;
 
     /// <summary>
@@ -57,6 +58,19 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         _framePool = new WebRtcFrameBufferPool(
             _webrtcOptions.MaxPoolBufferCount,
             _webrtcOptions.MaxPoolRetainedBytes);
+
+        _lossDetector = new WebRtcRtpLossDetector(
+            sendRtcpFeedback: feedback =>
+            {
+                lock (_sync)
+                {
+                    if (!_disposed && _peerConnection is not null && _state == MediaPlaybackState.Playing)
+                    {
+                        _peerConnection.SendRtcpFeedback(SDPMediaTypesEnum.video, feedback);
+                    }
+                }
+            },
+            requestKeyFrame: RequestKeyFrame);
 
         _videoSink = new WebRtcVideoSink(
             onRawImage: OnVideoSinkRawImage,
@@ -360,6 +374,9 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                 {
                     var firstTime = _lastVideoSsrc == 0;
                     _lastVideoSsrc = rtpPacket.Header.SyncSource;
+                    var localSsrc = pc.VideoLocalTrack?.Ssrc ?? 12345678u;
+                    _lossDetector.ProcessRtpPacket(localSsrc, rtpPacket.Header.SyncSource, (ushort)rtpPacket.Header.SequenceNumber);
+
                     if (firstTime && !_hasReceivedKeyFrame)
                     {
                         RequestKeyFrame();
@@ -752,9 +769,10 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
             {
                 DeliverFrame(decodedFrame);
             }
-            else if (!_hasReceivedKeyFrame)
+            else
             {
-                RequestKeyFrame();
+                // Decode failed or corrupt frame dropped - trigger rate-limited keyframe refresh
+                _lossDetector.RequestKeyFrameRateLimited();
             }
         }
     }
@@ -990,8 +1008,10 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                         codecName.Equals("VP9", StringComparison.OrdinalIgnoreCase) ||
                         codecName.Equals("AV1", StringComparison.OrdinalIgnoreCase))
                     {
+                        enhanced.Add($"a=rtcp-fb:{pt} nack");
                         enhanced.Add($"a=rtcp-fb:{pt} nack pli");
                         enhanced.Add($"a=rtcp-fb:{pt} ccm fir");
+                        enhanced.Add($"a=rtcp-fb:{pt} goog-remb");
                     }
                 }
             }
@@ -1006,6 +1026,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         _playbackStopwatch.Reset();
         _keyFrameRequestCts?.Cancel();
         _keyFrameRequestCts = null;
+        _lossDetector.Reset();
         await _videoSink.CloseVideoSink().ConfigureAwait(false);
 
         Go2RtcWebSocketSignaling? wsSignaling;
