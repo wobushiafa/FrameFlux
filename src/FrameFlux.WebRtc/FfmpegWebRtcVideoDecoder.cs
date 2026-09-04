@@ -13,7 +13,6 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
     private static readonly Lazy<bool> NativeAvailable = new(ProbeNativeLibraries);
     private static IntPtr _avUtilHandle;
     private static IntPtr _avCodecHandle;
-    private static IntPtr _hwDeviceCtx;
 
     private static AvCodecFindDecoderByName? _findDecoderByName;
     private static AvCodecAllocContext3? _allocContext3;
@@ -37,6 +36,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
     private static AvHwFrameTransferData? _hwFrameTransferData;
 
     private readonly object _sync = new();
+    private IntPtr _hwDeviceCtx;
     private IntPtr _codecContext;
     private IntPtr _packet;
     private IntPtr _frame;

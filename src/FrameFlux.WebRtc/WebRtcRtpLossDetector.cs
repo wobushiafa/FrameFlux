@@ -51,8 +51,19 @@ public sealed class WebRtcRtpLossDetector
 
         lock (_sync)
         {
+            var mediaSourceChanged = _initialized &&
+                mediaSsrc != 0 &&
+                _mediaSsrc != 0 &&
+                mediaSsrc != _mediaSsrc;
+
             _senderSsrc = senderSsrc != 0 ? senderSsrc : _senderSsrc;
             _mediaSsrc = mediaSsrc != 0 ? mediaSsrc : _mediaSsrc;
+
+            if (mediaSourceChanged)
+            {
+                _lastSeqNum = seqNum;
+                return false;
+            }
 
             if (!_initialized)
             {

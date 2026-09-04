@@ -13,8 +13,6 @@ namespace FrameFlux.WebRtc;
 /// </summary>
 public sealed class WebRtcMediaPlayer : IMediaPlayer
 {
-    private static readonly TimeSpan VideoRtpReorderTimeout = TimeSpan.FromMilliseconds(80);
-
     private readonly object _sync = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly WebRtcPlayerOptions _webrtcOptions;
@@ -39,7 +37,8 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
     private readonly IWebRtcAudioOutput _audioOutput;
     private Go2RtcWebSocketSignaling? _wsSignaling;
     private long _frameSequence;
-    private uint _lastVideoSsrc;
+    private long _peerConnectionGeneration;
+    private volatile uint _lastVideoSsrc;
     private volatile bool _hasReceivedKeyFrame;
     private volatile bool _decoderRefreshPending;
     private CancellationTokenSource? _keyFrameRequestCts;
@@ -339,6 +338,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
             };
 
             var pc = new RTCPeerConnection(config);
+            var connectionGeneration = Interlocked.Increment(ref _peerConnectionGeneration);
             lock (_sync)
             {
                 _peerConnection = pc;
@@ -349,7 +349,10 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                 _videoSink.GetVideoSinkFormats(),
                 MediaStreamStatusEnum.RecvOnly);
             pc.addTrack(videoTrack);
-            pc.VideoStream?.AddBuffer(VideoRtpReorderTimeout);
+            if (_webrtcOptions.VideoRtpReorderTimeout > TimeSpan.Zero)
+            {
+                pc.VideoStream?.AddBuffer(_webrtcOptions.VideoRtpReorderTimeout);
+            }
 
             // Configure audio receive track if audio enabled
             if (_options.Audio.IsEnabled)
@@ -368,21 +371,48 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
             // Subscribe to PeerConnection events
             pc.OnVideoFrameReceived += (ep, ts, payload, fmt) =>
             {
+                if (connectionGeneration != Interlocked.Read(ref _peerConnectionGeneration))
+                {
+                    return;
+                }
+
                 _videoSink.GotVideoFrame(ep, ts, payload, fmt);
             };
 
-            pc.OnAudioFrameReceived += OnAudioFrameReceived;
+            pc.OnAudioFrameReceived += frame =>
+            {
+                if (connectionGeneration == Interlocked.Read(ref _peerConnectionGeneration))
+                {
+                    OnAudioFrameReceived(frame);
+                }
+            };
 
             pc.OnRtpPacketReceived += (ep, mediaType, rtpPacket) =>
             {
+                if (connectionGeneration != Interlocked.Read(ref _peerConnectionGeneration))
+                {
+                    return;
+                }
+
                 if (mediaType == SDPMediaTypesEnum.video)
                 {
-                    var firstTime = _lastVideoSsrc == 0;
-                    _lastVideoSsrc = rtpPacket.Header.SyncSource;
+                    var remoteSsrc = rtpPacket.Header.SyncSource;
+                    var previousSsrc = _lastVideoSsrc;
+                    var isFirstPacket = previousSsrc == 0;
+                    var streamChanged = previousSsrc != 0 && previousSsrc != remoteSsrc;
+                    _lastVideoSsrc = remoteSsrc;
+
+                    if (streamChanged)
+                    {
+                        _encodedFrameGate.Reset();
+                        _hasReceivedKeyFrame = false;
+                        _decoderRefreshPending = true;
+                    }
+
                     var localSsrc = pc.VideoLocalTrack?.Ssrc ?? 12345678u;
                     var packetLossDetected = _lossDetector.ProcessRtpPacket(
                         localSsrc,
-                        rtpPacket.Header.SyncSource,
+                        remoteSsrc,
                         (ushort)rtpPacket.Header.SequenceNumber);
                     if (packetLossDetected)
                     {
@@ -402,7 +432,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                             frame.Format);
                     }
 
-                    if (firstTime && !_hasReceivedKeyFrame)
+                    if ((isFirstPacket || streamChanged) && !_hasReceivedKeyFrame)
                     {
                         RequestKeyFrame();
                     }
@@ -411,6 +441,11 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
 
             pc.onconnectionstatechange += state =>
             {
+                if (connectionGeneration != Interlocked.Read(ref _peerConnectionGeneration))
+                {
+                    return;
+                }
+
                 if (state == RTCPeerConnectionState.failed)
                 {
                     ReportError(new MediaPlaybackError(
@@ -949,6 +984,10 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
     /// </summary>
     public void RequestKeyFrame()
     {
+        RTCPeerConnection peerConnection;
+        uint localSsrc;
+        uint remoteSsrc;
+
         lock (_sync)
         {
             if (_disposed || _peerConnection is null || _state != MediaPlaybackState.Playing)
@@ -956,27 +995,28 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                 return;
             }
 
-            try
+            peerConnection = _peerConnection;
+            localSsrc = peerConnection.VideoLocalTrack?.Ssrc ?? 0;
+            if (localSsrc == 0)
             {
-                var localSsrc = _peerConnection.VideoLocalTrack?.Ssrc ?? 0;
-                if (localSsrc == 0)
-                {
-                    localSsrc = 12345678u;
-                }
-
-                var remoteSsrc = _peerConnection.VideoRemoteTrack?.Ssrc ?? 0;
-                if (remoteSsrc == 0)
-                {
-                    remoteSsrc = _lastVideoSsrc;
-                }
-
-                var pli = new RTCPFeedback(localSsrc, remoteSsrc, PSFBFeedbackTypesEnum.PLI);
-                _peerConnection.SendRtcpFeedback(SDPMediaTypesEnum.video, pli);
+                localSsrc = 12345678u;
             }
-            catch
+
+            remoteSsrc = peerConnection.VideoRemoteTrack?.Ssrc ?? 0;
+            if (remoteSsrc == 0)
             {
-                // Socket may not be ready yet
+                remoteSsrc = _lastVideoSsrc;
             }
+        }
+
+        try
+        {
+            var pli = new RTCPFeedback(localSsrc, remoteSsrc, PSFBFeedbackTypesEnum.PLI);
+            peerConnection.SendRtcpFeedback(SDPMediaTypesEnum.video, pli);
+        }
+        catch
+        {
+            // Socket may not be ready yet or can close after the state snapshot.
         }
     }
 
@@ -1007,7 +1047,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         });
     }
 
-    private static bool IsKeyFrame(byte[] payload, VideoCodecsEnum codec)
+    internal static bool IsKeyFrame(ReadOnlySpan<byte> payload, VideoCodecsEnum codec)
     {
         if (payload.Length == 0)
         {
@@ -1118,10 +1158,15 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
 
     private async Task StopInternalAsync(CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _peerConnectionGeneration);
         _playbackStopwatch.Stop();
         _playbackStopwatch.Reset();
-        _keyFrameRequestCts?.Cancel();
+        var keyFrameRequestCts = _keyFrameRequestCts;
         _keyFrameRequestCts = null;
+        keyFrameRequestCts?.Cancel();
+        keyFrameRequestCts?.Dispose();
+        _hasReceivedKeyFrame = false;
+        _decoderRefreshPending = false;
         _lossDetector.Reset();
         _encodedFrameGate.Reset();
         await _videoSink.CloseVideoSink().ConfigureAwait(false);
@@ -1135,6 +1180,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
             _wsSignaling = null;
             pc = _peerConnection;
             _peerConnection = null;
+            _lastVideoSsrc = 0;
             sessionUri = _sessionResourceUri;
             _sessionResourceUri = null;
         }
@@ -1263,7 +1309,8 @@ internal sealed class WebRtcEncodedFrameGate
     private const int MaximumTrackedDamagedFrames = 32;
 
     private readonly object _sync = new();
-    private readonly HashSet<uint> _damagedTimestamps = [];
+    private readonly Dictionary<uint, LinkedListNode<uint>> _damagedTimestamps = [];
+    private readonly LinkedList<uint> _damageOrder = [];
     private WebRtcEncodedFrame? _pendingFrame;
 
     public void Queue(WebRtcEncodedFrame frame)
@@ -1280,12 +1327,13 @@ internal sealed class WebRtcEncodedFrameGate
         {
             if (packetLossDetected)
             {
-                if (_damagedTimestamps.Count >= MaximumTrackedDamagedFrames)
+                if (!_damagedTimestamps.ContainsKey(timestamp))
                 {
-                    _damagedTimestamps.Clear();
+                    var node = _damageOrder.AddLast(timestamp);
+                    _damagedTimestamps.Add(timestamp, node);
                 }
 
-                _damagedTimestamps.Add(timestamp);
+                TrimDamagedTimestamps();
             }
 
             if (!isMarker)
@@ -1293,7 +1341,12 @@ internal sealed class WebRtcEncodedFrameGate
                 return null;
             }
 
-            var isDamaged = _damagedTimestamps.Remove(timestamp);
+            var isDamaged = _damagedTimestamps.Remove(timestamp, out var damageNode);
+            if (damageNode is not null)
+            {
+                _damageOrder.Remove(damageNode);
+            }
+
             if (_pendingFrame is not { } frame || frame.Timestamp != timestamp)
             {
                 return null;
@@ -1304,12 +1357,37 @@ internal sealed class WebRtcEncodedFrameGate
         }
     }
 
+    private void TrimDamagedTimestamps()
+    {
+        while (_damagedTimestamps.Count > MaximumTrackedDamagedFrames)
+        {
+            var node = _damageOrder.First;
+            if (node is null)
+            {
+                return;
+            }
+
+            if (_pendingFrame is { } pendingFrame && node.Value == pendingFrame.Timestamp)
+            {
+                node = node.Next;
+                if (node is null)
+                {
+                    return;
+                }
+            }
+
+            _damageOrder.Remove(node);
+            _damagedTimestamps.Remove(node.Value);
+        }
+    }
+
     public void Reset()
     {
         lock (_sync)
         {
             _pendingFrame = null;
             _damagedTimestamps.Clear();
+            _damageOrder.Clear();
         }
     }
 }

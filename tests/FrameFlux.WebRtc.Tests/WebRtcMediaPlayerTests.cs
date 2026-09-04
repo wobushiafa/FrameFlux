@@ -23,6 +23,7 @@ public sealed class WebRtcMediaPlayerTests
     }
 
     [Fact]
+    [Trait("Category", "Integration")]
     public async Task RealGo2Rtc_Test()
     {
         await using var player = new WebRtcMediaPlayer();
@@ -33,7 +34,6 @@ public sealed class WebRtcMediaPlayerTests
         var lastW = 0;
         var lastH = 0;
         var receivedAudioChunks = 0;
-        var payloadLog = new List<string>();
         var frameArrivalTimes = new List<TimeSpan>();
         var frameTimingSync = new object();
         var frameTimer = System.Diagnostics.Stopwatch.StartNew();
@@ -66,24 +66,6 @@ public sealed class WebRtcMediaPlayerTests
         await player.OpenAsync(source, options);
         var openDuration = sw.ElapsedMilliseconds;
 
-        if (player.PeerConnection != null)
-        {
-            player.PeerConnection.OnVideoFrameReceived += (ep, ts, payload, fmt) =>
-            {
-                if (payloadLog.Count < 20)
-                {
-                    lock (payloadLog)
-                    {
-                        if (payloadLog.Count < 20)
-                        {
-                            var hex = Convert.ToHexString(payload.Take(16).ToArray());
-                            payloadLog.Add($"len={payload.Length}, ts={ts}, hex={hex}");
-                        }
-                    }
-                }
-            };
-        }
-
         // Verify WebSocket signaling handshake completes in under 3 seconds (was 12+ seconds previously)
         Assert.True(openDuration < 3000, $"OpenAsync should complete rapidly, took {openDuration}ms");
 
@@ -115,6 +97,7 @@ public sealed class WebRtcMediaPlayerTests
     }
 
     [Fact]
+    [Trait("Category", "Integration")]
     public async Task RealGo2Rtc_HardwareRequired_D3D11_LiveTest()
     {
         await using var player = new WebRtcMediaPlayer();
@@ -241,6 +224,36 @@ public sealed class WebRtcMediaPlayerTests
     }
 
     [Fact]
+    public void WebRtcRtpLossDetector_SsrcChangeStartsFreshSequence()
+    {
+        var nacks = new List<RTCPFeedback>();
+        var pliCount = 0;
+        var detector = new WebRtcRtpLossDetector(nacks.Add, () => pliCount++);
+
+        Assert.False(detector.ProcessRtpPacket(100, 200, 40000));
+        Assert.False(detector.ProcessRtpPacket(100, 200, 40001));
+        Assert.False(detector.ProcessRtpPacket(100, 300, 10));
+        Assert.False(detector.ProcessRtpPacket(100, 300, 11));
+
+        Assert.Empty(nacks);
+        Assert.Equal(0, pliCount);
+        Assert.Equal(0, detector.LostPacketCount);
+    }
+
+    [Fact]
+    public void WebRtcRtpLossDetector_SequenceWrapAroundIsSequential()
+    {
+        var nacks = new List<RTCPFeedback>();
+        var detector = new WebRtcRtpLossDetector(nacks.Add, () => { });
+
+        Assert.False(detector.ProcessRtpPacket(100, 200, ushort.MaxValue));
+        Assert.False(detector.ProcessRtpPacket(100, 200, 0));
+
+        Assert.Empty(nacks);
+        Assert.Equal(0, detector.LostPacketCount);
+    }
+
+    [Fact]
     public void EncodedFrameGate_DropsFrameWhoseRtpTimestampHadPacketLoss()
     {
         var gate = new WebRtcEncodedFrameGate();
@@ -252,6 +265,27 @@ public sealed class WebRtcMediaPlayerTests
         gate.Queue(frame);
 
         Assert.Null(gate.CompletePacket(1234, isMarker: true, packetLossDetected: false));
+    }
+
+    [Fact]
+    public void EncodedFrameGate_DoesNotEvictDamageMarkerForPendingFrame()
+    {
+        var gate = new WebRtcEncodedFrameGate();
+        var pending = new WebRtcEncodedFrame(
+            new IPEndPoint(IPAddress.Loopback, 5004),
+            1,
+            [1, 2, 3],
+            new VideoFormat(VideoCodecsEnum.H264, 96));
+
+        gate.Queue(pending);
+        Assert.Null(gate.CompletePacket(1, isMarker: false, packetLossDetected: true));
+
+        for (uint timestamp = 2; timestamp <= 40; timestamp++)
+        {
+            Assert.Null(gate.CompletePacket(timestamp, isMarker: false, packetLossDetected: true));
+        }
+
+        Assert.Null(gate.CompletePacket(1, isMarker: true, packetLossDetected: false));
     }
 
     [Fact]
@@ -273,12 +307,7 @@ public sealed class WebRtcMediaPlayerTests
     [InlineData(VideoCodecsEnum.H265, new byte[] { 0, 0, 1, 0x40, 1, 2, 0, 0, 1, 0x26, 3, 4 })]
     public void IsKeyFrame_FindsRecoveryNalAfterParameterSets(VideoCodecsEnum codec, byte[] payload)
     {
-        var method = typeof(WebRtcMediaPlayer).GetMethod(
-            "IsKeyFrame",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-
-        Assert.NotNull(method);
-        Assert.True((bool)method.Invoke(null, new object[] { payload, codec })!);
+        Assert.True(WebRtcMediaPlayer.IsKeyFrame(payload, codec));
     }
 
     [Fact]
@@ -928,6 +957,18 @@ public sealed class WebRtcMediaPlayerTests
         var result = (bool)method.Invoke(decoder, new object[] { VideoCodecsEnum.H265 })!;
         Assert.True(result);
         Assert.True(decoder.IsHardwareAccelerated);
+    }
+
+    [Fact]
+    public void FfmpegWebRtcVideoDecoder_HardwareDeviceContext_IsInstanceOwned()
+    {
+        var field = typeof(FfmpegWebRtcVideoDecoder).GetField(
+            "_hwDeviceCtx",
+            System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.Instance);
+
+        Assert.NotNull(field);
+        Assert.False(field.IsStatic);
     }
 
     private sealed class DeferredOutputVideoDecoder : IWebRtcVideoDecoder

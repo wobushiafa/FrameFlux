@@ -38,6 +38,12 @@ public sealed class WebRtcPlayerOptions
     public TimeSpan SignalingTimeout { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
+    /// Maximum time to wait for out-of-order video RTP packets before treating a sequence gap as packet loss.
+    /// Set to <see cref="TimeSpan.Zero"/> to disable reordering. Defaults to 80 milliseconds.
+    /// </summary>
+    public TimeSpan VideoRtpReorderTimeout { get; init; } = TimeSpan.FromMilliseconds(80);
+
+    /// <summary>
     /// Optional custom video decoder instance.
     /// </summary>
     public IWebRtcVideoDecoder? VideoDecoder { get; init; }
