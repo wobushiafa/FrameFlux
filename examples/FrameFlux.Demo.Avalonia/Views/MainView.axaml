@@ -12,7 +12,7 @@
           ColumnSpacing="8">
       <TextBox x:Name="SourceTextBox"
                MinHeight="48"
-               PlaceholderText="RTSP URL or local file path"
+               PlaceholderText="RTSP, WHEP/WebRTC URL or local file path"
                Text="rtsp://username:password@camera-host:554/stream"
                AutomationProperties.Name="Media source" />
       <Button x:Name="OpenFileButton"

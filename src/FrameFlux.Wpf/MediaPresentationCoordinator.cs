@@ -10,6 +10,7 @@ internal sealed class MediaPresentationCoordinator : IDisposable
     private readonly Grid _surface;
     private readonly Action<MediaVideoPresentationMode?> _modeChanged;
     private readonly Action<MediaPresentationFailure> _presentationFailed;
+    private readonly Action _framePresented;
     private readonly SoftwareBitmapMediaOutput _softwareOutput = new();
     private readonly D3D11ImageMediaOutput _compositedOutput = new();
     private readonly D3D11SwapChainPresenter _nativePresenter = new();
@@ -19,11 +20,13 @@ internal sealed class MediaPresentationCoordinator : IDisposable
     internal MediaPresentationCoordinator(
         Grid surface,
         Action<MediaVideoPresentationMode?> modeChanged,
-        Action<MediaPresentationFailure> presentationFailed)
+        Action<MediaPresentationFailure> presentationFailed,
+        Action framePresented)
     {
         _surface = surface;
         _modeChanged = modeChanged;
         _presentationFailed = presentationFailed;
+        _framePresented = framePresented;
         _softwareOutput.FramePresented += OnSoftwareFramePresented;
         _surface.Children.Add(_softwareOutput);
         _compositedOutput.Visibility = Visibility.Collapsed;
@@ -31,6 +34,7 @@ internal sealed class MediaPresentationCoordinator : IDisposable
         _compositedOutput.PresentationFailed += OnCompositedPresentationFailed;
         _surface.Children.Add(_compositedOutput);
         _nativePresenter.Visibility = Visibility.Collapsed;
+        _nativePresenter.FramePresented += OnNativeFramePresented;
         _nativePresenter.PresentationFailed += OnNativePresentationFailed;
         _surface.Children.Add(_nativePresenter);
     }
@@ -99,6 +103,7 @@ internal sealed class MediaPresentationCoordinator : IDisposable
         _softwareOutput.FramePresented -= OnSoftwareFramePresented;
         _compositedOutput.FramePresented -= OnCompositedFramePresented;
         _compositedOutput.PresentationFailed -= OnCompositedPresentationFailed;
+        _nativePresenter.FramePresented -= OnNativeFramePresented;
         _nativePresenter.PresentationFailed -= OnNativePresentationFailed;
         _softwareOutput.Dispose();
         _compositedOutput.Dispose();
@@ -113,6 +118,7 @@ internal sealed class MediaPresentationCoordinator : IDisposable
 
     private void OnSoftwareFramePresented(object? sender, EventArgs args)
     {
+        _framePresented();
         _compositedOutput.Visibility = Visibility.Collapsed;
         _nativePresenter.Visibility = Visibility.Collapsed;
         _softwareOutput.Visibility = Visibility.Visible;
@@ -121,6 +127,7 @@ internal sealed class MediaPresentationCoordinator : IDisposable
 
     private void OnCompositedFramePresented(object? sender, EventArgs args)
     {
+        _framePresented();
         if (_compositedOutput.Visibility == Visibility.Visible &&
             _softwareOutput.Visibility == Visibility.Collapsed &&
             _nativePresenter.Visibility == Visibility.Collapsed)
@@ -132,6 +139,12 @@ internal sealed class MediaPresentationCoordinator : IDisposable
         _softwareOutput.Visibility = Visibility.Collapsed;
         _compositedOutput.Visibility = Visibility.Visible;
         _modeChanged(MediaVideoPresentationMode.GpuComposition);
+    }
+
+    private void OnNativeFramePresented(object? sender, EventArgs args)
+    {
+        _framePresented();
+        _modeChanged(MediaVideoPresentationMode.NativeSurface);
     }
 
     private void OnCompositedPresentationFailed(

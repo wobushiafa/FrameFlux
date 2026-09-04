@@ -5,11 +5,18 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using FrameFlux.Avalonia;
 using FrameFlux.FFmpeg;
+#if !ANDROID
+using FrameFlux.WebRtc;
+#endif
 
 namespace FrameFlux.Demo.Avalonia.Views;
 
 public sealed partial class MainView : UserControl
 {
+    private static readonly IMediaPlayerFactory FfmpegPlayerFactory = new FfmpegMediaPlayerFactory();
+#if !ANDROID
+    private static readonly IMediaPlayerFactory WebRtcPlayerFactory = new WebRtcMediaPlayerFactory();
+#endif
     private static readonly IBrush IdleBrush = new SolidColorBrush(Color.Parse("#6B7280"));
     private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.Parse("#22C55E"));
     private static readonly IBrush BusyBrush = new SolidColorBrush(Color.Parse("#F59E0B"));
@@ -21,7 +28,7 @@ public sealed partial class MainView : UserControl
     {
         InitializeComponent();
         InitializePlaybackControls();
-        Player.PlayerFactory = new FfmpegMediaPlayerFactory();
+        Player.PlayerFactory = FfmpegPlayerFactory;
         Player.PropertyChanged += Player_OnPropertyChanged;
         var options = new MediaOpenOptions
         {
@@ -127,6 +134,7 @@ public sealed partial class MainView : UserControl
     private async Task StartSourceAsync(MediaSource source, string? temporaryPath = null)
     {
         await Player.StopAsync();
+        Player.PlayerFactory = ResolvePlayerFactory(source);
         DeleteSupersededTemporaryFile(source);
         _temporaryMediaPath = temporaryPath ?? _temporaryMediaPath;
         Player.Source = source;
@@ -135,6 +143,28 @@ public sealed partial class MainView : UserControl
         SetStatus(source.Uri.IsFile ? "Opening file" : "Opening stream", BusyBrush);
         await Player.StartAsync();
     }
+
+    private static IMediaPlayerFactory ResolvePlayerFactory(MediaSource source)
+    {
+#if !ANDROID
+        return IsWebRtcSource(source) ? WebRtcPlayerFactory : FfmpegPlayerFactory;
+#else
+        return FfmpegPlayerFactory;
+#endif
+    }
+
+#if !ANDROID
+    private static bool IsWebRtcSource(MediaSource source)
+    {
+        var uri = source.Uri;
+        return uri.Scheme.Equals("webrtc", StringComparison.OrdinalIgnoreCase) ||
+               uri.Scheme.Equals("ws", StringComparison.OrdinalIgnoreCase) ||
+               uri.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase) ||
+               uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ||
+               uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ||
+               uri.Scheme.Equals("data", StringComparison.OrdinalIgnoreCase);
+    }
+#endif
 
     private static async Task<string> CopyToTemporaryFileAsync(IStorageFile file)
     {

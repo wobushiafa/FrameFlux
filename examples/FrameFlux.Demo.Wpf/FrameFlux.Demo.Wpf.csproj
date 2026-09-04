@@ -7,6 +7,7 @@
     <FrameFluxCopyNativeAssets>true</FrameFluxCopyNativeAssets>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\src\FrameFlux.WebRtc\FrameFlux.WebRtc.csproj" />
     <ProjectReference Include="..\..\src\FrameFlux.Wpf\FrameFlux.Wpf.csproj" />
     <ProjectReference Include="..\..\src\FrameFlux.FFmpeg\FrameFlux.FFmpeg.csproj" />
   </ItemGroup>

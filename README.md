@@ -1,8 +1,8 @@
 # FrameFlux
 
-FrameFlux 是一个基于 FFmpeg 的跨平台媒体播放库，支持 RTSP 直播和本地文件播放。硬件解码使用与目标 FFmpeg 公共头文件匹配的版本化 ABI 布局。
+FrameFlux 是一个跨平台媒体播放库，提供 FFmpeg 和 WebRTC 两套播放后端，支持 RTSP、WHEP/go2rtc WebRTC 直播和本地文件播放。硬件解码使用与目标 FFmpeg 公共头文件匹配的版本化 ABI 布局。
 
-当前能力包括音视频解码、平台音频输出、直播音画同步、本地文件时钟、Seek、Duration、0.25x 至 4x 音视频倍速，以及运行时音量和静音控制。音频倍速通过 FFmpeg `atempo` 保持音调，内部统一为 48 kHz、双声道、16 位有符号 PCM。
+当前能力包括音视频软硬件解码、平台音频输出、直播音画同步、本地文件时钟、Seek、Duration、0.25x 至 4x 音视频倍速，以及运行时音量和静音控制。音频倍速通过 FFmpeg `atempo` 保持音调，内部统一为 48 kHz、双声道、16 位有符号 PCM。
 
 ## 项目结构
 
@@ -10,6 +10,7 @@ FrameFlux 是一个基于 FFmpeg 的跨平台媒体播放库，支持 RTSP 直�
 | --- | --- | --- |
 | `src/FrameFlux.Abstractions` | `FrameFlux.Abstractions` | 与协议无关的播放器、媒体源、帧、能力和视频输出契约。 |
 | `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | 独立于 UI 的 FFmpeg 播放器，支持 RTSP 和本地文件，不附带原生二进制。 |
+| `src/FrameFlux.WebRtc` | `FrameFlux.WebRtc` | 基于 SIPSorcery 的 WebRTC 播放器，支持 WHEP、go2rtc、WebRTC URI 和 SDP/ICE 输入。 |
 | `src/FrameFlux.FFmpeg.Android` | `FrameFlux.FFmpeg.Android` | 接收 FFmpeg 解复用 H.264/HEVC 数据的 Android MediaCodec 硬件解码器。 |
 | `src/FrameFlux.Presentation` | `FrameFlux.Presentation` | UI 控件共享的、与渲染后端无关的播放生命周期。 |
 | `src/FrameFlux.Rendering.Windows` | `FrameFlux.Rendering.Windows` | Windows UI 控件共享的 Win32 和 D3D11 视频呈现。 |
@@ -24,8 +25,8 @@ FrameFlux 是一个基于 FFmpeg 的跨平台媒体播放库，支持 RTSP 直�
 
 | 示例 | 框架 | 播放集成 |
 | --- | --- | --- |
-| `examples/FrameFlux.Demo.Wpf` | WPF（Windows） | 使用可复用 `MediaView`，支持本地文件、Seek、倍速、音量和静音。 |
-| `examples/FrameFlux.Demo.Avalonia.Desktop` | Avalonia Desktop | 支持本地文件、Seek 和倍速；Windows 使用 D3D11，Linux 使用已注册的 EGL 后端。 |
+| `examples/FrameFlux.Demo.Wpf` | WPF（Windows） | 自动选择 FFmpeg/WebRTC，支持软硬解码和 `SoftwareBitmap`、`GpuComposition`、`NativeSurface` 三种呈现模式。 |
+| `examples/FrameFlux.Demo.Avalonia.Desktop` | Avalonia Desktop | 自动选择 FFmpeg/WebRTC；Windows 支持三种呈现模式，Linux 使用已注册的 EGL 后端。 |
 | `examples/FrameFlux.Demo.Avalonia.Android` | Avalonia Android | 在标准 Android Activity 中承载共享 AXAML 界面。 |
 
 ```powershell
@@ -48,7 +49,7 @@ AppBuilder.Configure<App>()
     .UseFrameFluxLinux();
 ```
 
-Windows 的 `NativeSurface` 使用 FFmpeg D3D11VA 解码纹理、D3D11 视频处理器和 DXGI 交换链，不会把视频帧读回 CPU。`GpuComposition` 会把解码纹理转换为共享 BGRA 纹理并导入框架合成器，因此允许 Avalonia 或 WPF 控件覆盖在视频上方。
+Windows 的 `NativeSurface` 可以使用 FFmpeg 或 WebRTC 的 D3D11VA 解码纹理、D3D11 视频处理器和 DXGI 交换链，不会把视频帧读回 CPU。`GpuComposition` 会把解码纹理转换为共享 BGRA 纹理并导入框架合成器，因此允许 Avalonia 或 WPF 控件覆盖在视频上方。
 
 Linux 在可用时使用 VAAPI 硬件解码，将 DRM PRIME DMA-BUF 通过 EGLImage 导入 GPU：
 
@@ -113,7 +114,12 @@ UI 包不依赖具体 FFmpeg 后端，应用负责注入播放器工厂：
 
 ```csharp
 Player.PlayerFactory = new FfmpegMediaPlayerFactory();
+
+// WHEP、go2rtc 或其他 WebRTC 输入
+Player.PlayerFactory = new WebRtcMediaPlayerFactory();
 ```
+
+Avalonia 和 WPF 使用同一套呈现契约。Windows 上的 WebRTC 软件解码输出到 `SoftwareBitmap`；D3D11VA 硬件解码既可回传软件位图，也可将 D3D11 纹理直接交给 `GpuComposition` 或 `NativeSurface`。`IsHardwareVideoDecodingActive` 和 `VideoDecoderDiagnostics` 会在首帧建立实际解码管线后刷新。
 
 WPF 可以直接使用打包的控件：
 
