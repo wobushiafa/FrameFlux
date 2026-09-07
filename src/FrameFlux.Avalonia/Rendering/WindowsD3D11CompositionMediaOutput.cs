@@ -21,12 +21,15 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
     private readonly WindowsD3D11CompositionTexture _texture = new();
     private readonly SemaphoreSlim _presentationGate = new(1, 1);
     private readonly MediaPresentationFailureTracker _failureTracker = new();
+    private readonly Action _presentPendingFrame;
     private ICompositionGpuInterop? _gpuInterop;
     private ICompositionImportedGpuImage? _importedImage;
     private CompositionDrawingSurface? _drawingSurface;
     private CompositionSurfaceVisual? _surfaceVisual;
     private Stretch _stretch = Stretch.Uniform;
     private long _importedGeneration;
+    private long _submittedFrames;
+    internal long SubmittedFrames => Interlocked.Read(ref _submittedFrames);
     private int _sourceWidth;
     private int _sourceHeight;
 
@@ -37,6 +40,7 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
 
     internal WindowsD3D11CompositionMediaOutput()
     {
+        _presentPendingFrame = PresentPendingFrame;
         ClipToBounds = true;
         IsHitTestVisible = false;
     }
@@ -77,16 +81,7 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
 
         if (schedulePresentation)
         {
-            try
-            {
-                Dispatcher.UIThread.Post(
-                    PresentPendingFrame,
-                    DispatcherPriority.Render);
-            }
-            catch
-            {
-                _frameSlot.Clear();
-            }
+            SchedulePresentation();
         }
 
         return true;
@@ -95,7 +90,7 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
     public void Clear()
     {
         _failureTracker.Reset();
-        _frameSlot.Clear();
+        _frameSlot.ReleasePendingFrame();
 
         _surfaceIsVisible = false;
         _gpuPresentationNotified = false;
@@ -168,6 +163,18 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
         return finalSize;
     }
 
+    private void SchedulePresentation()
+    {
+        try
+        {
+            Dispatcher.UIThread.Post(_presentPendingFrame, DispatcherPriority.Render);
+        }
+        catch
+        {
+            _frameSlot.Clear();
+        }
+    }
+
     private async void PresentPendingFrame()
     {
         await _presentationGate.WaitAsync();
@@ -175,7 +182,7 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
         try
         {
 
-            frame = _frameSlot.Take();
+            frame = _frameSlot.TakeForPresentation();
             if (frame is null)
             {
                 return;
@@ -235,6 +242,7 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
                 _importedImage,
                 checked((uint)ConsumerKey),
                 checked((uint)ProducerKey));
+            Interlocked.Increment(ref _submittedFrames);
             if (!_surfaceIsVisible)
             {
                 _surfaceVisual!.Visible = true;
@@ -269,6 +277,10 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
         {
             frame?.Dispose();
             _presentationGate.Release();
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
         }
     }
 

@@ -7,6 +7,15 @@ internal sealed class LatestMediaFrameSlot : IDisposable
     private bool _presentationScheduled;
     private bool _disposed;
 
+    public bool HasPendingFrame
+    {
+        get
+        {
+            lock (_sync)
+                return _pendingFrame is not null;
+        }
+    }
+
     public bool TrySubmit(IMediaFrameLease frame, out bool schedulePresentation)
     {
         ArgumentNullException.ThrowIfNull(frame);
@@ -38,6 +47,27 @@ internal sealed class LatestMediaFrameSlot : IDisposable
             _pendingFrame = null;
             _presentationScheduled = false;
             return frame;
+        }
+    }
+
+    // Retain the reservation until async GPU work completes. Pair with
+    // CompletePresentation and use ReleasePendingFrame while work is scheduled.
+    public IMediaFrameLease? TakeForPresentation()
+    {
+        lock (_sync)
+        {
+            var frame = _pendingFrame;
+            _pendingFrame = null;
+            return frame;
+        }
+    }
+
+    public bool CompletePresentation()
+    {
+        lock (_sync)
+        {
+            _presentationScheduled = !_disposed && _pendingFrame is not null;
+            return _presentationScheduled;
         }
     }
 

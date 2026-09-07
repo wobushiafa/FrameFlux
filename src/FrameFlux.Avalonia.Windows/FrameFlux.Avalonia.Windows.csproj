@@ -14,10 +14,12 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
+    <InternalsVisibleTo Include="FrameFlux.Avalonia.Windows.Tests" />
     <ProjectReference Include="..\FrameFlux.Avalonia\FrameFlux.Avalonia.csproj" />
     <ProjectReference Include="..\FrameFlux.Presentation\FrameFlux.Presentation.csproj" />
     <ProjectReference Include="..\FrameFlux.Rendering.Windows\FrameFlux.Rendering.Windows.csproj" />
     <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Skia" />
   </ItemGroup>
 
   <ItemGroup>
