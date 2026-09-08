@@ -36,6 +36,7 @@ The managed output must contain exactly one `.nupkg` and one `.snupkg` for each 
 Create disposable applications using only the local package directory as a package source and build at least these combinations:
 
 - .NET 8 console application referencing `FrameFlux.FFmpeg`.
+- .NET 8 console application referencing `FrameFlux.WebRtc`.
 - .NET 8 Windows WPF application referencing `FrameFlux.Wpf`.
 - .NET 8 Avalonia desktop application referencing the core Avalonia and desktop platform packages.
 - .NET 10 Android application referencing `FrameFlux.Avalonia.Android`.

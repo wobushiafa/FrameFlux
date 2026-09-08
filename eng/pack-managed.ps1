@@ -18,6 +18,7 @@ $projects = @(
     'src/FrameFlux.FFmpeg/FrameFlux.FFmpeg.csproj'
     'src/FrameFlux.FFmpeg.Android/FrameFlux.FFmpeg.Android.csproj'
     'src/FrameFlux.Presentation/FrameFlux.Presentation.csproj'
+    'src/FrameFlux.WebRtc/FrameFlux.WebRtc.csproj'
     'src/FrameFlux.Rendering.Windows/FrameFlux.Rendering.Windows.csproj'
     'src/FrameFlux.Wpf/FrameFlux.Wpf.csproj'
     'src/FrameFlux.Avalonia/FrameFlux.Avalonia.csproj'

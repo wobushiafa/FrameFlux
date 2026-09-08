@@ -2,7 +2,14 @@
 
 All notable changes to FrameFlux are documented in this file.
 
-## [0.1.0] - Unreleased
+## [0.1.1] - 2026-09-08
+
+### Changed
+
+- Improved Avalonia direct-GPU media rendering and Windows D3D11 composition startup behavior.
+- Reduced contention while starting concurrent media operations.
+
+## [0.1.0] - 2026-09-01
 
 ### Added
 
