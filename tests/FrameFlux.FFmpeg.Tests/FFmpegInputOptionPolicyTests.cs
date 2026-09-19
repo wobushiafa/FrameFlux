@@ -16,6 +16,14 @@ public sealed class FFmpegInputOptionPolicyTests
     }
 
     [Fact]
+    public void HlsDoesNotUseRtspLowLatencyOptions()
+    {
+        Assert.Empty(FFmpegInputOptionPolicy.GetLowLatencyOptions(
+            enabled: true,
+            isHls: true));
+    }
+
+    [Fact]
     public void DisabledLowLatencyDoesNotAddOptions()
     {
         Assert.Empty(FFmpegInputOptionPolicy.GetLowLatencyOptions(enabled: false));

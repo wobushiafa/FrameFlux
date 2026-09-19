@@ -117,7 +117,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
                 if (!Source.Uri.IsFile && value != 1d)
                 {
                     throw new NotSupportedException(
-                        "Live RTSP sources do not support playback-rate changes.");
+                        "Live sources do not support playback-rate changes.");
                 }
 
                 _playbackRate = value;
@@ -338,7 +338,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             ThrowIfDisposed();
             if (!Source.Uri.IsFile)
             {
-                throw new NotSupportedException("Live RTSP sources do not support pausing.");
+                throw new NotSupportedException("Live sources do not support pausing.");
             }
 
             var client = _client ?? throw new InvalidOperationException(

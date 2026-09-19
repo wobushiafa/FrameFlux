@@ -52,7 +52,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
     {
         if (options.Url == IntPtr.Zero)
         {
-            Error = "The RTSP URL is empty.";
+            Error = "The media URL is empty.";
             return -1;
         }
 
@@ -73,11 +73,20 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         IntPtr dictionary = IntPtr.Zero;
         try
         {
-            SetDictionary(ref dictionary, "rtsp_transport",
-                Marshal.PtrToStringUTF8(options.Transport) ?? "tcp");
+            var url = Marshal.PtrToStringUTF8(options.Url);
+            var hasUri = Uri.TryCreate(url, UriKind.Absolute, out var uri);
+            var isHls = hasUri && uri is not null && FfmpegSource.IsHls(uri);
+            if (hasUri && uri is not null &&
+                uri.Scheme is "rtsp" or "rtsps")
+            {
+                SetDictionary(ref dictionary, "rtsp_transport",
+                    Marshal.PtrToStringUTF8(options.Transport) ?? "tcp");
+            }
             SetTimeout(ref dictionary, "timeout", options.OpenTimeoutMilliseconds);
             SetTimeout(ref dictionary, "rw_timeout", options.ReadTimeoutMilliseconds);
-            foreach (var option in FFmpegInputOptionPolicy.GetLowLatencyOptions(options.LowLatency != 0))
+            foreach (var option in FFmpegInputOptionPolicy.GetLowLatencyOptions(
+                options.LowLatency != 0,
+                isHls))
             {
                 SetDictionary(ref dictionary, option.Key, option.Value);
             }

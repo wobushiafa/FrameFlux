@@ -70,7 +70,7 @@ public sealed class PlaybackRateAudioTests
         Assert.True(
             SpinWait.SpinUntil(() => output.WriteCount == 1, TimeSpan.FromSeconds(2)));
 
-        var synchronizer = new FfmpegPlaybackSynchronizer(isLive: false);
+        var synchronizer = new FfmpegPlaybackSynchronizer(usesPlaybackClock: true);
         synchronizer.SetPlaybackRate(4d, positionSeconds: 0d);
         using var cancellation = new CancellationTokenSource(
             TimeSpan.FromMilliseconds(500));
@@ -87,6 +87,80 @@ public sealed class PlaybackRateAudioTests
     }
 
     [Fact]
+    public void HlsPlaybackClock_RebasesAfterInputStall()
+    {
+        var synchronizer = new FfmpegPlaybackSynchronizer(
+            usesPlaybackClock: true,
+            lateFrameRebaseThreshold: TimeSpan.FromMilliseconds(20));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+
+        Assert.True(synchronizer.SynchronizeVideo(
+            videoPosition: 0d,
+            playbackPosition: 0d,
+            audioPlayback: null,
+            cancellation.Token));
+        Thread.Sleep(100);
+        Assert.True(synchronizer.SynchronizeVideo(
+            videoPosition: 0.01d,
+            playbackPosition: 0.01d,
+            audioPlayback: null,
+            cancellation.Token));
+
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        Assert.True(synchronizer.SynchronizeVideo(
+            videoPosition: 0.21d,
+            playbackPosition: 0.21d,
+            audioPlayback: null,
+            cancellation.Token));
+
+        Assert.True(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt) >=
+            TimeSpan.FromMilliseconds(150));
+    }
+
+    [Fact]
+    public void HlsPlaybackClock_RebasesAcrossMissingSegment()
+    {
+        var synchronizer = new FfmpegPlaybackSynchronizer(
+            usesPlaybackClock: true,
+            forwardJumpRebaseThreshold: TimeSpan.FromSeconds(1));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+
+        Assert.True(synchronizer.SynchronizeVideo(
+            videoPosition: 0d,
+            playbackPosition: 0d,
+            audioPlayback: null,
+            cancellation.Token));
+        Assert.True(synchronizer.SynchronizeVideo(
+            videoPosition: 10d,
+            playbackPosition: 10d,
+            audioPlayback: null,
+            cancellation.Token));
+        Assert.False(cancellation.IsCancellationRequested);
+    }
+
+    [Fact]
+    public void PlaybackClock_NewDecodeSessionAcceptsNewTimelineImmediately()
+    {
+        var synchronizer = new FfmpegPlaybackSynchronizer(usesPlaybackClock: true);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+
+        Assert.True(synchronizer.SynchronizeVideo(
+            videoPosition: 0d,
+            playbackPosition: 0d,
+            audioPlayback: null,
+            cancellation.Token));
+
+        synchronizer.ResetSession();
+
+        Assert.True(synchronizer.SynchronizeVideo(
+            videoPosition: 10d,
+            playbackPosition: 10d,
+            audioPlayback: null,
+            cancellation.Token));
+        Assert.False(cancellation.IsCancellationRequested);
+    }
+
+    [Fact]
     public void DrainAudio_WritesFramesAtNonDefaultPlaybackRate()
     {
         using var decoder = new QueuedPlatformDecoder(
@@ -96,7 +170,7 @@ public sealed class PlaybackRateAudioTests
             volume: 1d,
             muted: false,
             output: output);
-        var synchronizer = new FfmpegPlaybackSynchronizer(isLive: false);
+        var synchronizer = new FfmpegPlaybackSynchronizer(usesPlaybackClock: true);
 
         synchronizer.DrainAudio(decoder, controller, 3d);
 

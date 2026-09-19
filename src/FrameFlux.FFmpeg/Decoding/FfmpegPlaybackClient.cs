@@ -72,7 +72,7 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
     {
         if (_isLive)
         {
-            throw new NotSupportedException("Live RTSP sources do not support pausing.");
+            throw new NotSupportedException("Live sources do not support pausing.");
         }
 
         Volatile.Read(ref _audioPlayback)?.Reset();
@@ -92,7 +92,7 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
         MediaPlaybackClock.ValidateRate(rate);
         if (_isLive && rate != 1d)
         {
-            throw new NotSupportedException("Live RTSP sources do not support playback-rate changes.");
+            throw new NotSupportedException("Live sources do not support playback-rate changes.");
         }
 
         Volatile.Write(ref _playbackRate, rate);
@@ -106,7 +106,7 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         if (_isLive)
         {
-            throw new NotSupportedException("Live RTSP sources do not support seeking.");
+            throw new NotSupportedException("Live sources do not support seeking.");
         }
         if (position < TimeSpan.Zero || Duration is { } duration && position > duration)
         {
@@ -130,9 +130,13 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
         _reconnectState = new MediaReconnectState(options);
         _volume = options.Volume;
         _muted = options.IsMuted;
-        _isLive = Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
-            uri.Scheme is "rtsp" or "rtsps";
-        _playbackSynchronizer = new FfmpegPlaybackSynchronizer(_isLive);
+        var isHls = Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+            uri is not null && FfmpegSource.IsHls(uri);
+        _isLive = uri is not null && (uri.Scheme is "rtsp" or "rtsps" || isHls);
+        _playbackSynchronizer = new FfmpegPlaybackSynchronizer(
+            usesPlaybackClock: !_isLive || isHls,
+            lateFrameRebaseThreshold: isHls ? TimeSpan.FromMilliseconds(250) : null,
+            forwardJumpRebaseThreshold: isHls ? TimeSpan.FromSeconds(1) : null);
         FfmpegRuntimeDiagnostics.OnStreamClientCreated();
     }
 

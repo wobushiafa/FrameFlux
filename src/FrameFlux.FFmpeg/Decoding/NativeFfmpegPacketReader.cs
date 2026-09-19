@@ -64,7 +64,7 @@ internal sealed class NativeFfmpegPacketReader : IDisposable
         if (result < 0 || session.IsInvalid)
         {
             var message = session.IsInvalid
-                ? $"Unable to open RTSP packet source (native error {result})."
+                ? $"Unable to open media packet source (native error {result})."
                 : FrameFluxFFmpegNative.GetError(session);
             session.Dispose();
             throw new ApplicationException(message);
@@ -73,7 +73,7 @@ internal sealed class NativeFfmpegPacketReader : IDisposable
         if (FrameFluxFFmpegNative.GetStreamInfo(session, out var streamInfo) < 0)
         {
             session.Dispose();
-            throw new ApplicationException("The native RTSP packet reader returned invalid stream information.");
+            throw new ApplicationException("The native media packet reader returned invalid stream information.");
         }
 
         Width = streamInfo.Width;

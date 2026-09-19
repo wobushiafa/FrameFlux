@@ -5,15 +5,22 @@ namespace FrameFlux.FFmpeg;
 
 internal sealed class FfmpegPlaybackSynchronizer
 {
-    private readonly bool _isLive;
+    private readonly bool _usesPlaybackClock;
+    private readonly TimeSpan? _lateFrameRebaseThreshold;
+    private readonly TimeSpan? _forwardJumpRebaseThreshold;
     private readonly MediaPlaybackClock _playbackClock = new();
     private MediaClockSynchronizer _clockSynchronizer = new();
     private MediaSynchronizationDiagnostics _diagnostics =
         MediaSynchronizationDiagnostics.Empty;
 
-    internal FfmpegPlaybackSynchronizer(bool isLive)
+    internal FfmpegPlaybackSynchronizer(
+        bool usesPlaybackClock,
+        TimeSpan? lateFrameRebaseThreshold = null,
+        TimeSpan? forwardJumpRebaseThreshold = null)
     {
-        _isLive = isLive;
+        _usesPlaybackClock = usesPlaybackClock;
+        _lateFrameRebaseThreshold = lateFrameRebaseThreshold;
+        _forwardJumpRebaseThreshold = forwardJumpRebaseThreshold;
     }
 
     internal MediaSynchronizationDiagnostics Diagnostics => _diagnostics;
@@ -26,6 +33,7 @@ internal sealed class FfmpegPlaybackSynchronizer
 
     internal void ResetSession()
     {
+        _playbackClock.Reset();
         _clockSynchronizer = new MediaClockSynchronizer();
         _diagnostics = MediaSynchronizationDiagnostics.Empty;
     }
@@ -81,9 +89,11 @@ internal sealed class FfmpegPlaybackSynchronizer
         if (frame.Info.PresentationTimestamp == long.MinValue ||
             frame.Info.TimeBaseDenominator <= 0)
         {
-            return _isLive || _playbackClock.WaitUntil(
+            return !_usesPlaybackClock || _playbackClock.WaitUntil(
                 playbackPosition,
-                cancellationToken);
+                cancellationToken,
+                _lateFrameRebaseThreshold,
+                _forwardJumpRebaseThreshold);
         }
 
         var videoPosition = frame.Info.PresentationTimestamp *
@@ -106,11 +116,13 @@ internal sealed class FfmpegPlaybackSynchronizer
             return true;
         }
 
-        if (!_isLive)
+        if (_usesPlaybackClock)
         {
             return _playbackClock.WaitUntil(
                 playbackPosition ?? videoPosition.Value,
-                cancellationToken);
+                cancellationToken,
+                _lateFrameRebaseThreshold,
+                _forwardJumpRebaseThreshold);
         }
 
         var decision = _clockSynchronizer.EvaluateVideo(

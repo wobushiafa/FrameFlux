@@ -10,6 +10,8 @@ internal static class FFmpegInputOptionPolicy
         new("max_delay", "500000")
     ];
 
-    internal static IReadOnlyList<KeyValuePair<string, string>> GetLowLatencyOptions(bool enabled) =>
-        enabled ? SafeLowLatencyOptions : [];
+    internal static IReadOnlyList<KeyValuePair<string, string>> GetLowLatencyOptions(
+        bool enabled,
+        bool isHls = false) =>
+        enabled && !isHls ? SafeLowLatencyOptions : [];
 }

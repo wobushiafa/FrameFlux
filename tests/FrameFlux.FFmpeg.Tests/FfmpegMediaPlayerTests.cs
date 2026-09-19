@@ -71,6 +71,29 @@ public sealed class FfmpegMediaPlayerTests
     }
 
     [Fact]
+    public async Task GenericPlayer_OpensHlsUrlAsLiveSource()
+    {
+        await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory());
+
+        await player.OpenAsync(
+            MediaSource.Parse("http://173.208.212.130:8181/720p/cctv1.m3u8"));
+
+        Assert.True(player.Capabilities.IsLive);
+        Assert.False(player.Capabilities.CanPause);
+        Assert.False(player.Capabilities.CanSeek);
+        Assert.False(player.Capabilities.CanChangePlaybackRate);
+    }
+
+    [Fact]
+    public async Task GenericPlayer_RejectsNonHlsHttpUrl()
+    {
+        await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory());
+
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            player.OpenAsync(MediaSource.Parse("https://example.com/whep")).AsTask());
+    }
+
+    [Fact]
     public async Task GenericPlayer_OpensAndSeeksLocalFile()
     {
         var path = Path.GetTempFileName();

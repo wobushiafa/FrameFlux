@@ -157,6 +157,12 @@ public sealed partial class MainView : UserControl
     private static bool IsWebRtcSource(MediaSource source)
     {
         var uri = source.Uri;
+        if (uri.Scheme is "http" or "https" &&
+            uri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         return uri.Scheme.Equals("webrtc", StringComparison.OrdinalIgnoreCase) ||
                uri.Scheme.Equals("ws", StringComparison.OrdinalIgnoreCase) ||
                uri.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase) ||

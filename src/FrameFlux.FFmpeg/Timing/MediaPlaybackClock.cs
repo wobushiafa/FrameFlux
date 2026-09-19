@@ -27,7 +27,20 @@ internal sealed class MediaPlaybackClock
         }
     }
 
-    internal bool WaitUntil(double mediaPositionSeconds, CancellationToken cancellationToken)
+    internal void Reset()
+    {
+        lock (_sync)
+        {
+            _mediaOriginSeconds = null;
+            _wallOriginTimestamp = 0;
+        }
+    }
+
+    internal bool WaitUntil(
+        double mediaPositionSeconds,
+        CancellationToken cancellationToken,
+        TimeSpan? lateFrameRebaseThreshold = null,
+        TimeSpan? forwardJumpRebaseThreshold = null)
     {
         TimeSpan delay;
         lock (_sync)
@@ -40,7 +53,22 @@ internal sealed class MediaPlaybackClock
 
             var mediaElapsed = mediaPositionSeconds - _mediaOriginSeconds.Value;
             var wallElapsed = Stopwatch.GetElapsedTime(_wallOriginTimestamp).TotalSeconds;
-            delay = TimeSpan.FromSeconds(Math.Max(0d, mediaElapsed / _rate - wallElapsed));
+            if (lateFrameRebaseThreshold is { } threshold &&
+                wallElapsed - mediaElapsed / _rate > threshold.TotalSeconds)
+            {
+                ResetLocked(mediaPositionSeconds);
+                return true;
+            }
+
+            var delaySeconds = mediaElapsed / _rate - wallElapsed;
+            if (forwardJumpRebaseThreshold is { } forwardThreshold &&
+                delaySeconds > forwardThreshold.TotalSeconds)
+            {
+                ResetLocked(mediaPositionSeconds);
+                return true;
+            }
+
+            delay = TimeSpan.FromSeconds(Math.Max(0d, delaySeconds));
         }
 
         return delay <= TimeSpan.Zero || !cancellationToken.WaitHandle.WaitOne(delay);

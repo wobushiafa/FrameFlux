@@ -112,7 +112,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
                 if (_source is not null && !_source.Uri.IsFile && value != 1d)
                 {
                     throw new NotSupportedException(
-                        "Live RTSP sources do not support playback-rate changes.");
+                        "Live sources do not support playback-rate changes.");
                 }
 
                 _playbackRate = value;
@@ -271,7 +271,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             cancellationToken.ThrowIfCancellationRequested();
 
             var isFile = source.Uri.IsFile;
-            if (!isFile && source.Uri.Scheme is not ("rtsp" or "rtsps"))
+            if (!isFile && !FfmpegSource.IsHls(source.Uri) && source.Uri.Scheme is not ("rtsp" or "rtsps"))
             {
                 throw new NotSupportedException(
                     $"The FFmpeg backend does not support the '{source.Uri.Scheme}' media scheme.");
