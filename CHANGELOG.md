@@ -2,6 +2,19 @@
 
 All notable changes to FrameFlux are documented in this file.
 
+## [0.1.2] - 2026-09-20
+
+### Added
+
+- Resilient FFmpeg HLS playback for `.m3u8` live streams, including packet prefetch and buffered audio output.
+- Long-running HLS audio/video clock recovery and diagnostics for audio buffering and synchronization.
+
+### Changed
+
+- Generalized FFmpeg media session handling beyond RTSP-only terminology.
+- Kept the demo source gain at the neutral `0 dB` default; per-player gain does not change the system master volume.
+- Updated package and integration documentation for RTSP/RTSPS, HLS, WebRTC, and local-file sources.
+
 ## [0.1.1] - 2026-09-08
 
 ### Changed

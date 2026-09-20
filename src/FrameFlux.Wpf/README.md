@@ -18,9 +18,9 @@ Player.PlayerFactory = new FfmpegMediaPlayerFactory();
     Stretch="Uniform" />
 ```
 
-The current FFmpeg backend supports RTSP and RTSPS sources. The control uses the
-protocol-neutral `MediaSource` contract so local files and additional media
-backends can be added without changing the WPF control API.
+The current FFmpeg backend supports RTSP, RTSPS, HLS (`.m3u8`), and local file
+sources. The control uses the protocol-neutral `MediaSource` contract so other
+media backends can be added without changing the WPF control API.
 
 For end-to-end Windows hardware playback, set `MediaView.PresentationMode` to
 `NativeSurface` or `GpuComposition` and select a hardware-capable

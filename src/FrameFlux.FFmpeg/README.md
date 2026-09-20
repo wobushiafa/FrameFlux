@@ -7,7 +7,7 @@ states, capabilities, frames, snapshots, and diagnostics.
 ```csharp
 await using IMediaPlayer player = new FfmpegMediaPlayer();
 await player.OpenAsync(
-    MediaSource.Parse("rtsp://camera/stream"),
+    MediaSource.Parse("https://example.com/live/channel.m3u8"),
     new MediaOpenOptions
     {
         SessionSharing = MediaSessionSharingMode.Shared,
@@ -31,7 +31,7 @@ await player.OpenAsync(
         Audio = new MediaAudioOptions
         {
             IsEnabled = true,
-            GainDecibels = 6,
+            GainDecibels = 0,
             OutputDeviceId = null,
             BufferDuration = TimeSpan.FromMilliseconds(100)
         }
@@ -62,7 +62,8 @@ on the GPU presentation path. Network timeouts are nullable;
 and exponential backoff are configured under `Network.Reconnect`.
 `Audio.GainDecibels` is a source-level gain applied before the runtime
 `Volume` control. It defaults to `0 dB` and accepts `-60 dB` through
-`+24 dB`. `Audio.OutputDeviceId` selects a platform output endpoint;
+`+24 dB`; it affects only this player and never changes the operating-system
+master volume. `Audio.OutputDeviceId` selects a platform output endpoint;
 `null` follows the operating-system default. `Audio.BufferDuration` controls
 the requested output latency and accepts 10 milliseconds through 2 seconds.
 Windows uses shared-mode WASAPI by default and falls back to `waveOut` only
@@ -77,6 +78,12 @@ rebase the corresponding clock instead of leaving playback permanently stalled
 or dropping every subsequent frame. Current positions, A/V offset, delayed and
 dropped frame counts, and clock reset count are available from
 `player.Diagnostics.Synchronization`. Reconnects create a fresh synchronizer.
+
+HTTP Live Streaming (`.m3u8`) is treated as a live source. The FFmpeg backend
+prefetches packets and enforces a minimum audio buffer for HLS so short network
+jitter does not immediately underrun the output. Inspect
+`player.Diagnostics.Audio` and `player.Diagnostics.Synchronization` when
+diagnosing audio interruptions or long-running A/V drift.
 
 Limit simultaneous endpoint probes and FFmpeg open operations when many players
 start together. Factories configured with the same limit share one process-wide

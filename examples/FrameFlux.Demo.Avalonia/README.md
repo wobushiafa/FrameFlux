@@ -1,8 +1,8 @@
 # FrameFlux Avalonia demo
 
 This cross-platform demo hosts the protocol-neutral `FrameFlux.Avalonia.MediaView`
-control directly. On desktop, enter an RTSP/RTSPS address, a WHEP/WebRTC URL,
-or use **Open file** to select a local video. The demo automatically selects
+control directly. On desktop, enter an RTSP/RTSPS or HLS (`.m3u8`) address, a
+WHEP/WebRTC URL, or use **Open file** to select a local video. The demo automatically selects
 the FFmpeg or WebRTC player factory from the source URI. Android
 document-provider selections are copied to temporary local storage before
 playback and continue to use the FFmpeg backend.

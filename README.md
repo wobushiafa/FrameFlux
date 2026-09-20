@@ -1,15 +1,15 @@
 # FrameFlux
 
-FrameFlux 是一个跨平台媒体播放库，提供 FFmpeg 和 WebRTC 两套播放后端，支持 RTSP、WHEP/go2rtc WebRTC 直播和本地文件播放。硬件解码使用与目标 FFmpeg 公共头文件匹配的版本化 ABI 布局。
+FrameFlux 是一个跨平台媒体播放库，提供 FFmpeg 和 WebRTC 两套播放后端，支持 RTSP/RTSPS、HLS（m3u8）、WHEP/go2rtc WebRTC 直播和本地文件播放。硬件解码使用与目标 FFmpeg 公共头文件匹配的版本化 ABI 布局。
 
-当前能力包括音视频软硬件解码、平台音频输出、直播音画同步、本地文件时钟、Seek、Duration、0.25x 至 4x 音视频倍速，以及运行时音量和静音控制。音频倍速通过 FFmpeg `atempo` 保持音调，内部统一为 48 kHz、双声道、16 位有符号 PCM。
+当前能力包括音视频软硬件解码、平台音频输出、直播音画同步、本地文件时钟、Seek、Duration、0.25x 至 4x 音视频倍速，以及运行时音量和静音控制。HLS 播放包含包预取、音频缓冲和长时间播放时钟纠偏，音频倍速通过 FFmpeg `atempo` 保持音调，内部统一为 48 kHz、双声道、16 位有符号 PCM。
 
 ## 项目结构
 
 | 项目 | 包 | 用途 |
 | --- | --- | --- |
 | `src/FrameFlux.Abstractions` | `FrameFlux.Abstractions` | 与协议无关的播放器、媒体源、帧、能力和视频输出契约。 |
-| `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | 独立于 UI 的 FFmpeg 播放器，支持 RTSP 和本地文件，不附带原生二进制。 |
+| `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | 独立于 UI 的 FFmpeg 播放器，支持 RTSP/RTSPS、HLS 和本地文件，不附带原生二进制。 |
 | `src/FrameFlux.WebRtc` | `FrameFlux.WebRtc` | 基于 SIPSorcery 的 WebRTC 播放器，支持 WHEP、go2rtc、WebRTC URI 和 SDP/ICE 输入。 |
 | `src/FrameFlux.FFmpeg.Android` | `FrameFlux.FFmpeg.Android` | 接收 FFmpeg 解复用 H.264/HEVC 数据的 Android MediaCodec 硬件解码器。 |
 | `src/FrameFlux.Presentation` | `FrameFlux.Presentation` | UI 控件共享的、与渲染后端无关的播放生命周期。 |
@@ -65,7 +65,7 @@ protected override AppBuilder CustomizeAppBuilder(AppBuilder builder) =>
     base.CustomizeAppBuilder(builder).UseFrameFluxAndroid();
 ```
 
-注册同时启用 `FrameFlux.FFmpeg.Android`。FFmpeg 负责 RTSP、音频解码以及 H.264/HEVC 解复用，视频访问单元交给 MediaCodec，并通过 `GL_TEXTURE_EXTERNAL_OES` 渲染到 SurfaceTexture，全程不读回 CPU。零拷贝 Surface 没有可长期保留的 CPU 帧，因此快照使用软件路径。
+注册同时启用 `FrameFlux.FFmpeg.Android`。FFmpeg 负责 RTSP/RTSPS、HLS、音频解码以及 H.264/HEVC 解复用，视频访问单元交给 MediaCodec，并通过 `GL_TEXTURE_EXTERNAL_OES` 渲染到 SurfaceTexture，全程不读回 CPU。零拷贝 Surface 没有可长期保留的 CPU 帧，因此快照使用软件路径。
 
 Android 的 `NativeSurface` 基于系统 `SurfaceView`，位于 Avalonia 合成树之外。因此 Popup、ComboBox 下拉层、菜单、Tooltip 和 Flyout 可能显示在视频下方。界面需要覆盖视频时应选择 `GpuComposition`；`NativeSurface` 适用于视频始终处于原生层、且上方没有 Avalonia 浮层的场景。
 
@@ -108,7 +108,7 @@ Android 目标要求 API 24 或更高。当前仓库中的 Android FFmpeg 二进
 FFmpegHelper.RegisterFFmpeg(@"C:\ffmpeg\bin");
 ```
 
-目录必须包含一套完整、架构匹配且来自同一 FFmpeg 版本的运行库。播放需要 `avcodec`、`avformat`、`avutil`、`avfilter`、`swscale` 和 `swresample`。Windows D3D11VA 与 Linux VAAPI 直接使用这些库。Android 使用相同的 FFmpeg 导出完成解复用、音频解码和音频倍速，再将编码视频送入系统 MediaCodec。
+目录必须包含一套完整、架构匹配且来自同一 FFmpeg 版本的运行库。播放需要 `avcodec`、`avformat`、`avutil`、`avfilter`、`swscale` 和 `swresample`。Windows D3D11VA 与 Linux VAAPI 直接使用这些库。Android 使用相同的 FFmpeg 导出完成网络媒体解复用、音频解码和音频倍速，再将编码视频送入系统 MediaCodec。
 
 UI 包不依赖具体 FFmpeg 后端，应用负责注入播放器工厂：
 
@@ -132,7 +132,7 @@ WPF 可以直接使用打包的控件：
     Stretch="Uniform" />
 ```
 
-`MediaView.Source` 使用与协议无关的 `MediaSource` 契约。当前后端支持 RTSP、RTSPS 和本地文件路径。本地文件会提供 Duration、Seek 和 0.25x 至 4x 的音视频倍速；直播源保持实时播放，不开放 Seek 和倍速能力。
+`MediaView.Source` 使用与协议无关的 `MediaSource` 契约。当前后端支持 RTSP、RTSPS、HLS（m3u8）和本地文件路径。本地文件会提供 Duration、Seek 和 0.25x 至 4x 的音视频倍速；直播源保持实时播放，不开放 Seek 和倍速能力。HLS 直播会使用更大的实际音频缓冲以降低网络抖动造成的卡顿。
 
 ## 音频输出
 
@@ -173,7 +173,7 @@ await player.OpenAsync(
         Audio = new MediaAudioOptions
         {
             IsEnabled = true,
-            GainDecibels = 6
+            GainDecibels = 0
         }
     });
 
@@ -188,7 +188,7 @@ await player.PlayAsync();
 
 创建大量播放器时，可设置 `FfmpegMediaPlayerFactoryOptions.MaximumConcurrentOpenOperations`；默认值为 8，设置为 `null` 可移除工厂级并发限制。
 
-`Audio.GainDecibels` 在运行时音量控制前应用源增益，默认 `0 dB`，范围为 `-60 dB` 到 `+24 dB`。正增益使用饱和转换避免整数溢出。`IMediaPlayer.Volume` 始终使用标准的 `0..1` 范围。
+`Audio.GainDecibels` 在运行时音量控制前应用源增益，默认 `0 dB`，范围为 `-60 dB` 到 `+24 dB`。通常应保持默认值；增益只影响当前播放器的音频，不会修改系统主音量。正增益使用饱和转换避免整数溢出。`IMediaPlayer.Volume` 始终使用标准的 `0..1` 范围。
 
 平台渲染器通过 `IMediaVideoOutput` 接收 `IMediaFrameLease`。`TryPresent` 成功后帧所有权转移给输出；拒绝或失败的提交仍由播放器持有。软件渲染器和原生框架渲染器遵循同一所有权规则。
 
