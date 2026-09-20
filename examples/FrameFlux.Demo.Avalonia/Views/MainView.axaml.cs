@@ -40,6 +40,10 @@ public sealed partial class MainView : UserControl
             Video = new MediaVideoOptions
             {
                 DecodingPolicy = MediaVideoDecodingPolicy.HardwarePreferred
+            },
+            Audio = new MediaAudioOptions
+            {
+                GainDecibels = 0d
             }
         };
         Player.OpenOptions = options;
