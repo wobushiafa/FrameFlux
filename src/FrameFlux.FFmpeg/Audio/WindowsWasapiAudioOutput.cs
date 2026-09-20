@@ -174,10 +174,30 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
             latency);
         output.PlaybackStopped += OnPlaybackStopped;
         output.Init(provider);
+        RestoreApplicationSessionVolume();
         output.Play();
         _provider = provider;
         _output = output;
         _needsRecovery = false;
+    }
+
+    private void RestoreApplicationSessionVolume()
+    {
+        AudioSessionManager? sessionManager = null;
+        try
+        {
+            sessionManager = _device!.AudioSessionManager;
+            sessionManager.SimpleAudioVolume.Volume = 1f;
+        }
+        catch (Exception exception)
+        {
+            _lastError = $"Unable to restore the application audio session volume: {exception.Message}";
+            System.Diagnostics.Debug.WriteLine(_lastError);
+        }
+        finally
+        {
+            sessionManager?.Dispose();
+        }
     }
 
     private void Recover()

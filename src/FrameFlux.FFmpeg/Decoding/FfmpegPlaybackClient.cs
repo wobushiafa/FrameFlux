@@ -10,9 +10,12 @@ internal delegate void FrameLeaseReceivedHandler(FfmpegMediaFrameLease lease);
 
 internal sealed partial class FfmpegPlaybackClient : IDisposable
 {
+    private const int HlsMinimumAudioBufferDurationMilliseconds = 500;
+    private const int HlsAdditionalAudioDriftToleranceMilliseconds = 300;
     private readonly string _url;
     private readonly IMediaVideoOutput? _videoOutput;
     private readonly bool _isLive;
+    private readonly bool _isHls;
     private readonly ManualResetEventSlim _playbackGate = new(initialState: true);
     private readonly FfmpegPlaybackSynchronizer _playbackSynchronizer;
     private FfmpegPlaybackOptions _options;
@@ -132,11 +135,18 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
         _muted = options.IsMuted;
         var isHls = Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
             uri is not null && FfmpegSource.IsHls(uri);
+        _isHls = isHls;
         _isLive = uri is not null && (uri.Scheme is "rtsp" or "rtsps" || isHls);
         _playbackSynchronizer = new FfmpegPlaybackSynchronizer(
             usesPlaybackClock: !_isLive || isHls,
             lateFrameRebaseThreshold: isHls ? TimeSpan.FromMilliseconds(250) : null,
-            forwardJumpRebaseThreshold: isHls ? TimeSpan.FromSeconds(1) : null);
+            forwardJumpRebaseThreshold: isHls ? TimeSpan.FromSeconds(1) : null,
+            maximumAudioDrift: isHls
+                ? TimeSpan.FromMilliseconds(
+                    GetAudioBufferDurationMilliseconds(
+                        options.AudioBufferDurationMilliseconds,
+                        isHls) + HlsAdditionalAudioDriftToleranceMilliseconds)
+                : null);
         FfmpegRuntimeDiagnostics.OnStreamClientCreated();
     }
 
@@ -265,8 +275,10 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                             Volatile.Read(ref _muted),
                             _options.AudioGainDecibels,
                             _options.AudioOutputDeviceId,
-                            TimeSpan.FromMilliseconds(
-                                _options.AudioBufferDurationMilliseconds));
+                            bufferDuration: TimeSpan.FromMilliseconds(
+                                GetAudioBufferDurationMilliseconds(
+                                    _options.AudioBufferDurationMilliseconds,
+                                    _isHls)));
                         audioPlayback.SetPlaybackRate(Volatile.Read(ref _playbackRate));
                         Volatile.Write(ref _audioPlayback, audioPlayback);
                     }
@@ -373,6 +385,15 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
             Interlocked.Exchange(ref _pendingSeek, null)?.Completion.TrySetCanceled();
             completionSource.TrySetResult(null);
         }
+    }
+
+    internal static int GetAudioBufferDurationMilliseconds(
+        int configuredDurationMilliseconds,
+        bool isHls)
+    {
+        return isHls
+            ? Math.Max(configuredDurationMilliseconds, HlsMinimumAudioBufferDurationMilliseconds)
+            : configuredDurationMilliseconds;
     }
 
     private static TaskCompletionSource<object?> CreateCompletedCompletionSource()

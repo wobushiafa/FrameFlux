@@ -91,7 +91,8 @@ public sealed class PlaybackRateAudioTests
     {
         var synchronizer = new FfmpegPlaybackSynchronizer(
             usesPlaybackClock: true,
-            lateFrameRebaseThreshold: TimeSpan.FromMilliseconds(20));
+            lateFrameRebaseThreshold: TimeSpan.FromMilliseconds(20),
+            maximumAudioDrift: TimeSpan.FromMilliseconds(300));
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(1));
 
         Assert.True(synchronizer.SynchronizeVideo(
@@ -122,7 +123,8 @@ public sealed class PlaybackRateAudioTests
     {
         var synchronizer = new FfmpegPlaybackSynchronizer(
             usesPlaybackClock: true,
-            forwardJumpRebaseThreshold: TimeSpan.FromSeconds(1));
+            forwardJumpRebaseThreshold: TimeSpan.FromSeconds(1),
+            maximumAudioDrift: TimeSpan.FromMilliseconds(300));
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
 
         Assert.True(synchronizer.SynchronizeVideo(
@@ -136,6 +138,68 @@ public sealed class PlaybackRateAudioTests
             audioPlayback: null,
             cancellation.Token));
         Assert.False(cancellation.IsCancellationRequested);
+    }
+
+    [Fact]
+    public void HlsPlayback_ResetsAudioWhenDriftExceedsLimit()
+    {
+        using var output = new TrackingAudioOutput();
+        using var audioPlayback = new AudioPlaybackController(
+            volume: 1d,
+            muted: false,
+            output: output);
+        audioPlayback.Write(new NativeAudioFrame(
+            new byte[9600 * 2 * sizeof(short)],
+            48000,
+            2,
+            0,
+            1,
+            48000));
+        Assert.True(
+            SpinWait.SpinUntil(() => output.WriteCount == 1, TimeSpan.FromSeconds(2)));
+
+        var synchronizer = new FfmpegPlaybackSynchronizer(
+            usesPlaybackClock: true,
+            maximumAudioDrift: TimeSpan.FromMilliseconds(300));
+
+        Assert.True(synchronizer.SynchronizeVideo(
+            videoPosition: 1d,
+            playbackPosition: 1d,
+            audioPlayback,
+            CancellationToken.None));
+        Assert.Equal(1, output.ResetCount);
+        Assert.Equal(1, synchronizer.Diagnostics.ClockResetCount);
+    }
+
+    [Fact]
+    public void HlsPlayback_KeepsExpectedStartupBuffer()
+    {
+        using var output = new TrackingAudioOutput();
+        using var audioPlayback = new AudioPlaybackController(
+            volume: 1d,
+            muted: false,
+            output: output);
+        audioPlayback.Write(new NativeAudioFrame(
+            new byte[9600 * 2 * sizeof(short)],
+            48000,
+            2,
+            0,
+            1,
+            48000));
+        Assert.True(
+            SpinWait.SpinUntil(() => output.WriteCount == 1, TimeSpan.FromSeconds(2)));
+
+        var synchronizer = new FfmpegPlaybackSynchronizer(
+            usesPlaybackClock: true,
+            maximumAudioDrift: TimeSpan.FromMilliseconds(800));
+
+        Assert.True(synchronizer.SynchronizeVideo(
+            videoPosition: 0.7d,
+            playbackPosition: 0.7d,
+            audioPlayback,
+            CancellationToken.None));
+        Assert.Equal(0, output.ResetCount);
+        Assert.Equal(0, synchronizer.Diagnostics.ClockResetCount);
     }
 
     [Fact]
@@ -182,15 +246,21 @@ public sealed class PlaybackRateAudioTests
     {
         private long _playedFrames;
         private int _writeCount;
+        private int _resetCount;
 
         public int SampleRate => 48000;
         public int Channels => 2;
         public long PlayedFrames => Interlocked.Read(ref _playedFrames);
         public bool IsOperational => true;
         public int WriteCount => Volatile.Read(ref _writeCount);
+        public int ResetCount => Volatile.Read(ref _resetCount);
         public MediaAudioDiagnostics Diagnostics => MediaAudioDiagnostics.Empty;
 
-        public void Reset() => Interlocked.Exchange(ref _playedFrames, 0);
+        public void Reset()
+        {
+            Interlocked.Exchange(ref _playedFrames, 0);
+            Interlocked.Increment(ref _resetCount);
+        }
 
         public void Write(byte[] pcm)
         {

@@ -8,6 +8,7 @@ internal sealed class FfmpegPlaybackSynchronizer
     private readonly bool _usesPlaybackClock;
     private readonly TimeSpan? _lateFrameRebaseThreshold;
     private readonly TimeSpan? _forwardJumpRebaseThreshold;
+    private readonly TimeSpan? _maximumAudioDrift;
     private readonly MediaPlaybackClock _playbackClock = new();
     private MediaClockSynchronizer _clockSynchronizer = new();
     private MediaSynchronizationDiagnostics _diagnostics =
@@ -16,11 +17,13 @@ internal sealed class FfmpegPlaybackSynchronizer
     internal FfmpegPlaybackSynchronizer(
         bool usesPlaybackClock,
         TimeSpan? lateFrameRebaseThreshold = null,
-        TimeSpan? forwardJumpRebaseThreshold = null)
+        TimeSpan? forwardJumpRebaseThreshold = null,
+        TimeSpan? maximumAudioDrift = null)
     {
         _usesPlaybackClock = usesPlaybackClock;
         _lateFrameRebaseThreshold = lateFrameRebaseThreshold;
         _forwardJumpRebaseThreshold = forwardJumpRebaseThreshold;
+        _maximumAudioDrift = maximumAudioDrift;
     }
 
     internal MediaSynchronizationDiagnostics Diagnostics => _diagnostics;
@@ -118,11 +121,18 @@ internal sealed class FfmpegPlaybackSynchronizer
 
         if (_usesPlaybackClock)
         {
-            return _playbackClock.WaitUntil(
+            var shouldRender = _playbackClock.WaitUntil(
                 playbackPosition ?? videoPosition.Value,
                 cancellationToken,
                 _lateFrameRebaseThreshold,
                 _forwardJumpRebaseThreshold);
+            if (shouldRender)
+            {
+                CorrectAudioDrift(videoPosition.Value, audioPlayback);
+                RefreshDiagnostics(audioPlayback);
+            }
+
+            return shouldRender;
         }
 
         var decision = _clockSynchronizer.EvaluateVideo(
@@ -141,6 +151,20 @@ internal sealed class FfmpegPlaybackSynchronizer
         }
 
         return true;
+    }
+
+    private void CorrectAudioDrift(
+        double videoPosition,
+        AudioPlaybackController? audioPlayback)
+    {
+        if (_maximumAudioDrift is not { } maximumDrift ||
+            audioPlayback?.PositionSeconds is not { } audioPosition ||
+            Math.Abs(videoPosition - audioPosition) <= maximumDrift.TotalSeconds)
+        {
+            return;
+        }
+
+        audioPlayback.Reset();
     }
 
     internal void RefreshDiagnostics(AudioPlaybackController? audioPlayback)
