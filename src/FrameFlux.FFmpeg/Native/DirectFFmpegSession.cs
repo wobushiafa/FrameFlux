@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace FrameFlux.FFmpeg;
 
-internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDisposable
+internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : IDisposable
 {
     private const int MediaTypeVideo = 0;
     private const int MediaTypeAudio = 1;
@@ -38,6 +38,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
     private FFmpegAudioTempoFilter? _audioTempoFilter;
     private double _audioPlaybackRate = 1d;
     private double? _nextAudioPresentationSeconds;
+    private HlsPacketPrefetchBuffer? _hlsPacketBuffer;
     private bool _cancelled;
     private bool _disposed;
     private bool _preserveHardwareFrames;
@@ -48,7 +49,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
     internal long LastHardwareTransferTicks => _hardwareDecoder?.LastTransferTicks ?? 0;
     internal bool HasAudio => _audioCodecContext != IntPtr.Zero;
 
-    internal int Open(in NativeRtspOptions options)
+    internal int Open(in NativeFfmpegOptions options)
     {
         if (options.Url == IntPtr.Zero)
         {
@@ -144,7 +145,16 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
                 return 0;
             }
 
-            return OpenVideoDecoder(decoder, options);
+            result = OpenVideoDecoder(decoder, options);
+            if (result >= 0 &&
+                FFmpegInputOptionPolicy.ShouldPrefetchPackets(isHls, _packetReader))
+            {
+                _hlsPacketBuffer = new HlsPacketPrefetchBuffer(
+                    _api,
+                    _formatContext,
+                    _packet);
+            }
+            return result;
         }
         finally
         {
@@ -226,7 +236,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
                 return receive;
             }
 
-            var result = _api.AvReadFrame(_formatContext, _packet);
+            using var bufferedPacket = ReadNextDemuxPacket(out var result);
             if (Volatile.Read(ref _cancelled))
             {
                 return NativeReadResult.End;
@@ -244,18 +254,25 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
                 return FailRead(result, "av_read_frame");
             }
 
-            if (FFmpegAbi.GetPacketStreamIndex(_packet) != _videoStreamIndex)
+            var packet = bufferedPacket?.Pointer ?? _packet;
+            if (FFmpegAbi.GetPacketStreamIndex(packet) != _videoStreamIndex)
             {
-                if (FFmpegAbi.GetPacketStreamIndex(_packet) == _audioStreamIndex)
+                if (FFmpegAbi.GetPacketStreamIndex(packet) == _audioStreamIndex)
                 {
-                    SendAudioPacket(_packet);
+                    SendAudioPacket(packet);
                 }
-                _api.AvPacketUnref(_packet);
+                if (bufferedPacket is null)
+                {
+                    _api.AvPacketUnref(_packet);
+                }
                 continue;
             }
 
-            result = _api.AvCodecSendPacket(_codecContext, _packet);
-            _api.AvPacketUnref(_packet);
+            result = _api.AvCodecSendPacket(_codecContext, packet);
+            if (bufferedPacket is null)
+            {
+                _api.AvPacketUnref(_packet);
+            }
             if (result < 0 && result != ErrorAgain)
             {
                 return FailRead(result, "avcodec_send_packet");
@@ -316,7 +333,11 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         return NativeReadResult.End;
     }
 
-    internal void Cancel() => Volatile.Write(ref _cancelled, true);
+    internal void Cancel()
+    {
+        Volatile.Write(ref _cancelled, true);
+        _hlsPacketBuffer?.Cancel();
+    }
 
     internal unsafe int CopyFrameToBgra(
         DirectVideoFrame frame,
@@ -406,7 +427,9 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         }
 
         _disposed = true;
-        Volatile.Write(ref _cancelled, true);
+        Cancel();
+        _hlsPacketBuffer?.Dispose();
+        _hlsPacketBuffer = null;
         _audioTempoFilter?.Dispose();
         _audioTempoFilter = null;
         _audioResampler?.Dispose();
@@ -425,6 +448,18 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         _hardwareDecoder = null;
         if (_formatContext != IntPtr.Zero) _api.AvFormatCloseInput(ref _formatContext);
         if (_interruptHandle.IsAllocated) _interruptHandle.Free();
+    }
+
+    private DirectVideoPacket? ReadNextDemuxPacket(out int result)
+    {
+        if (_hlsPacketBuffer is null)
+        {
+            result = _api.AvReadFrame(_formatContext, _packet);
+            return null;
+        }
+
+        result = _hlsPacketBuffer.Read(out var packet);
+        return packet;
     }
 
     internal static int CalculateInterruptCallbackOffset(
@@ -499,7 +534,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
         try
         {
             return opaque != IntPtr.Zero &&
-                   GCHandle.FromIntPtr(opaque).Target is DirectRtspSession session &&
+                   GCHandle.FromIntPtr(opaque).Target is DirectFfmpegSession session &&
                    Volatile.Read(ref session._cancelled)
                 ? 1
                 : 0;
@@ -576,7 +611,7 @@ internal sealed class DirectRtspSession(FFmpegApi api, bool packetReader) : IDis
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int InterruptCallbackDelegate(IntPtr opaque);
 
-    private int OpenVideoDecoder(IntPtr decoder, in NativeRtspOptions options)
+    private int OpenVideoDecoder(IntPtr decoder, in NativeFfmpegOptions options)
     {
         var result = AllocateVideoDecoder(decoder);
         if (result < 0) return result;

@@ -8,5 +8,5 @@ implement `IAndroidVideoSurfaceOutput` and call
 `FrameFluxAndroidMediaCodec.Register()` during application startup.
 
 The backend uses the FFmpeg shared libraries supplied by
-`FrameFlux.FFmpeg.NativeAssets.Android` directly for RTSP demuxing and audio.
+`FrameFlux.FFmpeg.NativeAssets.Android` directly for FFmpeg demuxing and audio.
 Encoded H.264 or HEVC video access units are passed to Android MediaCodec.

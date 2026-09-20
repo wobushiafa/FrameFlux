@@ -34,7 +34,7 @@ internal sealed class NativeDecodedFrame : IDisposable
 internal sealed class FfmpegDecoder : IDisposable
 {
     private readonly FfmpegPlaybackOptions _options;
-    private readonly NativeRtspSessionHandle _session;
+    private readonly NativeFfmpegSessionHandle _session;
     private readonly CancellationTokenRegistration _cancellationRegistration;
     private readonly NativeStreamInfo _streamInfo;
     private readonly TimeSpan _fallbackFrameDuration;
@@ -52,7 +52,7 @@ internal sealed class FfmpegDecoder : IDisposable
         using var nativeUrl = new NativeUtf8String(url);
         using var nativeTransport = new NativeUtf8String(
             string.IsNullOrWhiteSpace(options.Transport) ? "tcp" : options.Transport);
-        var nativeOptions = new NativeRtspOptions
+        var nativeOptions = new NativeFfmpegOptions
         {
             Url = nativeUrl.Pointer,
             Transport = nativeTransport.Pointer,
@@ -94,7 +94,7 @@ internal sealed class FfmpegDecoder : IDisposable
         }
 
         _cancellationRegistration = cancellationToken.Register(
-            static state => FrameFluxFFmpegNative.Cancel((NativeRtspSessionHandle)state!),
+            static state => FrameFluxFFmpegNative.Cancel((NativeFfmpegSessionHandle)state!),
             session);
         VideoDecoderDiagnostics = FrameFluxFFmpegNative.GetVideoDecoderDiagnostics(session);
         if (FrameFluxFFmpegNative.GetStreamInfo(session, out _streamInfo) < 0)
@@ -153,7 +153,7 @@ internal sealed class FfmpegDecoder : IDisposable
         {
             handle.Dispose();
             throw CreateRuntimeException(
-                "The native RTSP decoder returned an invalid video frame.");
+                "The native FFmpeg decoder returned an invalid video frame.");
         }
 
         Position = ResolvePlaybackPosition(

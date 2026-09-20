@@ -6,7 +6,7 @@
     <IsAotCompatible>true</IsAotCompatible>
     <IsPackable>true</IsPackable>
     <PackageId>FrameFlux.FFmpeg</PackageId>
-    <Description>Cross-platform FFmpeg media engine with RTSP playback for FrameFlux.</Description>
+    <Description>Cross-platform FFmpeg media engine for network and local media playback.</Description>
     <PackageTags>media;video;playback;rtsp;ffmpeg;streaming;cross-platform</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>

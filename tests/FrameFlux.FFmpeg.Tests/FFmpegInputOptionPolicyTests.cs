@@ -23,6 +23,20 @@ public sealed class FFmpegInputOptionPolicyTests
             isHls: true));
     }
 
+    [Theory]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, false)]
+    public void PacketPrefetch_IsLimitedToDirectHlsDecoding(
+        bool isHls,
+        bool isPacketReader,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            FFmpegInputOptionPolicy.ShouldPrefetchPackets(isHls, isPacketReader));
+    }
+
     [Fact]
     public void DisabledLowLatencyDoesNotAddOptions()
     {

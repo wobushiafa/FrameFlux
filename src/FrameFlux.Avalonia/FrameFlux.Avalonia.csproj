@@ -6,7 +6,7 @@
     <IsAotCompatible>true</IsAotCompatible>
     <IsPackable>true</IsPackable>
     <PackageId>FrameFlux.Avalonia</PackageId>
-    <Description>Avalonia media playback controls for FrameFlux, including RTSP rendering and snapshots.</Description>
+    <Description>Avalonia media playback controls for FrameFlux, including network and local media rendering.</Description>
     <PackageTags>media;video;playback;rtsp;streaming;avalonia;cross-platform</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>

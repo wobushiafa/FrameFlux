@@ -14,4 +14,7 @@ internal static class FFmpegInputOptionPolicy
         bool enabled,
         bool isHls = false) =>
         enabled && !isHls ? SafeLowLatencyOptions : [];
+
+    internal static bool ShouldPrefetchPackets(bool isHls, bool isPacketReader) =>
+        isHls && !isPacketReader;
 }

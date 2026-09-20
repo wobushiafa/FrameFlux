@@ -1,7 +1,7 @@
 # FrameFlux.FFmpeg
 
 `FrameFlux.FFmpeg` contains the UI-independent `FfmpegMediaPlayer` and the
-current RTSP backend. The player exposes protocol-neutral sources, options,
+FFmpeg media backend. The player exposes protocol-neutral sources, options,
 states, capabilities, frames, snapshots, and diagnostics.
 
 ```csharp
@@ -124,7 +124,8 @@ continue to transfer frames to system memory; inspect
 
 On Android, reference `FrameFlux.FFmpeg.Android` and register
 `FrameFluxAndroidMediaCodec` (the Avalonia Android extension does this
-automatically). The core FFmpeg binding continues to open RTSP, demux packets,
+automatically). The core FFmpeg binding opens network and local media sources,
+demuxes packets,
 and decode audio directly from the supplied `.so` exports. H.264 and HEVC
 access units are normalized to Annex-B and queued into the public Android
 MediaCodec API. Decoded output is released to an application-provided

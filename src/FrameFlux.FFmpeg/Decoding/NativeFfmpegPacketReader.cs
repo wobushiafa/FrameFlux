@@ -26,7 +26,7 @@ internal sealed class NativeEncodedPacket : IDisposable
 
 internal sealed class NativeFfmpegPacketReader : IDisposable
 {
-    private readonly NativeRtspSessionHandle _session;
+    private readonly NativeFfmpegSessionHandle _session;
     private readonly CancellationTokenRegistration _cancellationRegistration;
     private bool _disposed;
 
@@ -38,7 +38,7 @@ internal sealed class NativeFfmpegPacketReader : IDisposable
         using var nativeUrl = new NativeUtf8String(url);
         using var nativeTransport = new NativeUtf8String(
             string.IsNullOrWhiteSpace(options.Transport) ? "tcp" : options.Transport);
-        var nativeOptions = new NativeRtspOptions
+        var nativeOptions = new NativeFfmpegOptions
         {
             Url = nativeUrl.Pointer,
             Transport = nativeTransport.Pointer,
@@ -90,7 +90,7 @@ internal sealed class NativeFfmpegPacketReader : IDisposable
         }
 
         _cancellationRegistration = cancellationToken.Register(
-            static state => FrameFluxFFmpegNative.Cancel((NativeRtspSessionHandle)state!),
+            static state => FrameFluxFFmpegNative.Cancel((NativeFfmpegSessionHandle)state!),
             session);
     }
 
@@ -130,7 +130,7 @@ internal sealed class NativeFfmpegPacketReader : IDisposable
         if (FrameFluxFFmpegNative.GetPacketInfo(handle, out var info) < 0)
         {
             handle.Dispose();
-            throw new ApplicationException("The native RTSP packet reader returned an invalid packet.");
+            throw new ApplicationException("The native FFmpeg packet reader returned an invalid packet.");
         }
 
         packet = new NativeEncodedPacket(handle, info);

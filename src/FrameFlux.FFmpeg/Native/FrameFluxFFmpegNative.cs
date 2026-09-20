@@ -31,7 +31,7 @@ internal enum NativeVideoCodec
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct NativeRtspOptions
+internal struct NativeFfmpegOptions
 {
     public IntPtr Url;
     public IntPtr Transport;
@@ -109,9 +109,9 @@ internal sealed record NativeAudioFrame(
         : PresentationTimestamp * (double)TimeBaseNumerator / TimeBaseDenominator;
 }
 
-internal sealed class NativeRtspSessionHandle : SafeHandleZeroOrMinusOneIsInvalid
+internal sealed class NativeFfmpegSessionHandle : SafeHandleZeroOrMinusOneIsInvalid
 {
-    internal NativeRtspSessionHandle(IntPtr handle) : base(ownsHandle: true) => SetHandle(handle);
+    internal NativeFfmpegSessionHandle(IntPtr handle) : base(ownsHandle: true) => SetHandle(handle);
 
     protected override bool ReleaseHandle()
     {

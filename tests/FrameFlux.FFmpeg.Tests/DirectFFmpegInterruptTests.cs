@@ -15,7 +15,7 @@ public sealed class DirectFFmpegInterruptTests
     {
         Assert.Equal(
             expected,
-            DirectRtspSession.CalculateInterruptCallbackOffset(
+            DirectFfmpegSession.CalculateInterruptCallbackOffset(
                 fpsProbeSizeOffset,
                 errorRecognitionOffset,
                 pointerSize));
@@ -25,13 +25,13 @@ public sealed class DirectFFmpegInterruptTests
     public void InterruptCallbackOffset_RejectsUnexpectedFfmpegLayout()
     {
         Assert.Throws<InvalidOperationException>(() =>
-            DirectRtspSession.CalculateInterruptCallbackOffset(192, 204, 8));
+            DirectFfmpegSession.CalculateInterruptCallbackOffset(192, 204, 8));
     }
 
     [Fact]
     public void InterruptCallbackOffset_RejectsUnsupportedPointerSize()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            DirectRtspSession.CalculateInterruptCallbackOffset(192, 196, 16));
+            DirectFfmpegSession.CalculateInterruptCallbackOffset(192, 196, 16));
     }
 }

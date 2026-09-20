@@ -10,31 +10,31 @@ internal static class FrameFluxFFmpegNative
     internal static uint GetVersion() => FFmpegApi.Instance.AvCodecVersion();
 
     internal static int OpenDecoder(
-        in NativeRtspOptions options,
+        in NativeFfmpegOptions options,
         CancellationToken cancellationToken,
-        out NativeRtspSessionHandle session) =>
+        out NativeFfmpegSessionHandle session) =>
         Open(options, packetReader: false, cancellationToken, out session);
 
     internal static int OpenPacketReader(
-        in NativeRtspOptions options,
+        in NativeFfmpegOptions options,
         CancellationToken cancellationToken,
-        out NativeRtspSessionHandle session) =>
+        out NativeFfmpegSessionHandle session) =>
         Open(options, packetReader: true, cancellationToken, out session);
 
     private static int Open(
-        in NativeRtspOptions options,
+        in NativeFfmpegOptions options,
         bool packetReader,
         CancellationToken cancellationToken,
-        out NativeRtspSessionHandle session)
+        out NativeFfmpegSessionHandle session)
     {
-        var state = new DirectRtspSession(FFmpegApi.Instance, packetReader);
+        var state = new DirectFfmpegSession(FFmpegApi.Instance, packetReader);
         try
         {
             using var cancellationRegistration = cancellationToken.Register(
-                static target => ((DirectRtspSession)target!).Cancel(),
+                static target => ((DirectFfmpegSession)target!).Cancel(),
                 state);
             var result = state.Open(options);
-            session = new NativeRtspSessionHandle(AllocateHandle(state));
+            session = new NativeFfmpegSessionHandle(AllocateHandle(state));
             return result;
         }
         catch
@@ -44,21 +44,21 @@ internal static class FrameFluxFFmpegNative
         }
     }
 
-    internal static void Cancel(NativeRtspSessionHandle session)
+    internal static void Cancel(NativeFfmpegSessionHandle session)
     {
         if (!session.IsInvalid)
         {
-            GetTarget<DirectRtspSession>(session.DangerousGetHandle()).Cancel();
+            GetTarget<DirectFfmpegSession>(session.DangerousGetHandle()).Cancel();
         }
     }
 
     internal static void Close(IntPtr sessionHandle)
     {
-        ReleaseHandle<DirectRtspSession>(sessionHandle, static session => session.Dispose());
+        ReleaseHandle<DirectFfmpegSession>(sessionHandle, static session => session.Dispose());
     }
 
     internal static int GetStreamInfo(
-        NativeRtspSessionHandle session,
+        NativeFfmpegSessionHandle session,
         out NativeStreamInfo info)
     {
         if (session.IsInvalid)
@@ -67,37 +67,37 @@ internal static class FrameFluxFFmpegNative
             return -1;
         }
 
-        info = GetTarget<DirectRtspSession>(session.DangerousGetHandle()).GetStreamInfo();
+        info = GetTarget<DirectFfmpegSession>(session.DangerousGetHandle()).GetStreamInfo();
         return 0;
     }
 
-    internal static int Seek(NativeRtspSessionHandle session, long timestamp)
+    internal static int Seek(NativeFfmpegSessionHandle session, long timestamp)
     {
         if (session.IsInvalid)
         {
             return -1;
         }
 
-        return GetTarget<DirectRtspSession>(session.DangerousGetHandle())
+        return GetTarget<DirectFfmpegSession>(session.DangerousGetHandle())
             .Seek(timestamp);
     }
 
     internal static void SetPlaybackRate(
-        NativeRtspSessionHandle session,
+        NativeFfmpegSessionHandle session,
         double playbackRate)
     {
         if (!session.IsInvalid)
         {
-            GetTarget<DirectRtspSession>(session.DangerousGetHandle())
+            GetTarget<DirectFfmpegSession>(session.DangerousGetHandle())
                 .SetPlaybackRate(playbackRate);
         }
     }
 
     internal static NativeReadResult ReadFrame(
-        NativeRtspSessionHandle session,
+        NativeFfmpegSessionHandle session,
         out NativeVideoFrameHandle frame)
     {
-        var result = GetTarget<DirectRtspSession>(session.DangerousGetHandle())
+        var result = GetTarget<DirectFfmpegSession>(session.DangerousGetHandle())
             .ReadFrame(out var nativeFrame);
         frame = new NativeVideoFrameHandle(
             nativeFrame is null ? IntPtr.Zero : AllocateHandle(nativeFrame));
@@ -119,7 +119,7 @@ internal static class FrameFluxFFmpegNative
     }
 
     internal static unsafe int CopyFrameToBgra(
-        NativeRtspSessionHandle session,
+        NativeFfmpegSessionHandle session,
         NativeVideoFrameHandle frame,
         IntPtr destination,
         int destinationWidth,
@@ -137,7 +137,7 @@ internal static class FrameFluxFFmpegNative
             return -1;
         }
 
-        return GetTarget<DirectRtspSession>(session.DangerousGetHandle())
+        return GetTarget<DirectFfmpegSession>(session.DangerousGetHandle())
             .CopyFrameToBgra(
                 GetTarget<DirectVideoFrame>(frame.DangerousGetHandle()),
                 destination,
@@ -154,10 +154,10 @@ internal static class FrameFluxFFmpegNative
     }
 
     internal static NativeReadResult ReadPacket(
-        NativeRtspSessionHandle session,
+        NativeFfmpegSessionHandle session,
         out NativeVideoPacketHandle packet)
     {
-        var result = GetTarget<DirectRtspSession>(session.DangerousGetHandle())
+        var result = GetTarget<DirectFfmpegSession>(session.DangerousGetHandle())
             .ReadPacket(out var nativePacket);
         packet = new NativeVideoPacketHandle(
             nativePacket is null ? IntPtr.Zero : AllocateHandle(nativePacket));
@@ -183,21 +183,21 @@ internal static class FrameFluxFFmpegNative
         ReleaseHandle<DirectVideoPacket>(packetHandle, static packet => packet.Dispose());
     }
 
-    internal static int IsHardwareActive(NativeRtspSessionHandle session) =>
-        !session.IsInvalid && GetTarget<DirectRtspSession>(session.DangerousGetHandle()).IsHardwareVideoDecodingActive
+    internal static int IsHardwareActive(NativeFfmpegSessionHandle session) =>
+        !session.IsInvalid && GetTarget<DirectFfmpegSession>(session.DangerousGetHandle()).IsHardwareVideoDecodingActive
             ? 1
             : 0;
 
-    internal static long GetLastHardwareTransferTicks(NativeRtspSessionHandle session) =>
+    internal static long GetLastHardwareTransferTicks(NativeFfmpegSessionHandle session) =>
         session.IsInvalid
             ? 0
-            : GetTarget<DirectRtspSession>(session.DangerousGetHandle()).LastHardwareTransferTicks;
+            : GetTarget<DirectFfmpegSession>(session.DangerousGetHandle()).LastHardwareTransferTicks;
 
-    internal static bool HasAudio(NativeRtspSessionHandle session) =>
-        !session.IsInvalid && GetTarget<DirectRtspSession>(session.DangerousGetHandle()).HasAudio;
+    internal static bool HasAudio(NativeFfmpegSessionHandle session) =>
+        !session.IsInvalid && GetTarget<DirectFfmpegSession>(session.DangerousGetHandle()).HasAudio;
 
     internal static bool TryDequeueAudioFrame(
-        NativeRtspSessionHandle session,
+        NativeFfmpegSessionHandle session,
         out NativeAudioFrame? frame)
     {
         if (session.IsInvalid)
@@ -206,19 +206,19 @@ internal static class FrameFluxFFmpegNative
             return false;
         }
 
-        return GetTarget<DirectRtspSession>(session.DangerousGetHandle())
+        return GetTarget<DirectFfmpegSession>(session.DangerousGetHandle())
             .TryDequeueAudioFrame(out frame);
     }
 
-    internal static string GetVideoDecoderDiagnostics(NativeRtspSessionHandle session) =>
+    internal static string GetVideoDecoderDiagnostics(NativeFfmpegSessionHandle session) =>
         session.IsInvalid
             ? "Unavailable"
-            : GetTarget<DirectRtspSession>(session.DangerousGetHandle()).VideoDecoderDiagnostics;
+            : GetTarget<DirectFfmpegSession>(session.DangerousGetHandle()).VideoDecoderDiagnostics;
 
-    internal static string GetError(NativeRtspSessionHandle session) =>
+    internal static string GetError(NativeFfmpegSessionHandle session) =>
         session.IsInvalid
             ? "FFmpeg session is unavailable."
-            : GetTarget<DirectRtspSession>(session.DangerousGetHandle()).Error;
+            : GetTarget<DirectFfmpegSession>(session.DangerousGetHandle()).Error;
 
     private static IntPtr AllocateHandle(object target) =>
         GCHandle.ToIntPtr(GCHandle.Alloc(target, GCHandleType.Normal));
