@@ -12,9 +12,13 @@ internal static class FFmpegInputOptionPolicy
 
     internal static IReadOnlyList<KeyValuePair<string, string>> GetLowLatencyOptions(
         bool enabled,
-        bool isHls = false) =>
-        enabled && !isHls ? SafeLowLatencyOptions : [];
+        bool isHls = false,
+        bool isHttpMedia = false) =>
+        enabled && !isHls && !isHttpMedia ? SafeLowLatencyOptions : [];
 
     internal static bool ShouldPrefetchPackets(bool isHls, bool isPacketReader) =>
-        isHls && !isPacketReader;
+        ShouldPrefetchPackets(isHls, isHttpMedia: false, isPacketReader);
+
+    internal static bool ShouldPrefetchPackets(bool isHls, bool isHttpMedia, bool isPacketReader) =>
+        (isHls || isHttpMedia) && !isPacketReader;
 }

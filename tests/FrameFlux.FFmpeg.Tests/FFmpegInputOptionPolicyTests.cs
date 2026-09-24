@@ -24,17 +24,29 @@ public sealed class FFmpegInputOptionPolicyTests
     }
 
     [Theory]
-    [InlineData(true, false, true)]
-    [InlineData(true, true, false)]
-    [InlineData(false, false, false)]
-    public void PacketPrefetch_IsLimitedToDirectHlsDecoding(
+    [InlineData(true, false, false, true)]
+    [InlineData(false, true, false, true)]
+    [InlineData(true, false, true, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(false, false, false, false)]
+    public void PacketPrefetch_IncludesHlsAndHttpMedia(
         bool isHls,
+        bool isHttpMedia,
         bool isPacketReader,
         bool expected)
     {
         Assert.Equal(
             expected,
-            FFmpegInputOptionPolicy.ShouldPrefetchPackets(isHls, isPacketReader));
+            FFmpegInputOptionPolicy.ShouldPrefetchPackets(isHls, isHttpMedia, isPacketReader));
+    }
+
+    [Fact]
+    public void HttpMediaDoesNotUseRtspLowLatencyOptions()
+    {
+        Assert.Empty(FFmpegInputOptionPolicy.GetLowLatencyOptions(
+            enabled: true,
+            isHls: false,
+            isHttpMedia: true));
     }
 
     [Fact]

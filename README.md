@@ -1,226 +1,233 @@
 # FrameFlux
 
-FrameFlux 是一个跨平台媒体播放库，提供 FFmpeg 和 WebRTC 两套播放后端，支持 RTSP/RTSPS、HLS（m3u8）、WHEP/go2rtc WebRTC 直播和本地文件播放。硬件解码使用与目标 FFmpeg 公共头文件匹配的版本化 ABI 布局。
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%2010.0-purple.svg)](https://dotnet.microsoft.com/)
+[![Platforms](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20Android-blue.svg)]()
 
-当前能力包括音视频软硬件解码、平台音频输出、直播音画同步、本地文件时钟、Seek、Duration、0.25x 至 4x 音视频倍速，以及运行时音量和静音控制。HLS 播放包含包预取、音频缓冲和长时间播放时钟纠偏，音频倍速通过 FFmpeg `atempo` 保持音调，内部统一为 48 kHz、双声道、16 位有符号 PCM。
+**FrameFlux** 是一个专为 .NET 生态（WPF、Avalonia Desktop、Avalonia Android）打造的现代化、高性能、跨平台多媒体播放框架。提供 **FFmpeg** 与 **WebRTC** 双播放后端，针对实时安防监控、低延迟 WebRTC 直播与高清网络/本地视频点播进行了深度的架构解耦与渲染优化。
 
-## 项目结构
+---
 
-| 项目 | 包 | 用途 |
+## 核心特性
+
+- **双引擎全格式支持**：
+  - **FFmpeg 后端**：支持本地多媒体文件、RTSP/RTSPS 实时监控流、HLS（`.m3u8`）直播切片流，以及 **HTTP/HTTPS 在线音视频点播**（MP4、MKV、WebM、MOV、TS、FLV、MP3、AAC 等常见格式）。
+  - **WebRTC 后端**：基于 SIPSorcery 实现，原生支持 WHEP（WebRTC HTTP Egress Protocol）、WHIP、go2rtc WebSocket 信令、`webrtc://` 协议及 SDP/ICE 直接协商。
+- **异步预读缓冲（Packet Prefetch Buffer）**：
+  - 底层解复用与解码渲染完全解耦，内置 1024 级后台异步网络预取队列与 4MB 套接字大缓存，彻底抵御网络抖动与卡顿。
+  - 支持在线点播流的线程安全无缝拖拽（Seek）与时钟自动重基准。
+- **全平台硬件加速与零拷贝呈现**：
+  - **Windows**：支持 D3D11VA 硬件解码，提供基于 DirectX / DXGI 共享纹理的 `GpuComposition`（允许 UI 控件自由浮动遮罩在视频上方）与高性能 `NativeSurface`。
+  - **Linux**：支持 VAAPI 硬件解码，通过 DRM PRIME / DMA-BUF 和 EGLImage 直通 GPU 合成。
+  - **Android**：MediaCodec 硬件解码与 `GL_TEXTURE_EXTERNAL_OES` / `SurfaceTexture` 零拷贝渲染。
+- **完整的播放控制与音画同步**：
+  - 精确 PTS 时间轴同步，支持播放、暂停、毫秒级 Seek、Duration 获取。
+  - **0.25x ~ 4.0x 音视频倍速**：内置 FFmpeg `atempo` 变调滤镜，倍速播放时保证音频音调不失真。
+  - 运行时音量、静音与源增益（Gain dB）调节。
+- **原生多平台音频输出**：
+  - Windows：WASAPI 共享模式（自动容灾回退至 `waveOut`）。
+  - Linux：ALSA（`libasound.so.2`）。
+  - Android：`AudioTrack`。
+- **实时诊断与视频快照**：
+  - 实时暴露硬件解码状态（`IsHardwareVideoDecodingActive`）、解码器详情、丢帧率与音画同步偏移。
+  - 支持随时通过 `CaptureSnapshotAsync` 截取高质量视频当前帧。
+
+---
+
+## 项目架构
+
+| 模块 / 项目 | 程序集 / Nuget 包 | 说明 |
 | --- | --- | --- |
-| `src/FrameFlux.Abstractions` | `FrameFlux.Abstractions` | 与协议无关的播放器、媒体源、帧、能力和视频输出契约。 |
-| `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | 独立于 UI 的 FFmpeg 播放器，支持 RTSP/RTSPS、HLS 和本地文件，不附带原生二进制。 |
-| `src/FrameFlux.WebRtc` | `FrameFlux.WebRtc` | 基于 SIPSorcery 的 WebRTC 播放器，支持 WHEP、go2rtc、WebRTC URI 和 SDP/ICE 输入。 |
+| `src/FrameFlux.Abstractions` | `FrameFlux.Abstractions` | 与 UI/底层解耦的核心契约（`IMediaPlayer`、`MediaSource`、配置项、能力和帧租约）。 |
+| `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | FFmpeg 独立媒体播放引擎，负责解复用、音频解码与时钟同步（不含原生二进制）。 |
+| `src/FrameFlux.WebRtc` | `FrameFlux.WebRtc` | 纯托管实现的 WebRTC 播放引擎，支持 WHEP、go2rtc 及 SDP 协商。 |
 | `src/FrameFlux.FFmpeg.Android` | `FrameFlux.FFmpeg.Android` | 接收 FFmpeg 解复用 H.264/HEVC 数据的 Android MediaCodec 硬件解码器。 |
-| `src/FrameFlux.Presentation` | `FrameFlux.Presentation` | UI 控件共享的、与渲染后端无关的播放生命周期。 |
-| `src/FrameFlux.Rendering.Windows` | `FrameFlux.Rendering.Windows` | Windows UI 控件共享的 Win32 和 D3D11 视频呈现。 |
-| `src/FrameFlux.Avalonia` | `FrameFlux.Avalonia` | Avalonia `MediaView` 和平台渲染输出。 |
-| `src/FrameFlux.Avalonia.Android` | `FrameFlux.Avalonia.Android` | Avalonia Android SurfaceTexture/OES 零拷贝呈现后端。 |
-| `src/FrameFlux.Avalonia.Linux` | `FrameFlux.Avalonia.Linux` | Avalonia Linux EGL、DMA-BUF 和 NativeSurface 呈现后端。 |
-| `src/FrameFlux.Avalonia.Windows` | `FrameFlux.Avalonia.Windows` | Avalonia Windows D3D11 呈现后端。 |
-| `src/FrameFlux.Wpf` | `FrameFlux.Wpf` | 可复用的 WPF 播放控件和渲染器。 |
-| `src/FrameFlux.FFmpeg.NativeAssets.*` | 对应平台原生资源包 | Windows x64、Linux x64 和 Android ABI 对应的 FFmpeg 运行库。 |
+| `src/FrameFlux.Presentation` | `FrameFlux.Presentation` | UI 控件共享的播放控制与生命周期调度层。 |
+| `src/FrameFlux.Rendering.Windows` | `FrameFlux.Rendering.Windows` | Windows 平台专用的 D3D11 与 Win32 视频渲染共享管道。 |
+| `src/FrameFlux.Wpf` | `FrameFlux.Wpf` | 面向 **WPF** 的播放器控件 `MediaView`。 |
+| `src/FrameFlux.Avalonia` | `FrameFlux.Avalonia` | 面向 **Avalonia** 的跨平台播放器控件 `MediaView`。 |
+| `src/FrameFlux.Avalonia.Windows` | `FrameFlux.Avalonia.Windows` | Avalonia 在 Windows 下的 D3D11 合成后端。 |
+| `src/FrameFlux.Avalonia.Linux` | `FrameFlux.Avalonia.Linux` | Avalonia 在 Linux 下的 EGL / DMA-BUF 合成后端。 |
+| `src/FrameFlux.Avalonia.Android` | `FrameFlux.Avalonia.Android` | Avalonia 在 Android 下的 MediaCodec / OES 零拷贝后端。 |
+| `src/FrameFlux.FFmpeg.NativeAssets.*` | 平台 Native 运行库 | 包含 Windows x64、Linux x64、Android 架构编译好的 FFmpeg 动静态库。 |
 
-## 示例程序
+---
 
-| 示例 | 框架 | 播放集成 |
-| --- | --- | --- |
-| `examples/FrameFlux.Demo.Wpf` | WPF（Windows） | 自动选择 FFmpeg/WebRTC，支持软硬解码和 `SoftwareBitmap`、`GpuComposition`、`NativeSurface` 三种呈现模式。 |
-| `examples/FrameFlux.Demo.Avalonia.Desktop` | Avalonia Desktop | 自动选择 FFmpeg/WebRTC；Windows 支持三种呈现模式，Linux 使用已注册的 EGL 后端。 |
-| `examples/FrameFlux.Demo.Avalonia.Android` | Avalonia Android | 在标准 Android Activity 中承载共享 AXAML 界面。 |
+## 快速上手
 
-```powershell
-dotnet run --project examples/FrameFlux.Demo.Wpf
-dotnet run --project examples/FrameFlux.Demo.Avalonia.Desktop
-dotnet build examples/FrameFlux.Demo.Avalonia.Android -c Release `
-  -p:FrameFluxAllowUnsupportedAndroidPageAlignment=true
-```
+### 1. WPF 项目集成
 
-桌面示例构建时，会从 `native/artifacts/runtimes/{rid}/native` 自动复制当前宿主 RID 的 FFmpeg 文件。测试其他 RID 时可设置 `FrameFluxNativeRuntimeIdentifier`。正式发布的应用应引用匹配的 `FrameFlux.FFmpeg.NativeAssets.*` 包；`FrameFlux.FFmpeg` 核心包不包含原生二进制。
-
-## Avalonia 平台注册
-
-Avalonia 桌面应用只需引用并注册实际发布的平台包。跨平台桌面应用可以同时注册 Windows 和 Linux 后端，运行时只会创建当前操作系统对应的实现：
-
-```csharp
-AppBuilder.Configure<App>()
-    .UsePlatformDetect()
-    .UseFrameFluxWindows()
-    .UseFrameFluxLinux();
-```
-
-Windows 的 `NativeSurface` 可以使用 FFmpeg 或 WebRTC 的 D3D11VA 解码纹理、D3D11 视频处理器和 DXGI 交换链，不会把视频帧读回 CPU。`GpuComposition` 会把解码纹理转换为共享 BGRA 纹理并导入框架合成器，因此允许 Avalonia 或 WPF 控件覆盖在视频上方。
-
-Linux 在可用时使用 VAAPI 硬件解码，将 DRM PRIME DMA-BUF 通过 EGLImage 导入 GPU：
-
-- `GpuComposition` 位于 Avalonia 合成树中，支持控件覆盖，并保持 VAAPI 到 DMA-BUF、EGLImage 的零拷贝路径。
-- `NativeSurface` 在 X11/XWayland 下使用真实子 XID、独立 EGL 窗口和无 alpha 的 X11 Visual。
-- 纯 Wayland 当前使用 `GpuComposition`。Avalonia 12 尚未通过 `NativeControlHost` 提供 `wl_subsurface` 宿主。
-- 零拷贝互操作不可用时，自动模式可以回退到软件输出；显式硬件模式会报告错误。
-
-Android 应用注册 Android 后端：
-
-```csharp
-protected override AppBuilder CustomizeAppBuilder(AppBuilder builder) =>
-    base.CustomizeAppBuilder(builder).UseFrameFluxAndroid();
-```
-
-注册同时启用 `FrameFlux.FFmpeg.Android`。FFmpeg 负责 RTSP/RTSPS、HLS、音频解码以及 H.264/HEVC 解复用，视频访问单元交给 MediaCodec，并通过 `GL_TEXTURE_EXTERNAL_OES` 渲染到 SurfaceTexture，全程不读回 CPU。零拷贝 Surface 没有可长期保留的 CPU 帧，因此快照使用软件路径。
-
-Android 的 `NativeSurface` 基于系统 `SurfaceView`，位于 Avalonia 合成树之外。因此 Popup、ComboBox 下拉层、菜单、Tooltip 和 Flyout 可能显示在视频下方。界面需要覆盖视频时应选择 `GpuComposition`；`NativeSurface` 适用于视频始终处于原生层、且上方没有 Avalonia 浮层的场景。
-
-## 解码与呈现
-
-解码策略和呈现模式可以独立配置：
-
-```csharp
-Player.OpenOptions = new MediaOpenOptions
-{
-    Video = new MediaVideoOptions
-    {
-        DecodingPolicy = MediaVideoDecodingPolicy.HardwarePreferred
-    }
-};
-Player.PresentationMode = MediaVideoPresentationMode.GpuComposition;
-```
-
-`DecodingPolicy` 支持 `Automatic`、`SoftwareOnly`、`HardwarePreferred` 和 `HardwareRequired`。`PresentationMode` 支持 `Automatic`、`SoftwareBitmap`、`NativeSurface` 和 `GpuComposition`。
-
-播放器运行期间修改任一设置会执行受控重启。显式 GPU 呈现要求已注册的平台 GPU 后端、独占会话和可用的硬件解码；不支持的显式组合会抛出错误，而不会静默切换模式。`Automatic` 在可用时选择 GPU 合成，否则使用软件输出。`HardwarePreferred` 回退到软件解码后，自适应输出也会切换为 `SoftwareBitmap`。
-
-可通过以下属性检查实际管线：
-
-- `EffectivePresentationMode`
-- `IsHardwareVideoDecodingActive`
-- `VideoDecoderDiagnostics`
-
-## Android 页面大小
-
-Android 目标要求 API 24 或更高。当前仓库中的 Android FFmpeg 二进制使用 4 KB ELF LOAD 对齐，在发布到要求 16 KB 页面的设备或应用商店前必须替换；托管项目设置无法修复原生二进制。
-
-因此 Android 示例构建和原生资源打包默认会失败，失败时不会产生 `.nupkg`。`FrameFluxAllowUnsupportedAndroidPageAlignment=true` 仅用于本地托管代码验证，不会让 APK 或包满足正式发布要求。
-
-## FFmpeg 运行库
-
-应用也可以在创建播放器前配置自己的 FFmpeg 目录：
-
-```csharp
-FFmpegHelper.RegisterFFmpeg(@"C:\ffmpeg\bin");
-```
-
-目录必须包含一套完整、架构匹配且来自同一 FFmpeg 版本的运行库。播放需要 `avcodec`、`avformat`、`avutil`、`avfilter`、`swscale` 和 `swresample`。Windows D3D11VA 与 Linux VAAPI 直接使用这些库。Android 使用相同的 FFmpeg 导出完成网络媒体解复用、音频解码和音频倍速，再将编码视频送入系统 MediaCodec。
-
-UI 包不依赖具体 FFmpeg 后端，应用负责注入播放器工厂：
-
-```csharp
-Player.PlayerFactory = new FfmpegMediaPlayerFactory();
-
-// WHEP、go2rtc 或其他 WebRTC 输入
-Player.PlayerFactory = new WebRtcMediaPlayerFactory();
-```
-
-Avalonia 和 WPF 使用同一套呈现契约。Windows 上的 WebRTC 软件解码输出到 `SoftwareBitmap`；D3D11VA 硬件解码既可回传软件位图，也可将 D3D11 纹理直接交给 `GpuComposition` 或 `NativeSurface`。`IsHardwareVideoDecodingActive` 和 `VideoDecoderDiagnostics` 会在首帧建立实际解码管线后刷新。
-
-WPF 可以直接使用打包的控件：
+在项目文件 `.csproj` 中引用 `FrameFlux.Wpf`：
 
 ```xml
-<frameFlux:MediaView
-    Source="{Binding Source}"
-    AutoPlay="True"
-    Volume="{Binding Volume}"
-    IsMuted="{Binding IsMuted}"
-    Stretch="Uniform" />
+<PackageReference Include="FrameFlux.Wpf" Version="0.1.2" />
 ```
 
-`MediaView.Source` 使用与协议无关的 `MediaSource` 契约。当前后端支持 RTSP、RTSPS、HLS（m3u8）和本地文件路径。本地文件会提供 Duration、Seek 和 0.25x 至 4x 的音视频倍速；直播源保持实时播放，不开放 Seek 和倍速能力。HLS 直播会使用更大的实际音频缓冲以降低网络抖动造成的卡顿。
+#### XAML 界面定义
+```xml
+<Window x:Class="MyApp.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ff="clr-namespace:FrameFlux.Wpf;assembly=FrameFlux.Wpf"
+        Title="FrameFlux Player" Height="600" Width="900">
+    <Grid>
+        <!-- 播放器控件 -->
+        <ff:MediaView x:Name="Player"
+                      AutoPlay="True"
+                      PresentationMode="GpuComposition"
+                      Stretch="Uniform" />
+    </Grid>
+</Window>
+```
 
-## 音频输出
+#### 代码逻辑绑定
+```csharp
+using FrameFlux;
+using FrameFlux.FFmpeg;
 
-平台音频输出分别使用：
+// 1. 指定播放器内核（FFmpeg 播放器或 WebRtcMediaPlayerFactory）
+Player.PlayerFactory = new FfmpegMediaPlayerFactory();
 
-- Windows：WASAPI 共享模式；默认设备无法初始化时自动回退到 `waveOut`。
-- Linux：ALSA（`libasound.so.2`）。
-- Android：`AudioTrack`。
+// 2. 配置播放选项（可选）
+Player.OpenOptions = new MediaOpenOptions
+{
+    Network = new MediaNetworkOptions
+    {
+        LatencyMode = MediaLatencyMode.Default, // 点播建议 Default，RTSP 监控可设为 Low
+        Transport = MediaTransport.Tcp
+    },
+    Video = new MediaVideoOptions
+    {
+        DecodingPolicy = MediaVideoDecodingPolicy.HardwarePreferred // 优先使用 GPU 硬解
+    }
+};
 
-可通过 `Audio.OutputDeviceId` 和 `Audio.BufferDuration` 选择设备及缓冲时长，并通过 `MediaDiagnostics.Audio` 查看当前后端、排队音频、恢复次数和最近错误。
+// 3. 打开播放源（支持本地文件、在线 MP4、HLS 或 RTSP）
+await Player.OpenAsync(MediaSource.Parse("https://example.com/videos/sample.mp4"));
+await Player.PlayAsync();
+```
 
-## 播放器 API
+---
 
-与协议无关的播放器 API 将不可变的打开选项和运行时控制分开：
+### 2. Avalonia 项目集成
+
+在 `Program.cs` 初始化时注册当前操作系统的渲染后端：
+
+```csharp
+public static AppBuilder BuildAvaloniaApp()
+    => AppBuilder.Configure<App>()
+        .UsePlatformDetect()
+        .UseFrameFluxWindows()   // Windows 平台 D3D11 渲染
+        .UseFrameFluxLinux();    // Linux 平台 EGL / DMA-BUF 渲染
+```
+
+在 AXAML 中使用 `MediaView`：
+
+```xml
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ff="clr-namespace:FrameFlux.Avalonia;assembly=FrameFlux.Avalonia">
+    <ff:MediaView x:Name="Player"
+                  PresentationMode="GpuComposition"
+                  Stretch="Uniform" />
+</UserControl>
+```
+
+---
+
+### 3. 无 UI / 后台纯代码调用 (Core API)
+
+`FrameFlux` 的引擎完全独立于界面，可直接在后台服务中解码与提取帧：
 
 ```csharp
 await using IMediaPlayer player = new FfmpegMediaPlayer();
-await player.OpenAsync(
-    MediaSource.Parse("rtsp://camera/stream"),
-    new MediaOpenOptions
-    {
-        SessionSharing = MediaSessionSharingMode.Shared,
-        Network = new MediaNetworkOptions
-        {
-            Transport = MediaTransport.Tcp,
-            LatencyMode = MediaLatencyMode.Low,
-            Reconnect = new MediaReconnectOptions
-            {
-                IsEnabled = true,
-                MaximumAttempts = 5
-            }
-        },
-        Video = new MediaVideoOptions
-        {
-            DecodingPolicy = MediaVideoDecodingPolicy.HardwarePreferred,
-            SnapshotPolicy = MediaSnapshotPolicy.KeepLatestFrame
-        },
-        Audio = new MediaAudioOptions
-        {
-            IsEnabled = true,
-            GainDecibels = 0
-        }
-    });
 
-player.Volume = 0.75;
-player.IsMuted = false;
+// 注册状态与帧到达事件
+player.StateChanged += (sender, e) => Console.WriteLine($"State: {e.NewState}");
+player.FrameReceived += (sender, frame) =>
+{
+    Console.WriteLine($"Received {frame.Width}x{frame.Height} format: {frame.PixelFormat}");
+};
+
+// 打开并播放
+await player.OpenAsync(MediaSource.Parse("rtsp://admin:123456@192.168.1.100:554/stream"));
 await player.PlayAsync();
+
+// 运行时控制
+await player.PauseAsync();
+await player.SeekAsync(TimeSpan.FromMinutes(2)); // 支持点播源跳转
+player.PlaybackRate = 1.5;                       // 1.5x 倍速
+player.Volume = 0.8;                             // 80% 音量
 ```
 
-`SessionSharing` 默认为 `Dedicated`，每个播放器分别打开输入。只有相同媒体源和流相关选项需要复用同一个物理输入时才应使用 `Shared`。各播放器仍保有独立事件和生命周期，最后一个播放器停止后输入才会关闭。共享输入只有一个音频输出，因此音量和静音状态共享，并以最后一次修改为准。原生 Surface 无法分发给多个视图，所以共享播放使用软件帧渲染。
+---
 
-快照缓冲默认关闭。只有需要 `CaptureSnapshotAsync` 时才应使用 `KeepLatestFrame`。关闭快照时 GPU 呈现保持零读回；启用后，在原生纹理所有权转移给渲染器之前会复制最新解码帧。
+## 媒体源与模式参考
 
-创建大量播放器时，可设置 `FfmpegMediaPlayerFactoryOptions.MaximumConcurrentOpenOperations`；默认值为 8，设置为 `null` 可移除工厂级并发限制。
+### 媒体源类型与协议支持
 
-`Audio.GainDecibels` 在运行时音量控制前应用源增益，默认 `0 dB`，范围为 `-60 dB` 到 `+24 dB`。通常应保持默认值；增益只影响当前播放器的音频，不会修改系统主音量。正增益使用饱和转换避免整数溢出。`IMediaPlayer.Volume` 始终使用标准的 `0..1` 范围。
+| 源类型 | 协议示例 | 推荐后端 | 具备能力 |
+| --- | --- | --- | --- |
+| **在线音视频点播** | `http://.../movie.mp4`<br/>`https://.../video.mkv` | `FfmpegMediaPlayer` | 异步预读缓冲、Seek、Pause、Duration、0.25x~4x 倍速 |
+| **本地文件** | `C:\Videos\demo.mp4`<br/>`file:///home/user/test.mkv` | `FfmpegMediaPlayer` | 本地高速 I/O、Seek、Pause、Duration、0.25x~4x 倍速 |
+| **HLS 直播流** | `http://.../live.m3u8` | `FfmpegMediaPlayer` | 异步切片预取、直播时钟同步、低延迟缓冲 |
+| **RTSP 监控流** | `rtsp://camera.local:554/stream` | `FfmpegMediaPlayer` | TCP/UDP 传输、极低延迟低丢帧策略（`LowLatency`） |
+| **WebRTC 实时流** | `http://.../whep`<br/>`ws://.../api/ws`<br/>`webrtc://...` | `WebRtcMediaPlayer` | WHEP/WHIP 协商、超低延迟毫秒级互动直播 |
 
-平台渲染器通过 `IMediaVideoOutput` 接收 `IMediaFrameLease`。`TryPresent` 成功后帧所有权转移给输出；拒绝或失败的提交仍由播放器持有。软件渲染器和原生框架渲染器遵循同一所有权规则。
+---
 
-## 开发与验证
+### 呈现模式与解码策略
 
-构建完整解决方案并运行确定性测试：
+#### 呈现模式（`MediaVideoPresentationMode`）
+- **`GpuComposition`（推荐）**：
+  将显卡解码后的 GPU 纹理直接共享给 WPF / Avalonia 的 UI 合成引擎。
+  - **优势**：GPU 内部处理，零 CPU 拷贝，**完美支持在其上方叠加 WPF / Avalonia 按钮、控制条等原生 XAML 浮层**。
+- **`NativeSurface`**：
+  使用独立的平台原生交换链（DirectX SwapChain / X11 Visual / Android SurfaceView）直接向屏幕投屏。
+  - **优势**：极致渲染帧率；注意在 Android 等系统上可能覆盖上层 UI 控件。
+- **`SoftwareBitmap`**：
+  回读为内存 BGRA 字节并由软件位图渲染。
+  - **优势**：兼容所有老旧显卡与无 GPU 加速的环境。
+
+#### 解码策略（`MediaVideoDecodingPolicy`）
+- `Automatic`：优先尝试硬件解码，失败时无缝自动回退到软件解码。
+- `HardwarePreferred`：倾向硬件解码；若硬件初始化失败则回退至软件解码。
+- `HardwareRequired`：必须使用 GPU 硬件解码；若硬件不支持则抛出异常。
+- `SoftwareOnly`：强制仅使用 CPU 软解（如排查驱动兼容性问题）。
+
+---
+
+## 示例程序运行
+
+仓库内置了全功能演示 Demo，涵盖源解析、模式切换、倍速/音量控制与底层诊断状态展示：
 
 ```powershell
-dotnet build FrameFlux.slnx -c Release `
-  -p:FrameFluxAllowUnsupportedAndroidPageAlignment=true
+# 运行 WPF 示例 (Windows)
+dotnet run --project examples/FrameFlux.Demo.Wpf
+
+# 运行 Avalonia 跨平台桌面示例 (Windows / Linux)
+dotnet run --project examples/FrameFlux.Demo.Avalonia.Desktop
+
+# 构建 Android 示例
+dotnet build examples/FrameFlux.Demo.Avalonia.Android -c Release -p:FrameFluxAllowUnsupportedAndroidPageAlignment=true
+```
+
+---
+
+## 构建与测试
+
+编译整个解决方案：
+```powershell
+dotnet build FrameFlux.slnx -c Release -p:FrameFluxAllowUnsupportedAndroidPageAlignment=true
+```
+
+运行全部自动化单元测试（包含会话生命周期、时钟同步、预读机制、协议边界校验）：
+```powershell
 dotnet test tests/FrameFlux.FFmpeg.Tests/FrameFlux.FFmpeg.Tests.csproj -c Release
 ```
 
-完整解决方案构建临时启用 Android 对齐覆盖，是因为仓库内的原生二进制被有意阻止用于发布。替换为 16 KB 对齐的 Android `.so` 后应移除该参数。
-
-测试覆盖公共 API 漂移、并发播放器、共享会话生命周期、帧租约所有权和短时稳定性循环。本地压力测试可以增加循环次数而不修改测试源码：
-
-```powershell
-$env:FRAMEFLUX_STABILITY_ITERATIONS = 10000
-dotnet test tests/FrameFlux.FFmpeg.Tests/FrameFlux.FFmpeg.Tests.csproj -c Release
-```
-
-确定性测试不能代替真实 RTSP 长时间运行验证。发布前仍需在目标硬件上覆盖断网重连、音频设备恢复、GPU 适配器兼容性、设备丢失和原生渲染器回退。
-
-桌面库目标框架为 `net8.0`，可由 .NET 8、9 和 10 应用引用。Android 程序集目标框架为当前支持的 `net10.0-android`，无需额外生成桌面 `net10.0` 程序集。
-
-当前直接绑定支持 FFmpeg 6、7 和 8 的 ABI，即 `avcodec` 主版本 60、61 和 62。每个平台目录必须保持一套完整且架构匹配的 FFmpeg 构建。
-
-首次发布的准备步骤、包白名单和阻断条件见 [发布指南](docs/RELEASING.md)。第三方组件及原生二进制的待确认事项见 [第三方声明](THIRD-PARTY-NOTICES.md)。
+---
 
 ## 许可证
 
-FrameFlux 源码和托管包使用 [MIT License](LICENSE)。FFmpeg 及其他第三方组件适用各自的许可证；发布原生资源包前必须同时满足 [第三方声明](THIRD-PARTY-NOTICES.md) 中列出的义务。
-
-仓库地址：https://github.com/wobushiafa/FrameFlux
+本项目基于 [MIT License](LICENSE) 协议开源。包含的第三方依赖及 FFmpeg 组件请参阅 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。

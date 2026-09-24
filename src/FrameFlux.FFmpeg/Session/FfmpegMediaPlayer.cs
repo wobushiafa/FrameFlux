@@ -271,7 +271,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             cancellationToken.ThrowIfCancellationRequested();
 
             var isFile = source.Uri.IsFile;
-            if (!isFile && !FfmpegSource.IsHls(source.Uri) && source.Uri.Scheme is not ("rtsp" or "rtsps"))
+            if (!FfmpegSource.IsSupported(source.Uri))
             {
                 throw new NotSupportedException(
                     $"The FFmpeg backend does not support the '{source.Uri.Scheme}' media scheme.");
@@ -280,9 +280,10 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             {
                 throw new FileNotFoundException("The media file does not exist.", source.Uri.LocalPath);
             }
-            if (isFile && resolvedOptions.SessionSharing == MediaSessionSharingMode.Shared)
+            var isSeekable = FfmpegSource.IsSeekable(source.Uri);
+            if (isSeekable && resolvedOptions.SessionSharing == MediaSessionSharingMode.Shared)
             {
-                throw new NotSupportedException("Seekable file playback requires a dedicated media session.");
+                throw new NotSupportedException("Seekable media playback requires a dedicated media session.");
             }
 
             lock (_sync)
@@ -291,15 +292,15 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
                     _videoOutput?.PreferredFrameStorage == MediaFrameStorageKind.D3D11Texture;
                 _source = source;
                 _options = resolvedOptions;
-                if (!isFile)
+                if (!isSeekable)
                 {
                     _playbackRate = 1d;
                 }
                 _capabilities = new MediaCapabilities(
-                    IsLive: !isFile,
-                    CanPause: isFile,
-                    CanSeek: isFile,
-                    CanChangePlaybackRate: isFile,
+                    IsLive: !isSeekable,
+                    CanPause: isSeekable,
+                    CanSeek: isSeekable,
+                    CanChangePlaybackRate: isSeekable,
                     CanCaptureSnapshots:
                         resolvedOptions.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame &&
                         !usesGpuFrames);
@@ -391,7 +392,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             try
             {
                 await session.StartAsync(cancellationToken).ConfigureAwait(false);
-                if (initialPosition > TimeSpan.Zero && source.Uri.IsFile)
+                if (initialPosition > TimeSpan.Zero && FfmpegSource.IsSeekable(source.Uri))
                 {
                     await session.SeekAsync(initialPosition, cancellationToken).ConfigureAwait(false);
                 }

@@ -158,13 +158,36 @@ public sealed partial class MainView : UserControl
     }
 
 #if !ANDROID
+    private static readonly HashSet<string> ConventionalMediaExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mp4",
+        ".mkv",
+        ".mov",
+        ".avi",
+        ".webm",
+        ".flv",
+        ".ts",
+        ".m3u8",
+        ".mpd",
+        ".m4v",
+        ".wmv",
+        ".mp3",
+        ".aac",
+        ".wav",
+        ".ogg",
+        ".flac"
+    };
+
     private static bool IsWebRtcSource(MediaSource source)
     {
         var uri = source.Uri;
-        if (uri.Scheme is "http" or "https" &&
-            uri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
+        if (uri.Scheme is "http" or "https")
         {
-            return false;
+            var extension = System.IO.Path.GetExtension(uri.AbsolutePath);
+            if (ConventionalMediaExtensions.Contains(extension))
+            {
+                return false;
+            }
         }
 
         return uri.Scheme.Equals("webrtc", StringComparison.OrdinalIgnoreCase) ||

@@ -15,6 +15,10 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
     private readonly BlockingCollection<DirectVideoPacket> _packets = new(PacketCapacity);
     private readonly CancellationTokenSource _cancellation = new();
     private readonly Thread _readerThread;
+    private readonly object _ioSync = new();
+    private readonly AutoResetEvent _wakeReader = new(false);
+    private bool _isEof;
+    private bool _isFlushing;
     private int _terminalResult = ErrorEof;
     private int _disposed;
 
@@ -29,7 +33,7 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
         _readerThread = new Thread(ReadPackets)
         {
             IsBackground = true,
-            Name = "FrameFlux HLS packet prefetch",
+            Name = "FrameFlux packet prefetch",
             Priority = ThreadPriority.BelowNormal
         };
         _readerThread.Start();
@@ -39,12 +43,18 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
     {
         try
         {
-            if (_packets.TryTake(
-                    out packet,
-                    Timeout.Infinite,
-                    _cancellation.Token))
+            while (!_cancellation.IsCancellationRequested)
             {
-                return 0;
+                if (_packets.TryTake(out packet, 50, _cancellation.Token))
+                {
+                    return 0;
+                }
+
+                if (Volatile.Read(ref _isEof) && _packets.Count == 0)
+                {
+                    packet = null;
+                    return Volatile.Read(ref _terminalResult);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -53,6 +63,31 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
 
         packet = null;
         return Volatile.Read(ref _terminalResult);
+    }
+
+    internal int Seek(Func<int> seekAction)
+    {
+        Volatile.Write(ref _isFlushing, true);
+        lock (_ioSync)
+        {
+            try
+            {
+                while (_packets.TryTake(out var oldPacket))
+                {
+                    oldPacket.Dispose();
+                }
+
+                var result = seekAction();
+                Volatile.Write(ref _terminalResult, ErrorEof);
+                Volatile.Write(ref _isEof, false);
+                _wakeReader.Set();
+                return result;
+            }
+            finally
+            {
+                Volatile.Write(ref _isFlushing, false);
+            }
+        }
     }
 
     internal void Cancel() => _cancellation.Cancel();
@@ -65,6 +100,7 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
         }
 
         _cancellation.Cancel();
+        _wakeReader.Set();
         if (Thread.CurrentThread != _readerThread)
         {
             _readerThread.Join();
@@ -75,36 +111,62 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
             packet.Dispose();
         }
         _packets.Dispose();
+        _wakeReader.Dispose();
         _cancellation.Dispose();
     }
 
     private void ReadPackets()
     {
-        var terminalResult = ErrorEof;
         try
         {
             while (!_cancellation.IsCancellationRequested)
             {
-                var result = _api.AvReadFrame(_formatContext, _readPacket);
-                if (result < 0)
+                if (Volatile.Read(ref _isEof))
                 {
-                    terminalResult = result;
-                    break;
+                    WaitHandle.WaitAny([_cancellation.Token.WaitHandle, _wakeReader]);
+                    if (_cancellation.IsCancellationRequested) break;
                 }
 
-                var clone = _api.AvPacketClone(_readPacket);
-                _api.AvPacketUnref(_readPacket);
+                int result;
+                IntPtr clone = IntPtr.Zero;
+                lock (_ioSync)
+                {
+                    if (_cancellation.IsCancellationRequested) break;
+                    if (Volatile.Read(ref _isEof)) continue;
+
+                    result = _api.AvReadFrame(_formatContext, _readPacket);
+                    if (result >= 0)
+                    {
+                        clone = _api.AvPacketClone(_readPacket);
+                        _api.AvPacketUnref(_readPacket);
+                    }
+                }
+
+                if (result < 0)
+                {
+                    Volatile.Write(ref _terminalResult, result);
+                    Volatile.Write(ref _isEof, true);
+                    continue;
+                }
+
                 if (clone == IntPtr.Zero)
                 {
-                    terminalResult = ErrorNoMemory;
-                    break;
+                    Volatile.Write(ref _terminalResult, ErrorNoMemory);
+                    Volatile.Write(ref _isEof, true);
+                    continue;
                 }
 
                 DirectVideoPacket? packet = new(_api, clone);
                 try
                 {
-                    _packets.Add(packet, _cancellation.Token);
-                    packet = null;
+                    while (!_cancellation.IsCancellationRequested && !Volatile.Read(ref _isFlushing))
+                    {
+                        if (_packets.TryAdd(packet, 50, _cancellation.Token))
+                        {
+                            packet = null;
+                            break;
+                        }
+                    }
                 }
                 finally
                 {
@@ -114,12 +176,7 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
         }
         catch (OperationCanceledException)
         {
-            terminalResult = ErrorExit;
-        }
-        finally
-        {
-            Volatile.Write(ref _terminalResult, terminalResult);
-            _packets.CompleteAdding();
+            Volatile.Write(ref _terminalResult, ErrorExit);
         }
     }
 }

@@ -85,12 +85,33 @@ public sealed class FfmpegMediaPlayerTests
     }
 
     [Fact]
-    public async Task GenericPlayer_RejectsNonHlsHttpUrl()
+    public async Task GenericPlayer_OpensHttpMediaFileAsSeekableSource()
+    {
+        var factory = new FakeMediaSessionFactory { SessionDuration = TimeSpan.FromMinutes(5) };
+        await using var player = new FfmpegMediaPlayer(factory);
+
+        await player.OpenAsync(
+            MediaSource.Parse("http://example.com/videos/episode1.mp4"),
+            new MediaOpenOptions
+            {
+                SessionSharing = MediaSessionSharingMode.Dedicated
+            });
+
+        Assert.False(player.Capabilities.IsLive);
+        Assert.True(player.Capabilities.CanPause);
+        Assert.True(player.Capabilities.CanSeek);
+        Assert.True(player.Capabilities.CanChangePlaybackRate);
+    }
+
+    [Fact]
+    public async Task GenericPlayer_RejectsWebRtcSignalingEndpoint()
     {
         await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory());
 
         await Assert.ThrowsAsync<NotSupportedException>(() =>
             player.OpenAsync(MediaSource.Parse("https://example.com/whep")).AsTask());
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            player.OpenAsync(MediaSource.Parse("https://example.com/stream/whip")).AsTask());
     }
 
     [Fact]

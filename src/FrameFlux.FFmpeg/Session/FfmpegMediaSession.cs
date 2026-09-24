@@ -114,7 +114,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             lock (_sync)
             {
                 ThrowIfDisposed();
-                if (!Source.Uri.IsFile && value != 1d)
+                if (!FfmpegSource.IsSeekable(Source.Uri) && value != 1d)
                 {
                     throw new NotSupportedException(
                         "Live sources do not support playback-rate changes.");
@@ -336,7 +336,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         lock (_sync)
         {
             ThrowIfDisposed();
-            if (!Source.Uri.IsFile)
+            if (!FfmpegSource.IsSeekable(Source.Uri))
             {
                 throw new NotSupportedException("Live sources do not support pausing.");
             }

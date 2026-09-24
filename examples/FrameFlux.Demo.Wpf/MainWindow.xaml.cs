@@ -117,21 +117,60 @@ public partial class MainWindow : Window
             ? WebRtcPlayerFactory
             : FfmpegPlayerFactory;
         Player.Source = source;
-        SourceKindTextBlock.Text = source.Uri.IsFile ? "FILE" : "LIVE";
-        SourceKindIndicator.Background = source.Uri.IsFile
+        var isSeekable = source.Uri.IsFile ||
+            (source.Uri.Scheme is "http" or "https" &&
+             ConventionalMediaExtensions.Contains(System.IO.Path.GetExtension(source.Uri.AbsolutePath)));
+        SourceKindTextBlock.Text = source.Uri.IsFile ? "FILE" : (isSeekable ? "VOD" : "LIVE");
+        SourceKindIndicator.Background = isSeekable
             ? System.Windows.Media.Brushes.Gray
             : System.Windows.Media.Brushes.Red;
-        StatusTextBlock.Text = source.Uri.IsFile ? "Opening file" : "Opening stream";
+        StatusTextBlock.Text = isSeekable ? "Opening media" : "Opening stream";
+
+        var targetLatency = isSeekable ? MediaLatencyMode.Default : MediaLatencyMode.Low;
+        if (Player.OpenOptions.Network.LatencyMode != targetLatency)
+        {
+            Player.OpenOptions = Player.OpenOptions with
+            {
+                Network = Player.OpenOptions.Network with
+                {
+                    LatencyMode = targetLatency
+                }
+            };
+        }
+
         await Player.StartAsync();
     }
+
+    private static readonly HashSet<string> ConventionalMediaExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".mp4",
+        ".mkv",
+        ".mov",
+        ".avi",
+        ".webm",
+        ".flv",
+        ".ts",
+        ".m3u8",
+        ".mpd",
+        ".m4v",
+        ".wmv",
+        ".mp3",
+        ".aac",
+        ".wav",
+        ".ogg",
+        ".flac"
+    };
 
     private static bool IsWebRtcSource(MediaSource source)
     {
         var uri = source.Uri;
-        if (uri.Scheme is "http" or "https" &&
-            uri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase))
+        if (uri.Scheme is "http" or "https")
         {
-            return false;
+            var extension = System.IO.Path.GetExtension(uri.AbsolutePath);
+            if (ConventionalMediaExtensions.Contains(extension))
+            {
+                return false;
+            }
         }
 
         return uri.Scheme.Equals("webrtc", StringComparison.OrdinalIgnoreCase) ||

@@ -77,17 +77,27 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
             var url = Marshal.PtrToStringUTF8(options.Url);
             var hasUri = Uri.TryCreate(url, UriKind.Absolute, out var uri);
             var isHls = hasUri && uri is not null && FfmpegSource.IsHls(uri);
+            var isHttpMedia = hasUri && uri is not null && FfmpegSource.IsHttpMedia(uri);
             if (hasUri && uri is not null &&
                 uri.Scheme is "rtsp" or "rtsps")
             {
                 SetDictionary(ref dictionary, "rtsp_transport",
                     Marshal.PtrToStringUTF8(options.Transport) ?? "tcp");
             }
+            if (hasUri && uri is not null &&
+                uri.Scheme is "http" or "https")
+            {
+                SetDictionary(ref dictionary, "buffer_size", "4194304");
+                SetDictionary(ref dictionary, "reconnect", "1");
+                SetDictionary(ref dictionary, "reconnect_streamed", "1");
+                SetDictionary(ref dictionary, "reconnect_delay_max", "5");
+            }
             SetTimeout(ref dictionary, "timeout", options.OpenTimeoutMilliseconds);
             SetTimeout(ref dictionary, "rw_timeout", options.ReadTimeoutMilliseconds);
             foreach (var option in FFmpegInputOptionPolicy.GetLowLatencyOptions(
                 options.LowLatency != 0,
-                isHls))
+                isHls,
+                isHttpMedia))
             {
                 SetDictionary(ref dictionary, option.Key, option.Value);
             }
@@ -147,7 +157,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
 
             result = OpenVideoDecoder(decoder, options);
             if (result >= 0 &&
-                FFmpegInputOptionPolicy.ShouldPrefetchPackets(isHls, _packetReader))
+                FFmpegInputOptionPolicy.ShouldPrefetchPackets(isHls, isHttpMedia, _packetReader))
             {
                 _hlsPacketBuffer = new HlsPacketPrefetchBuffer(
                     _api,
@@ -179,7 +189,10 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
         }
 
         _api.AvPacketUnref(_packet);
-        var result = _api.AvSeekFrame(_formatContext, _videoStreamIndex, timestamp, 1);
+        var result = _hlsPacketBuffer is not null
+            ? _hlsPacketBuffer.Seek(() =>
+                _api.AvSeekFrame(_formatContext, _videoStreamIndex, timestamp, 1))
+            : _api.AvSeekFrame(_formatContext, _videoStreamIndex, timestamp, 1);
         if (result < 0)
         {
             return Fail(result, "av_seek_frame");

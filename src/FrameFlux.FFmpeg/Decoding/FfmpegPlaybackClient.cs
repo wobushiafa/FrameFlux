@@ -133,14 +133,17 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
         _reconnectState = new MediaReconnectState(options);
         _volume = options.Volume;
         _muted = options.IsMuted;
-        var isHls = Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
-            uri is not null && FfmpegSource.IsHls(uri);
+        var hasUri = Uri.TryCreate(url, UriKind.Absolute, out var uri);
+        var isHls = hasUri && uri is not null && FfmpegSource.IsHls(uri);
+        var isHttpMedia = hasUri && uri is not null && FfmpegSource.IsHttpMedia(uri);
         _isHls = isHls;
         _isLive = uri is not null && (uri.Scheme is "rtsp" or "rtsps" || isHls);
         _playbackSynchronizer = new FfmpegPlaybackSynchronizer(
             usesPlaybackClock: !_isLive || isHls,
-            lateFrameRebaseThreshold: isHls ? TimeSpan.FromMilliseconds(250) : null,
-            forwardJumpRebaseThreshold: isHls ? TimeSpan.FromSeconds(1) : null,
+            lateFrameRebaseThreshold: isHls
+                ? TimeSpan.FromMilliseconds(250)
+                : (isHttpMedia ? TimeSpan.FromMilliseconds(500) : null),
+            forwardJumpRebaseThreshold: isHls || isHttpMedia ? TimeSpan.FromSeconds(1) : null,
             maximumAudioDrift: isHls
                 ? TimeSpan.FromMilliseconds(
                     GetAudioBufferDurationMilliseconds(
