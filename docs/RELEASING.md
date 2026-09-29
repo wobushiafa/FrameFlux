@@ -43,6 +43,14 @@ Create disposable applications using only the local package directory as a packa
 
 Run real-device smoke tests for each platform backend before promoting a version from prerelease to stable.
 
+The WebRTC go2rtc smoke tests require a reachable external endpoint and are
+opt-in with `FRAMEFLUX_GO2RTC_URL` set to its `stream.html?src=...` address.
+The FFmpeg HTTP VOD integration test uses a local HTTP server and generated
+media; run it separately with
+`FRAMEFLUX_RUN_NATIVE_HTTP_TESTS=1` and `FRAMEFLUX_FFMPEG_LIBRARY_DIR` set to
+the local FFmpeg shared-library directory. The latter test also requires an
+`ffmpeg` executable on `PATH`.
+
 ## Publication
 
 Review `CHANGELOG.md`, set the release date, and ensure the package version matches the intended tag. Committing, pushing, tagging, and uploading packages are separate operations and require explicit approval.

@@ -174,6 +174,8 @@ player.Volume = 0.8;                             // 80% 音量
 | **RTSP 监控流** | `rtsp://camera.local:554/stream` | `FfmpegMediaPlayer` | TCP/UDP 传输、极低延迟低丢帧策略（`LowLatency`） |
 | **WebRTC 实时流** | `http://.../whep`<br/>`ws://.../api/ws`<br/>`webrtc://...` | `WebRtcMediaPlayer` | WHEP/WHIP 协商、超低延迟毫秒级互动直播 |
 
+HTTP 点播的实际 Seek 能力取决于服务器是否支持随机访问及媒体容器索引；调用 `SeekAsync` 时，FFmpeg 会报告不支持 Seek 的源。WebRTC 当前内置 G.711 PCMA/PCMU 音频解码。
+
 ---
 
 ### 呈现模式与解码策略

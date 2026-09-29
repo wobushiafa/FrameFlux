@@ -86,6 +86,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
 
         return format.Codec is VideoCodecsEnum.H264
             or VideoCodecsEnum.H265
+            or VideoCodecsEnum.JPEG
             or VideoCodecsEnum.VP8
             or VideoCodecsEnum.VP9
             or VideoCodecsEnum.AV1;
@@ -371,6 +372,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
         {
             VideoCodecsEnum.H264 => "h264",
             VideoCodecsEnum.H265 => "hevc",
+            VideoCodecsEnum.JPEG => "mjpeg",
             VideoCodecsEnum.VP8 => "vp8",
             VideoCodecsEnum.VP9 => "vp9",
             VideoCodecsEnum.AV1 => "av1",
@@ -491,6 +493,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
         {
             VideoCodecsEnum.H264 => "h264",
             VideoCodecsEnum.H265 => "hevc",
+            VideoCodecsEnum.JPEG => "mjpeg",
             VideoCodecsEnum.VP8 => "vp8",
             VideoCodecsEnum.VP9 => "vp9",
             VideoCodecsEnum.AV1 => "av1",

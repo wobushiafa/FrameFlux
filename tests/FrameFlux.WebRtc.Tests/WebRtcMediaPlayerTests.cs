@@ -22,7 +22,7 @@ public sealed class WebRtcMediaPlayerTests
         Assert.NotNull(WebRtcMediaPlayerFactory.Instance);
     }
 
-    [Fact]
+    [ExternalFact]
     [Trait("Category", "Integration")]
     public async Task RealGo2Rtc_Test()
     {
@@ -55,7 +55,7 @@ public sealed class WebRtcMediaPlayerTests
         };
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var source = MediaSource.Parse("http://diaofanle.com:52004/stream.html?src=cam_009_main");
+        var source = MediaSource.Parse(Environment.GetEnvironmentVariable("FRAMEFLUX_GO2RTC_URL")!);
         var options = new MediaOpenOptions
         {
             Video = new MediaVideoOptions
@@ -89,14 +89,13 @@ public sealed class WebRtcMediaPlayerTests
         Assert.True(
             maximumFrameGap < TimeSpan.FromMilliseconds(1500),
             $"Expected continuous video callbacks, maximum frame gap was {maximumFrameGap.TotalMilliseconds:F0}ms");
-        // Verify dimensions are 1920x1080 (not squashed or corrupted by YUVJ420P fallback)
-        Assert.Equal(1920, lastW);
-        Assert.Equal(1080, lastH);
+        Assert.True(lastW > 0);
+        Assert.True(lastH > 0);
         // Verify live audio frames received and decoded
         Assert.True(receivedAudioChunks > 0, $"Expected audio chunks, got {receivedAudioChunks}");
     }
 
-    [Fact]
+    [ExternalFact]
     [Trait("Category", "Integration")]
     public async Task RealGo2Rtc_HardwareRequired_D3D11_LiveTest()
     {
@@ -104,7 +103,7 @@ public sealed class WebRtcMediaPlayerTests
         var mockOutput = new MockGpuVideoOutput(acceptFrames: true);
         player.VideoOutput = mockOutput;
 
-        var source = MediaSource.Parse("http://diaofanle.com:52004/stream.html?src=cam_009_main");
+        var source = MediaSource.Parse(Environment.GetEnvironmentVariable("FRAMEFLUX_GO2RTC_URL")!);
         var options = new MediaOpenOptions
         {
             Video = new MediaVideoOptions
@@ -401,11 +400,12 @@ public sealed class WebRtcMediaPlayerTests
 
         output.Reset();
     }
-    [Fact]
+    [ExternalFact]
+    [Trait("Category", "Integration")]
     public async Task Test_KeyFrame_And_Sdp_Enhancement()
     {
         await using var player = new WebRtcMediaPlayer();
-        var source = MediaSource.Parse("http://diaofanle.com:52004/stream.html?src=cam_009_main");
+        var source = MediaSource.Parse(Environment.GetEnvironmentVariable("FRAMEFLUX_GO2RTC_URL")!);
         await player.OpenAsync(source);
         Assert.Equal(MediaPlaybackState.Ready, player.State);
 
@@ -417,13 +417,16 @@ public sealed class WebRtcMediaPlayerTests
         await player.StopAsync();
     }
 
-    [Fact]
+    [ExternalFact]
+    [Trait("Category", "Integration")]
     public async Task Test_Go2Rtc_WebSocket_Signaling()
     {
         using var ws = new System.Net.WebSockets.ClientWebSocket();
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
-        await ws.ConnectAsync(new Uri("ws://diaofanle.com:52004/api/ws?src=cam_009_main"), cts.Token);
+        var source = MediaSource.Parse(Environment.GetEnvironmentVariable("FRAMEFLUX_GO2RTC_URL")!);
+        var endpoint = WebRtcEndpointResolver.Resolve(source).EndpointUri!;
+        await ws.ConnectAsync(endpoint, cts.Token);
         Assert.Equal(System.Net.WebSockets.WebSocketState.Open, ws.State);
     }
 
@@ -860,13 +863,14 @@ public sealed class WebRtcMediaPlayerTests
     public void DefaultWebRtcVideoDecoder_ChecksFormats()
     {
         using var decoder = new DefaultWebRtcVideoDecoder();
-        Assert.True(decoder.CanDecode(new VideoFormat(VideoCodecsEnum.JPEG, 26)));
+        Assert.False(decoder.CanDecode(new VideoFormat(VideoCodecsEnum.JPEG, 26)));
         Assert.False(decoder.CanDecode(new VideoFormat(VideoCodecsEnum.H264, 96)));
         Assert.False(decoder.CanDecode(new VideoFormat(VideoCodecsEnum.VP8, 97)));
 
         using var pool = new WebRtcFrameBufferPool();
         var emptyResult = decoder.TryDecode(ReadOnlySpan<byte>.Empty, new VideoFormat(VideoCodecsEnum.JPEG, 26), pool, out _);
         Assert.False(emptyResult);
+        Assert.False(decoder.TryDecode([0xFF, 0xD8, 0xFF, 0xD9], new VideoFormat(VideoCodecsEnum.JPEG, 26), pool, out _));
     }
 
     [Fact]

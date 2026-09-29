@@ -56,7 +56,13 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         _decoder = _webrtcOptions.VideoDecoder
             ?? (FfmpegWebRtcVideoDecoder.IsSupported ? new FfmpegWebRtcVideoDecoder() : new DefaultWebRtcVideoDecoder());
         _audioOutput = _webrtcOptions.AudioOutput
-            ?? (OperatingSystem.IsWindows() ? new WebRtcWaveOutAudioOutput() : NullWebRtcAudioOutput.Instance);
+#if ANDROID
+            ?? new WebRtcAudioTrackOutput();
+#else
+            ?? (OperatingSystem.IsWindows() ? new WebRtcWaveOutAudioOutput()
+                : OperatingSystem.IsLinux() ? new WebRtcAlsaAudioOutput()
+                : NullWebRtcAudioOutput.Instance);
+#endif
         _audioOutput.SetVolume(_volume, _isMuted);
         _framePool = new WebRtcFrameBufferPool(
             _webrtcOptions.MaxPoolBufferCount,

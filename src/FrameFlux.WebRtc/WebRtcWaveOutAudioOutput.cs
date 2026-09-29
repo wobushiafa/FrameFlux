@@ -1,3 +1,4 @@
+#if !ANDROID
 using System.Buffers;
 using System.Runtime.InteropServices;
 using NAudio.Wave;
@@ -213,3 +214,4 @@ public sealed class WebRtcWaveOutAudioOutput : IWebRtcAudioOutput
         output.Dispose();
     }
 }
+#endif
