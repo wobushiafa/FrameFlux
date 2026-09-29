@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Threading;
 
 namespace FrameFlux.Demo.Avalonia.Views;
@@ -15,6 +16,16 @@ public sealed partial class MainView
 
     private void InitializePlaybackControls()
     {
+        PositionSlider.AddHandler(
+            InputElement.PointerPressedEvent,
+            PositionSlider_OnPointerPressed,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
+        PositionSlider.AddHandler(
+            InputElement.PointerReleasedEvent,
+            PositionSlider_OnPointerReleased,
+            RoutingStrategies.Tunnel,
+            handledEventsToo: true);
         PlaybackRateComboBox.ItemsSource = _playbackRates.Select(rate => $"{rate:0.##}x").ToArray();
         PlaybackRateComboBox.SelectedIndex = Array.IndexOf(_playbackRates, 1d);
         _positionTimer = new DispatcherTimer

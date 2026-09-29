@@ -113,8 +113,6 @@
                  FontFamily="Consolas" Text="00:00" />
       <Slider x:Name="PositionSlider" Grid.Column="1"
               Minimum="0" Maximum="1"
-              PointerPressed="PositionSlider_OnPointerPressed"
-              PointerReleased="PositionSlider_OnPointerReleased"
               AutomationProperties.Name="Playback position" />
       <TextBlock x:Name="DurationTextBlock" Grid.Column="2"
                  VerticalAlignment="Center" FontFamily="Consolas" Text="00:00" />
