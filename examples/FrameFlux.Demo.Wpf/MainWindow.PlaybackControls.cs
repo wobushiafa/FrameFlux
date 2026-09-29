@@ -30,10 +30,21 @@ public partial class MainWindow
 
     private async void PositionSlider_PreviewMouseUp(object sender, MouseButtonEventArgs e)
     {
-        _seeking = false;
-        if (Player.Capabilities.CanSeek)
+        try
         {
-            await Player.SeekAsync(TimeSpan.FromSeconds(PositionSlider.Value));
+            if (Player.Capabilities.CanSeek)
+            {
+                await Player.SeekAsync(TimeSpan.FromSeconds(PositionSlider.Value));
+            }
+        }
+        catch (Exception exception)
+        {
+            StatusTextBlock.Text = exception.Message;
+        }
+        finally
+        {
+            _seeking = false;
+            RefreshTimeline();
         }
     }
 

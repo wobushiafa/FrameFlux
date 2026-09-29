@@ -30,10 +30,21 @@ public sealed partial class MainView
 
     private async void PositionSlider_OnPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        _seeking = false;
-        if (Player.Capabilities.CanSeek)
+        try
         {
-            await Player.SeekAsync(TimeSpan.FromSeconds(PositionSlider.Value));
+            if (Player.Capabilities.CanSeek)
+            {
+                await Player.SeekAsync(TimeSpan.FromSeconds(PositionSlider.Value));
+            }
+        }
+        catch (Exception exception)
+        {
+            SetStatus(exception.Message, ErrorBrush);
+        }
+        finally
+        {
+            _seeking = false;
+            RefreshTimeline();
         }
     }
 

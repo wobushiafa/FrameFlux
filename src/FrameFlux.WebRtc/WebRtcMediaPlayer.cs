@@ -334,6 +334,13 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                 UpdateDecoderOutputPreferences();
             }
 
+            if (_options.Video.DecodingPolicy == MediaVideoDecodingPolicy.HardwareRequired &&
+                (_decoder is DefaultWebRtcVideoDecoder ||
+                 _decoder is FfmpegWebRtcVideoDecoder && !OperatingSystem.IsWindows()))
+            {
+                throw new NotSupportedException("WebRTC hardware decoding is unavailable on this platform.");
+            }
+
             SetState(MediaPlaybackState.Opening);
 
             var resolvedEndpoint = WebRtcEndpointResolver.Resolve(source, _webrtcOptions);
@@ -467,11 +474,13 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            await CleanupFailedOpenAsync().ConfigureAwait(false);
             SetState(MediaPlaybackState.Stopped);
             throw;
         }
         catch (Exception ex)
         {
+            await CleanupFailedOpenAsync().ConfigureAwait(false);
             ReportError(new MediaPlaybackError(
                 "OpenFailed",
                 ex.Message,
@@ -959,7 +968,11 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                         type = RTCSdpType.offer,
                         sdp = endpoint.RawSdp
                     };
-                    pc.setRemoteDescription(remoteOffer);
+                    var setResult = pc.setRemoteDescription(remoteOffer);
+                    if (setResult != SetDescriptionResultEnum.OK)
+                    {
+                        throw new InvalidOperationException($"Failed to set remote SDP offer: {setResult}.");
+                    }
                     var answer = pc.createAnswer();
                     await pc.setLocalDescription(answer).ConfigureAwait(false);
                 }
@@ -978,7 +991,11 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                         type = RTCSdpType.answer,
                         sdp = endpoint.RawSdp
                     };
-                    pc.setRemoteDescription(remoteAnswer);
+                    var setResult = pc.setRemoteDescription(remoteAnswer);
+                    if (setResult != SetDescriptionResultEnum.OK)
+                    {
+                        throw new InvalidOperationException($"Failed to set remote SDP answer: {setResult}.");
+                    }
                 }
             }
         }
@@ -1161,6 +1178,18 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         return string.Join("\r\n", enhanced);
     }
 
+    private async Task CleanupFailedOpenAsync()
+    {
+        try
+        {
+            await StopInternalAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Keep the negotiation error as the failure reported by OpenAsync.
+        }
+    }
+
     private async Task StopInternalAsync(CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref _peerConnectionGeneration);
@@ -1190,33 +1219,38 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
             _sessionResourceUri = null;
         }
 
-        if (wsSignaling is not null)
+        try
         {
-            await wsSignaling.DisposeAsync().ConfigureAwait(false);
-        }
-
-        if (sessionUri is not null)
-        {
-            await WebRtcEndpointResolver.TerminateWhepSessionAsync(
-                sessionUri,
-                _webrtcOptions,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-        }
-
-        if (pc is not null)
-        {
-            try
+            if (wsSignaling is not null)
             {
-                pc.close();
+                await wsSignaling.DisposeAsync().ConfigureAwait(false);
             }
-            catch
+
+            if (sessionUri is not null)
             {
-                // Ignore errors closing peer connection
+                await WebRtcEndpointResolver.TerminateWhepSessionAsync(
+                    sessionUri,
+                    _webrtcOptions,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
             }
         }
+        finally
+        {
+            if (pc is not null)
+            {
+                try
+                {
+                    pc.close();
+                }
+                catch
+                {
+                    // Ignore errors closing peer connection
+                }
+            }
 
-        _audioOutput.Reset();
-        _framePool.StopAcceptingReturns();
+            _audioOutput.Reset();
+            _framePool.StopAcceptingReturns();
+        }
     }
 
     private void OnAudioFrameReceived(EncodedAudioFrame frame)

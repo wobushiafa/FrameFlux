@@ -109,7 +109,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             lock (_sync)
             {
                 ThrowIfDisposed();
-                if (_source is not null && !_source.Uri.IsFile && value != 1d)
+                if (_source is not null && !FfmpegSource.IsSeekable(_source.Uri) && value != 1d)
                 {
                     throw new NotSupportedException(
                         "Live sources do not support playback-rate changes.");

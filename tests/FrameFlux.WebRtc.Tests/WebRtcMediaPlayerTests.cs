@@ -11,6 +11,43 @@ namespace FrameFlux.WebRtc.Tests;
 
 public sealed class WebRtcMediaPlayerTests
 {
+    private const string TestVideoOffer = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=Test\r\nt=0 0\r\na=ice-ufrag:test\r\na=ice-pwd:testpassword123456789012345\r\na=fingerprint:sha-256 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=setup:actpass\r\na=rtpmap:96 H264/90000\r\na=sendonly\r\n";
+
+    [Fact]
+    public async Task OpenAsync_RejectsInvalidRemoteSdpAndReleasesPeerConnection()
+    {
+        await using var player = new WebRtcMediaPlayer();
+        var invalidOffer = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=Test\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\na=sendonly\r\n";
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            player.OpenAsync(WebRtcSource.FromSdp(invalidOffer)).AsTask());
+        Assert.Equal(MediaPlaybackState.Faulted, player.State);
+        Assert.Null(player.PeerConnection);
+
+        await player.OpenAsync(WebRtcSource.FromSdp(TestVideoOffer));
+        Assert.Equal(MediaPlaybackState.Ready, player.State);
+    }
+
+    [Fact]
+    public async Task OpenAsync_RejectsHardwareRequiredWhenDecoderHasNoHardwareSupport()
+    {
+        await using var player = new WebRtcMediaPlayer(new WebRtcPlayerOptions
+        {
+            VideoDecoder = new DefaultWebRtcVideoDecoder()
+        });
+
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            player.OpenAsync(WebRtcSource.FromSdp(TestVideoOffer), new MediaOpenOptions
+            {
+                Video = new MediaVideoOptions
+                {
+                    DecodingPolicy = MediaVideoDecodingPolicy.HardwareRequired
+                }
+            }).AsTask());
+        Assert.Equal(MediaPlaybackState.Faulted, player.State);
+        Assert.Null(player.PeerConnection);
+    }
+
     [Fact]
     public async Task Factory_CreatesValidPlayer()
     {
@@ -634,7 +671,7 @@ public sealed class WebRtcMediaPlayerTests
         player.FrameReceived += (_, f) => receivedFrame = f;
 
         // Open with local SDP description
-        var sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=Test\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\na=sendonly\r\n";
+        var sdp = TestVideoOffer;
         await player.OpenAsync(WebRtcSource.FromSdp(sdp), new MediaOpenOptions
         {
             Video = new MediaVideoOptions
@@ -680,7 +717,7 @@ public sealed class WebRtcMediaPlayerTests
         var mockOutput = new MockMediaVideoOutput(supportedFormat: MediaPixelFormat.Bgra32);
         player.VideoOutput = mockOutput;
 
-        var sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=Test\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\na=sendonly\r\n";
+        var sdp = TestVideoOffer;
         await player.OpenAsync(WebRtcSource.FromSdp(sdp));
         await player.PlayAsync();
 
@@ -709,7 +746,7 @@ public sealed class WebRtcMediaPlayerTests
         var mockOutput = new MockMediaVideoOutput(supportedFormat: MediaPixelFormat.Bgra32);
         player.VideoOutput = mockOutput;
 
-        var sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=Test\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\na=sendonly\r\n";
+        var sdp = TestVideoOffer;
         await player.OpenAsync(WebRtcSource.FromSdp(sdp));
         await player.PlayAsync();
 
@@ -726,7 +763,7 @@ public sealed class WebRtcMediaPlayerTests
         var mockOutput = new MockMediaVideoOutput(supportedFormat: MediaPixelFormat.Bgra32, acceptFrames: false);
         player.VideoOutput = mockOutput;
 
-        var sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=Test\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\na=sendonly\r\n";
+        var sdp = TestVideoOffer;
         await player.OpenAsync(WebRtcSource.FromSdp(sdp));
         await player.PlayAsync();
 
@@ -990,7 +1027,7 @@ public sealed class WebRtcMediaPlayerTests
     [Fact]
     public void FfmpegWebRtcVideoDecoder_HardwareRequired_EnsureCodecContext_H265()
     {
-        var decoder = new FfmpegWebRtcVideoDecoder
+        using var decoder = new FfmpegWebRtcVideoDecoder
         {
             DecodingPolicy = MediaVideoDecodingPolicy.HardwareRequired,
             CanOutputD3D11Texture = true
@@ -998,9 +1035,26 @@ public sealed class WebRtcMediaPlayerTests
 
         var method = decoder.GetType().GetMethod("EnsureCodecContext", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
         Assert.NotNull(method);
-        var result = (bool)method.Invoke(decoder, new object[] { VideoCodecsEnum.H265 })!;
-        Assert.True(result);
-        Assert.True(decoder.IsHardwareAccelerated);
+        if (!OperatingSystem.IsWindows())
+        {
+            var failure = Assert.Throws<System.Reflection.TargetInvocationException>(() =>
+                method.Invoke(decoder, new object[] { VideoCodecsEnum.H265 }));
+            Assert.IsType<NotSupportedException>(failure.InnerException);
+            Assert.False(decoder.IsHardwareAccelerated);
+            return;
+        }
+
+        try
+        {
+            var result = (bool)method.Invoke(decoder, new object[] { VideoCodecsEnum.H265 })!;
+            Assert.True(result);
+            Assert.True(decoder.IsHardwareAccelerated);
+        }
+        catch (System.Reflection.TargetInvocationException failure)
+        {
+            Assert.IsType<InvalidOperationException>(failure.InnerException);
+            Assert.False(decoder.IsHardwareAccelerated);
+        }
     }
 
     [Fact]

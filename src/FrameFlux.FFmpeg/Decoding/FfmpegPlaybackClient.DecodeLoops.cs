@@ -124,6 +124,8 @@ internal sealed partial class FfmpegPlaybackClient
             {
                 _playbackSynchronizer.ResetPlaybackClock(Position.TotalSeconds);
                 audioPlayback?.Reset();
+                frame?.Dispose();
+                continue;
             }
 
             _playbackSynchronizer.DrainAudio(

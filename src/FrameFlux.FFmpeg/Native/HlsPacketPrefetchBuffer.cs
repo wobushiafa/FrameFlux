@@ -20,6 +20,7 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
     private bool _isEof;
     private bool _isFlushing;
     private int _terminalResult = ErrorEof;
+    private int _generation;
     private int _disposed;
 
     internal HlsPacketPrefetchBuffer(
@@ -72,6 +73,7 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
         {
             try
             {
+                _generation++;
                 while (_packets.TryTake(out var oldPacket))
                 {
                     oldPacket.Dispose();
@@ -128,12 +130,14 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
                 }
 
                 int result;
+                int generation;
                 IntPtr clone = IntPtr.Zero;
                 lock (_ioSync)
                 {
                     if (_cancellation.IsCancellationRequested) break;
                     if (Volatile.Read(ref _isEof)) continue;
 
+                    generation = _generation;
                     result = _api.AvReadFrame(_formatContext, _readPacket);
                     if (result >= 0)
                     {
@@ -144,15 +148,23 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
 
                 if (result < 0)
                 {
-                    Volatile.Write(ref _terminalResult, result);
-                    Volatile.Write(ref _isEof, true);
+                    lock (_ioSync)
+                    {
+                        if (generation != _generation) continue;
+                        Volatile.Write(ref _terminalResult, result);
+                        Volatile.Write(ref _isEof, true);
+                    }
                     continue;
                 }
 
                 if (clone == IntPtr.Zero)
                 {
-                    Volatile.Write(ref _terminalResult, ErrorNoMemory);
-                    Volatile.Write(ref _isEof, true);
+                    lock (_ioSync)
+                    {
+                        if (generation != _generation) continue;
+                        Volatile.Write(ref _terminalResult, ErrorNoMemory);
+                        Volatile.Write(ref _isEof, true);
+                    }
                     continue;
                 }
 
@@ -161,11 +173,21 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
                 {
                     while (!_cancellation.IsCancellationRequested && !Volatile.Read(ref _isFlushing))
                     {
-                        if (_packets.TryAdd(packet, 50, _cancellation.Token))
+                        lock (_ioSync)
                         {
-                            packet = null;
-                            break;
+                            if (generation != _generation)
+                            {
+                                break;
+                            }
+
+                            if (_packets.TryAdd(packet))
+                            {
+                                packet = null;
+                                break;
+                            }
                         }
+
+                        Thread.Sleep(10);
                     }
                 }
                 finally

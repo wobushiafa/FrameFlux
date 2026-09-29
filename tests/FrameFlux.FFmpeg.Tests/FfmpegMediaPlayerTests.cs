@@ -101,6 +101,12 @@ public sealed class FfmpegMediaPlayerTests
         Assert.True(player.Capabilities.CanPause);
         Assert.True(player.Capabilities.CanSeek);
         Assert.True(player.Capabilities.CanChangePlaybackRate);
+
+        player.PlaybackRate = 1.5d;
+        await player.PlayAsync();
+        Assert.Equal(1.5d, Assert.IsType<FakeMediaSession>(factory.LastSession).PlaybackRate);
+        player.PlaybackRate = 2d;
+        Assert.Equal(2d, Assert.IsType<FakeMediaSession>(factory.LastSession).PlaybackRate);
     }
 
     [Fact]

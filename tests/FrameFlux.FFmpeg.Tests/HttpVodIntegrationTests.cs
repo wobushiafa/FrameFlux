@@ -25,7 +25,7 @@ public sealed class HttpVodIntegrationTests
                 ArgumentList =
                 {
                     "-v", "error", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=10",
-                    "-t", "3", "-c:v", "mpeg4", "-q:v", "5", "-movflags", "+faststart",
+                    "-t", "12", "-c:v", "mpeg4", "-g", "10", "-q:v", "5", "-movflags", "+faststart",
                     "-y", mediaPath
                 },
                 UseShellExecute = false
@@ -38,7 +38,12 @@ public sealed class HttpVodIntegrationTests
             await using var server = new RangeHttpServer(await File.ReadAllBytesAsync(mediaPath));
             await using var player = new FfmpegMediaPlayer();
             var frames = 0;
-            player.FrameReceived += (_, _) => Interlocked.Increment(ref frames);
+            long latestFramePositionTicks = 0;
+            player.FrameReceived += (_, _) =>
+            {
+                Interlocked.Exchange(ref latestFramePositionTicks, player.Position.Ticks);
+                Interlocked.Increment(ref frames);
+            };
             await player.OpenAsync(MediaSource.Parse(server.Url), new MediaOpenOptions
             {
                 Video = new MediaVideoOptions { DecodingPolicy = MediaVideoDecodingPolicy.SoftwareOnly },
@@ -46,9 +51,22 @@ public sealed class HttpVodIntegrationTests
             });
             await player.PlayAsync();
             Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref frames) > 0, TimeSpan.FromSeconds(10)));
+            Assert.InRange(player.Duration!.Value.TotalSeconds, 11.5d, 12.5d);
+
             var framesBeforeSeek = Volatile.Read(ref frames);
-            await player.SeekAsync(TimeSpan.FromSeconds(1));
-            Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref frames) > framesBeforeSeek, TimeSpan.FromSeconds(10)));
+            await player.SeekAsync(TimeSpan.FromSeconds(9));
+            Assert.True(SpinWait.SpinUntil(() =>
+                Volatile.Read(ref frames) > framesBeforeSeek &&
+                TimeSpan.FromTicks(Interlocked.Read(ref latestFramePositionTicks)) >= TimeSpan.FromSeconds(8),
+                TimeSpan.FromSeconds(10)));
+
+            framesBeforeSeek = Volatile.Read(ref frames);
+            await player.SeekAsync(TimeSpan.FromSeconds(2));
+            Assert.True(SpinWait.SpinUntil(() =>
+                Volatile.Read(ref frames) > framesBeforeSeek &&
+                TimeSpan.FromTicks(Interlocked.Read(ref latestFramePositionTicks)) is { } position &&
+                position >= TimeSpan.FromSeconds(1) && position <= TimeSpan.FromSeconds(4),
+                TimeSpan.FromSeconds(10)));
             await player.StopAsync();
         }
         finally

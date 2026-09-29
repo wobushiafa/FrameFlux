@@ -355,8 +355,18 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
 
     private bool EnsureCodecContext(VideoCodecsEnum codec)
     {
+        if (DecodingPolicy == MediaVideoDecodingPolicy.HardwareRequired && !OperatingSystem.IsWindows())
+        {
+            throw new NotSupportedException("WebRTC hardware decoding is currently supported only on Windows.");
+        }
+
         if (_codecContext != IntPtr.Zero && _currentCodec == codec)
         {
+            if (DecodingPolicy == MediaVideoDecodingPolicy.HardwareRequired && !IsHardwareAccelerated)
+            {
+                throw new InvalidOperationException("Hardware decoding is required by policy, but is not active.");
+            }
+
             return true;
         }
 
@@ -439,11 +449,12 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                 // Fallback to software if preferred
             }
 
-            if (!IsHardwareAccelerated && DecodingPolicy == MediaVideoDecodingPolicy.HardwareRequired)
-            {
-                _freeContext!(ref ctx);
-                throw new InvalidOperationException("Hardware decoding (D3D11VA) is required by policy, but failed to initialize.");
-            }
+        }
+
+        if (!IsHardwareAccelerated && DecodingPolicy == MediaVideoDecodingPolicy.HardwareRequired)
+        {
+            _freeContext!(ref ctx);
+            throw new InvalidOperationException("Hardware decoding (D3D11VA) is required by policy, but failed to initialize.");
         }
 
         var openResult = _open2!(ctx, pCodec, IntPtr.Zero);
