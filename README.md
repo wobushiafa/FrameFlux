@@ -40,7 +40,7 @@
 | --- | --- | --- |
 | `src/FrameFlux.Abstractions` | `FrameFlux.Abstractions` | 与 UI/底层解耦的核心契约（`IMediaPlayer`、`MediaSource`、配置项、能力和帧租约）。 |
 | `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | FFmpeg 独立媒体播放引擎，负责解复用、音频解码与时钟同步（不含原生二进制）。 |
-| `src/FrameFlux.WebRtc` | `FrameFlux.WebRtc` | 纯托管实现的 WebRTC 播放引擎，支持 WHEP、go2rtc 及 SDP 协商。 |
+| `src/FrameFlux.WebRtc` | `FrameFlux.WebRtc` | 基于 SIPSorcery 的 WebRTC 信令与传输，支持 WHEP、go2rtc 及 SDP 协商；视频解码需要可加载的原生 FFmpeg 库或自定义解码器。 |
 | `src/FrameFlux.FFmpeg.Android` | `FrameFlux.FFmpeg.Android` | 接收 FFmpeg 解复用 H.264/HEVC 数据的 Android MediaCodec 硬件解码器。 |
 | `src/FrameFlux.Presentation` | `FrameFlux.Presentation` | UI 控件共享的播放控制与生命周期调度层。 |
 | `src/FrameFlux.Rendering.Windows` | `FrameFlux.Rendering.Windows` | Windows 平台专用的 D3D11 与 Win32 视频渲染共享管道。 |
@@ -174,7 +174,7 @@ player.Volume = 0.8;                             // 80% 音量
 | **RTSP 监控流** | `rtsp://camera.local:554/stream` | `FfmpegMediaPlayer` | TCP/UDP 传输、极低延迟低丢帧策略（`LowLatency`） |
 | **WebRTC 实时流** | `http://.../whep`<br/>`ws://.../api/ws`<br/>`webrtc://...` | `WebRtcMediaPlayer` | WHEP/WHIP 协商、超低延迟毫秒级互动直播 |
 
-HTTP 点播的实际 Seek 能力取决于服务器是否支持随机访问及媒体容器索引；调用 `SeekAsync` 时，FFmpeg 会报告不支持 Seek 的源。WebRTC 当前内置 G.711 PCMA/PCMU 音频解码。
+HTTP 点播的实际 Seek 能力取决于服务器是否支持随机访问及媒体容器索引；首次 Seek 失败会报告错误并关闭当前媒体的 Seek 能力。WebRTC 当前内置 G.711 PCMA/PCMU 音频解码。
 
 ---
 

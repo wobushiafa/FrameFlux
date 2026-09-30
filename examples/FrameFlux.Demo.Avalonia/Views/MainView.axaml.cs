@@ -330,7 +330,7 @@ public sealed partial class MainView : UserControl
     {
         var presentation = Player.EffectivePresentationMode?.ToString() ?? "none";
         SetStatus(
-            $"{state} | Presentation: {presentation} | HW decode: {Player.IsHardwareVideoDecodingActive}",
+            $"{state} | Presentation: {presentation} | HW decode: {Player.IsHardwareVideoDecodingActive} | Decoder: {Player.VideoDecoderDiagnostics}",
             brush);
     }
 

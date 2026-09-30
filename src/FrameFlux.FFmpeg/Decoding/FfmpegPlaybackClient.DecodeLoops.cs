@@ -119,6 +119,11 @@ internal sealed partial class FfmpegPlaybackClient
 
             var decodeStart = Stopwatch.GetTimestamp();
             var hasFrame = decoder.TryDecodeNextFrame(out var frame);
+            var decoderDiagnostics = decoder.VideoDecoderDiagnostics;
+            if (decoderDiagnostics != Volatile.Read(ref _videoDecoderDiagnostics))
+            {
+                Volatile.Write(ref _videoDecoderDiagnostics, decoderDiagnostics);
+            }
             var seekProcessed = ProcessPendingSeek(decoder);
             if (seekProcessed)
             {

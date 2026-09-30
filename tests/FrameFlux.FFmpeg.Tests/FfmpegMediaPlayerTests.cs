@@ -110,6 +110,30 @@ public sealed class FfmpegMediaPlayerTests
     }
 
     [Fact]
+    public async Task GenericPlayer_DisablesHttpSeekingAfterSeekFailure()
+    {
+        var factory = new FakeMediaSessionFactory { SessionDuration = TimeSpan.FromMinutes(5) };
+        await using var player = new FfmpegMediaPlayer(factory);
+        MediaPlaybackError? reportedError = null;
+        player.Error += (_, args) => reportedError = args.Error;
+
+        await player.OpenAsync(MediaSource.Parse("https://example.com/video.mp4"));
+        await player.PlayAsync();
+        var session = Assert.IsType<FakeMediaSession>(factory.LastSession);
+        session.SeekException = new ApplicationException("av_seek_frame failed");
+
+        await Assert.ThrowsAsync<ApplicationException>(() =>
+            player.SeekAsync(TimeSpan.FromSeconds(10)).AsTask());
+
+        Assert.False(player.Capabilities.CanSeek);
+        Assert.NotNull(reportedError);
+        Assert.Equal("SeekFailed", reportedError.Code);
+        Assert.Equal(TimeSpan.Zero, player.Position);
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            player.SeekAsync(TimeSpan.FromSeconds(20)).AsTask());
+    }
+
+    [Fact]
     public async Task GenericPlayer_RejectsWebRtcSignalingEndpoint()
     {
         await using var player = new FfmpegMediaPlayer(new FakeMediaSessionFactory());
@@ -424,6 +448,7 @@ public sealed class FfmpegMediaPlayerTests
         internal TimeSpan? LastSeekPosition { get; private set; }
         internal bool Disposed { get; private set; }
         internal Exception? StopException { get; set; }
+        internal Exception? SeekException { get; set; }
         internal int FrameSubscriberCount =>
             _frameReceived?.GetInvocationList().Length ?? 0;
         private EventHandler<MediaVideoFrame>? _frameReceived;
@@ -482,6 +507,10 @@ public sealed class FfmpegMediaPlayerTests
             TimeSpan position,
             CancellationToken cancellationToken = default)
         {
+            if (SeekException is not null)
+            {
+                return ValueTask.FromException(SeekException);
+            }
             Position = position;
             LastSeekPosition = position;
             return ValueTask.CompletedTask;

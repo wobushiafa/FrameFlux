@@ -37,7 +37,7 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
     private long _durationTicks = -1;
     private double _playbackRate = 1d;
 
-    public string VideoDecoderDiagnostics => _videoDecoderDiagnostics;
+    public string VideoDecoderDiagnostics => Volatile.Read(ref _videoDecoderDiagnostics);
     public MediaAudioDiagnostics AudioDiagnostics =>
         Volatile.Read(ref _audioPlayback)?.Diagnostics ?? _lastAudioDiagnostics;
     public MediaSynchronizationDiagnostics SynchronizationDiagnostics =>
@@ -292,8 +292,8 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                     }
 
                     hasOpened = true;
-                    _videoDecoderDiagnostics = platformDecoder?.VideoDecoderDiagnostics ??
-                        decoder!.VideoDecoderDiagnostics;
+                    Volatile.Write(ref _videoDecoderDiagnostics,
+                        platformDecoder?.VideoDecoderDiagnostics ?? decoder!.VideoDecoderDiagnostics);
                     HardwareVideoDecodingChanged?.Invoke(
                         this,
                         platformDecoder?.IsHardwareVideoDecodingActive ?? decoder!.IsHardwareVideoDecodingActive);

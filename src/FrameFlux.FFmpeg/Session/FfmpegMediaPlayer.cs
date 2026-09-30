@@ -504,7 +504,25 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
 
             if (session is not null)
             {
-                await session.SeekAsync(position, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await session.SeekAsync(position, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (
+                    _source is { Uri: { } uri } && FfmpegSource.IsHttpMedia(uri) &&
+                    exception is not OperationCanceledException)
+                {
+                    lock (_sync)
+                    {
+                        _capabilities = _capabilities with { CanSeek = false };
+                    }
+                    PublishError(new MediaPlaybackError(
+                        "SeekFailed",
+                        $"HTTP media seeking failed: {exception.Message}",
+                        IsRecoverable: true,
+                        exception));
+                    throw;
+                }
             }
             lock (_sync)
             {

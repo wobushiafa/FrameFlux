@@ -96,7 +96,6 @@ internal sealed class FfmpegDecoder : IDisposable
         _cancellationRegistration = cancellationToken.Register(
             static state => FrameFluxFFmpegNative.Cancel((NativeFfmpegSessionHandle)state!),
             session);
-        VideoDecoderDiagnostics = FrameFluxFFmpegNative.GetVideoDecoderDiagnostics(session);
         if (FrameFluxFFmpegNative.GetStreamInfo(session, out _streamInfo) < 0)
         {
             session.Dispose();
@@ -112,7 +111,8 @@ internal sealed class FfmpegDecoder : IDisposable
     public bool IsLinuxVaapiActive =>
         OperatingSystem.IsLinux() && IsHardwareVideoDecodingActive;
 
-    public string VideoDecoderDiagnostics { get; }
+    public string VideoDecoderDiagnostics =>
+        _disposed ? "Unavailable" : FrameFluxFFmpegNative.GetVideoDecoderDiagnostics(_session);
 
     internal bool HasAudio => FrameFluxFFmpegNative.HasAudio(_session);
 

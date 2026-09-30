@@ -49,6 +49,26 @@ public sealed class WebRtcMediaPlayerTests
     }
 
     [Fact]
+    public async Task OpenAsync_ReportsMissingVideoDecoderBeforeNegotiation()
+    {
+        await using var player = new WebRtcMediaPlayer(new WebRtcPlayerOptions
+        {
+            VideoDecoder = new DefaultWebRtcVideoDecoder()
+        });
+        MediaPlaybackError? reportedError = null;
+        player.Error += (_, args) => reportedError = args.Error;
+
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            player.OpenAsync(WebRtcSource.FromSdp(TestVideoOffer)).AsTask());
+
+        Assert.Contains("FFmpeg", exception.Message);
+        Assert.NotNull(reportedError);
+        Assert.Contains("FFmpeg", reportedError.Message);
+        Assert.Equal(MediaPlaybackState.Faulted, player.State);
+        Assert.Null(player.PeerConnection);
+    }
+
+    [Fact]
     public async Task Factory_CreatesValidPlayer()
     {
         var factory = new WebRtcMediaPlayerFactory();

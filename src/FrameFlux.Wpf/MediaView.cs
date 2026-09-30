@@ -134,6 +134,10 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
     private readonly MediaPlaybackController _playback = new();
     private readonly MediaPresentationCoordinator _presentation;
     private EventHandler<MediaVideoFrame>? _frameReceived;
+    private readonly DispatcherTimer _diagnosticsTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(500)
+    };
     private CancellationTokenSource? _restartCancellation;
     private bool _presentationReady;
     private bool _hasOverlayChildren;
@@ -142,6 +146,7 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
 
     public MediaView()
     {
+        _diagnosticsTimer.Tick += (_, _) => RefreshDiagnostics();
         _playback.StateChanged += OnPlayerStateChanged;
         _playback.Error += OnPlayerError;
         Loaded += OnLoaded;
@@ -315,6 +320,7 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
         }
 
         _disposed = true;
+        _diagnosticsTimer.Stop();
         Interlocked.Exchange(ref _restartCancellation, null)?.Cancel();
         Loaded -= OnLoaded;
         Unloaded -= OnUnloaded;
@@ -505,8 +511,20 @@ public sealed class MediaView : System.Windows.Controls.Grid, IAsyncDisposable
             DispatcherPriority.DataBind,
             new Action(() =>
             {
+                if (_disposed)
+                {
+                    return;
+                }
                 RefreshDiagnostics();
                 SetState(args.NewState);
+                if (args.NewState is MediaPlaybackState.Playing or MediaPlaybackState.Paused)
+                {
+                    _diagnosticsTimer.Start();
+                }
+                else
+                {
+                    _diagnosticsTimer.Stop();
+                }
             }));
 
     private void RefreshDiagnostics()

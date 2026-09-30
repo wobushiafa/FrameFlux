@@ -17,8 +17,8 @@ custom `IWebRtcAudioOutput` through `WebRtcPlayerOptions.AudioOutput` when the
 application needs another device or audio codec pipeline.
 
 H.264, H.265, VP8, VP9, AV1, and JPEG video decoding requires loadable native
-FFmpeg libraries. JPEG frames are decoded by FFmpeg; the managed fallback does
-not report decoded frames when native libraries are unavailable.
+FFmpeg libraries or a custom `IWebRtcVideoDecoder`. Opening a stream fails with
+a clear error when neither is available.
 
 The package targets `net8.0` for desktop applications and `net10.0-android`
 for Android applications.

@@ -341,6 +341,12 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                 throw new NotSupportedException("WebRTC hardware decoding is unavailable on this platform.");
             }
 
+            if (_decoder is DefaultWebRtcVideoDecoder)
+            {
+                throw new NotSupportedException(
+                    "WebRTC video decoding requires loadable native FFmpeg libraries or a custom IWebRtcVideoDecoder.");
+            }
+
             SetState(MediaPlaybackState.Opening);
 
             var resolvedEndpoint = WebRtcEndpointResolver.Resolve(source, _webrtcOptions);

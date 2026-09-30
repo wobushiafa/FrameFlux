@@ -63,6 +63,10 @@ public sealed class MediaView : Control, IAsyncDisposable
             view => view.EffectivePresentationMode);
 
     private readonly MediaPlaybackController _playback = new();
+    private readonly DispatcherTimer _diagnosticsTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(500)
+    };
     private readonly MediaPresentationCoordinator _presentation;
     private EventHandler<MediaVideoFrame>? _frameReceived;
     private CancellationTokenSource? _restartCancellation;
@@ -77,6 +81,7 @@ public sealed class MediaView : Control, IAsyncDisposable
 
     public MediaView()
     {
+        _diagnosticsTimer.Tick += (_, _) => RefreshDiagnostics();
         _presentation = new MediaPresentationCoordinator(
             mode => EffectivePresentationMode = mode,
             OnPresentationFailed,
@@ -366,6 +371,7 @@ public sealed class MediaView : Control, IAsyncDisposable
         }
 
         _disposed = true;
+        _diagnosticsTimer.Stop();
         Interlocked.Exchange(ref _restartCancellation, null)?.Cancel();
         _playback.StateChanged -= OnPlayerStateChanged;
         _playback.Error -= OnPlayerError;
@@ -389,8 +395,20 @@ public sealed class MediaView : Control, IAsyncDisposable
         Dispatcher.UIThread.Post(
             () =>
             {
+                if (_disposed)
+                {
+                    return;
+                }
                 SetState(args.NewState);
                 RefreshDiagnostics();
+                if (args.NewState is MediaPlaybackState.Playing or MediaPlaybackState.Paused)
+                {
+                    _diagnosticsTimer.Start();
+                }
+                else
+                {
+                    _diagnosticsTimer.Stop();
+                }
             },
             DispatcherPriority.Normal);
 
