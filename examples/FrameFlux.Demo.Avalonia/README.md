@@ -2,8 +2,11 @@
 
 This cross-platform demo hosts the protocol-neutral `FrameFlux.Avalonia.MediaView`
 control directly. On desktop, enter an RTSP/RTSPS or HLS (`.m3u8`) address, a
-WHEP/WebRTC URL, or use **Open file** to select a local video. The demo automatically selects
-the FFmpeg or WebRTC player factory from the source URI. Android
+WHEP/WebRTC URL, or use **Open file** to select a local video. Choose
+**Media (FFmpeg)** or **WebRTC** in **Player** for an HTTP URL whose type is
+unclear. **Auto** recognizes
+explicit WebRTC schemes and endpoints, and common media file extensions; it asks
+for a player when neither applies. Android offers FFmpeg only. Android
 document-provider selections are copied to temporary local storage before
 playback and continue to use the FFmpeg backend.
 

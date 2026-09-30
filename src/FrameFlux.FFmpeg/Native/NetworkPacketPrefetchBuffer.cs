@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 
 namespace FrameFlux.FFmpeg;
 
-internal sealed class HlsPacketPrefetchBuffer : IDisposable
+internal sealed class NetworkPacketPrefetchBuffer : IDisposable
 {
     private const int PacketCapacity = 1024;
     private const int ErrorEof = -541478725;
@@ -23,7 +23,7 @@ internal sealed class HlsPacketPrefetchBuffer : IDisposable
     private int _generation;
     private int _disposed;
 
-    internal HlsPacketPrefetchBuffer(
+    internal NetworkPacketPrefetchBuffer(
         FFmpegApi api,
         IntPtr formatContext,
         IntPtr readPacket)

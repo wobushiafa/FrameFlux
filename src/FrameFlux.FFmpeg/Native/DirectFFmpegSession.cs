@@ -11,6 +11,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
     private const int ErrorEof = -541478725;
     private const int ErrorExit = -1414092869;
     private const int ErrorNoMemory = -12;
+    private const int HardwareExportRetryFrameInterval = 30;
     private static readonly InterruptCallbackDelegate InterruptCallback = HandleInterrupt;
 
     private readonly FFmpegApi _api = api;
@@ -38,10 +39,12 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
     private FFmpegAudioTempoFilter? _audioTempoFilter;
     private double _audioPlaybackRate = 1d;
     private double? _nextAudioPresentationSeconds;
-    private HlsPacketPrefetchBuffer? _hlsPacketBuffer;
+    private NetworkPacketPrefetchBuffer? _hlsPacketBuffer;
     private bool _cancelled;
     private bool _disposed;
     private bool _preserveHardwareFrames;
+    private bool _hardwareFrameOutputRequested;
+    private int _hardwareExportRetryCountdown;
 
     internal string Error { get; private set; } = "Unknown FFmpeg error.";
     internal string VideoDecoderDiagnostics { get; private set; } = "Disabled";
@@ -60,7 +63,8 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
         VideoDecoderDiagnostics = options.UseHardwareAcceleration != 0
             ? $"{HardwareDecoderContextFactory.PlatformBackendName} requested"
             : "Disabled";
-        _preserveHardwareFrames = options.PreserveHardwareFrames != 0;
+        _hardwareFrameOutputRequested = options.PreserveHardwareFrames != 0;
+        _preserveHardwareFrames = _hardwareFrameOutputRequested;
         _formatContext = _api.AvFormatAllocContext();
         if (_formatContext == IntPtr.Zero)
         {
@@ -159,7 +163,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
             if (result >= 0 &&
                 FFmpegInputOptionPolicy.ShouldPrefetchPackets(isHls, isHttpMedia, _packetReader))
             {
-                _hlsPacketBuffer = new HlsPacketPrefetchBuffer(
+                _hlsPacketBuffer = new NetworkPacketPrefetchBuffer(
                     _api,
                     _formatContext,
                     _packet);
@@ -211,6 +215,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
         _audioFrames.Clear();
         _audioTempoFilter?.Reset();
         _nextAudioPresentationSeconds = null;
+        _hardwareExportRetryCountdown = 0;
         return 0;
     }
 
@@ -569,10 +574,17 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
         var source = _decodeFrame;
         var isHardwareFrame =
             _hardwareDecoder is not null && _hardwareDecoder.IsHardwareFrame(_decodeFrame);
-        var preserveHardwareFrame =
+        var canExportHardwareFrame =
             isHardwareFrame &&
-            _preserveHardwareFrames &&
+            _hardwareFrameOutputRequested &&
             _hardwareDecoder!.SupportsDirectFrameOutput;
+        if (canExportHardwareFrame && !_preserveHardwareFrames &&
+            _hardwareExportRetryCountdown > 0)
+        {
+            _hardwareExportRetryCountdown--;
+        }
+        var preserveHardwareFrame = canExportHardwareFrame &&
+            (_preserveHardwareFrames || _hardwareExportRetryCountdown == 0);
         var isDmaBuf = false;
         if (preserveHardwareFrame && OperatingSystem.IsLinux())
         {
@@ -580,8 +592,9 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
             if (result < 0)
             {
                 _preserveHardwareFrames = false;
-                VideoDecoderDiagnostics +=
-                    "; DRM PRIME export unavailable, using CPU frame transfer";
+                _hardwareExportRetryCountdown = HardwareExportRetryFrameInterval;
+                VideoDecoderDiagnostics =
+                    $"{_hardwareDecoder.BackendName} active (DRM PRIME export unavailable; retrying, CPU frame transfer)";
                 result = _hardwareDecoder.Transfer(_decodeFrame, out source);
                 if (result < 0)
                 {
@@ -591,6 +604,12 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
             }
             else
             {
+                if (!_preserveHardwareFrames)
+                {
+                    _preserveHardwareFrames = true;
+                    VideoDecoderDiagnostics =
+                        $"{_hardwareDecoder.BackendName} active (zero-copy texture output)";
+                }
                 isDmaBuf = true;
             }
         }

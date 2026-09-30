@@ -21,6 +21,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         InitializePlaybackControls();
         Player.PlayerFactory = FfmpegPlayerFactory;
+        BackendComboBox.ItemsSource = new[] { "Auto", "Media (FFmpeg)", "WebRTC" };
+        BackendComboBox.SelectedIndex = 0;
         _hardwareDiagnosticsDescriptor = DependencyPropertyDescriptor.FromProperty(
             FrameFlux.Wpf.MediaView.IsHardwareVideoDecodingActiveProperty,
             typeof(FrameFlux.Wpf.MediaView))!;
@@ -113,14 +115,18 @@ public partial class MainWindow : Window
     private async Task StartSourceAsync(MediaSource source)
     {
         await Player.StopAsync();
-        Player.PlayerFactory = IsWebRtcSource(source)
-            ? WebRtcPlayerFactory
-            : FfmpegPlayerFactory;
+        Player.PlayerFactory = BackendComboBox.SelectedIndex switch
+        {
+            1 => FfmpegPlayerFactory,
+            2 => WebRtcPlayerFactory,
+            _ => IsWebRtcSource(source) ? WebRtcPlayerFactory : FfmpegPlayerFactory
+        };
         Player.Source = source;
         var isSeekable = source.Uri.IsFile ||
             (source.Uri.Scheme is "http" or "https" &&
-             ConventionalMediaExtensions.Contains(System.IO.Path.GetExtension(source.Uri.AbsolutePath)));
-        SourceKindTextBlock.Text = source.Uri.IsFile ? "FILE" : (isSeekable ? "VOD" : "LIVE");
+             ConventionalMediaExtensions.Contains(System.IO.Path.GetExtension(source.Uri.AbsolutePath)) &&
+             !source.Uri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase));
+        SourceKindTextBlock.Text = source.Uri.IsFile ? "FILE" : (isSeekable ? "VOD" : "STREAM");
         SourceKindIndicator.Background = isSeekable
             ? System.Windows.Media.Brushes.Gray
             : System.Windows.Media.Brushes.Red;
@@ -164,21 +170,33 @@ public partial class MainWindow : Window
     private static bool IsWebRtcSource(MediaSource source)
     {
         var uri = source.Uri;
+        if (uri.Scheme is "webrtc" or "ws" or "wss" or "data")
+        {
+            return true;
+        }
+
         if (uri.Scheme is "http" or "https")
         {
+            var path = uri.AbsolutePath;
+            if (path.EndsWith("/whep", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith("/whip", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals("/api/ws", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith("/stream.html", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith("/links.html", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
             var extension = System.IO.Path.GetExtension(uri.AbsolutePath);
             if (ConventionalMediaExtensions.Contains(extension))
             {
                 return false;
             }
+
+            throw new InvalidOperationException("HTTP source type is unclear. Select Media (FFmpeg) or WebRTC in Player.");
         }
 
-        return uri.Scheme.Equals("webrtc", StringComparison.OrdinalIgnoreCase) ||
-               uri.Scheme.Equals("ws", StringComparison.OrdinalIgnoreCase) ||
-               uri.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase) ||
-               uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ||
-               uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ||
-               uri.Scheme.Equals("data", StringComparison.OrdinalIgnoreCase);
+        return false;
     }
 
     private void SetSourceCommandsEnabled(bool enabled)

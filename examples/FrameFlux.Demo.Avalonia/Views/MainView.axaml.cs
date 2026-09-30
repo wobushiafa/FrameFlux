@@ -29,6 +29,12 @@ public sealed partial class MainView : UserControl
         InitializeComponent();
         InitializePlaybackControls();
         Player.PlayerFactory = FfmpegPlayerFactory;
+#if !ANDROID
+        BackendComboBox.ItemsSource = new[] { "Auto", "Media (FFmpeg)", "WebRTC" };
+#else
+        BackendComboBox.ItemsSource = new[] { "Media (FFmpeg)" };
+#endif
+        BackendComboBox.SelectedIndex = 0;
         Player.PropertyChanged += Player_OnPropertyChanged;
         var options = new MediaOpenOptions
         {
@@ -148,10 +154,15 @@ public sealed partial class MainView : UserControl
         await Player.StartAsync();
     }
 
-    private static IMediaPlayerFactory ResolvePlayerFactory(MediaSource source)
+    private IMediaPlayerFactory ResolvePlayerFactory(MediaSource source)
     {
 #if !ANDROID
-        return IsWebRtcSource(source) ? WebRtcPlayerFactory : FfmpegPlayerFactory;
+        return BackendComboBox.SelectedIndex switch
+        {
+            1 => FfmpegPlayerFactory,
+            2 => WebRtcPlayerFactory,
+            _ => IsWebRtcSource(source) ? WebRtcPlayerFactory : FfmpegPlayerFactory
+        };
 #else
         return FfmpegPlayerFactory;
 #endif
@@ -160,42 +171,40 @@ public sealed partial class MainView : UserControl
 #if !ANDROID
     private static readonly HashSet<string> ConventionalMediaExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".mp4",
-        ".mkv",
-        ".mov",
-        ".avi",
-        ".webm",
-        ".flv",
-        ".ts",
-        ".m3u8",
-        ".mpd",
-        ".m4v",
-        ".wmv",
-        ".mp3",
-        ".aac",
-        ".wav",
-        ".ogg",
-        ".flac"
+        ".mp4", ".mkv", ".mov", ".avi", ".webm", ".flv", ".ts",
+        ".m3u8", ".mpd", ".m4v", ".wmv", ".mp3", ".aac",
+        ".wav", ".ogg", ".flac"
     };
 
     private static bool IsWebRtcSource(MediaSource source)
     {
         var uri = source.Uri;
+        if (uri.Scheme is "webrtc" or "ws" or "wss" or "data")
+        {
+            return true;
+        }
+
         if (uri.Scheme is "http" or "https")
         {
-            var extension = System.IO.Path.GetExtension(uri.AbsolutePath);
-            if (ConventionalMediaExtensions.Contains(extension))
+            var path = uri.AbsolutePath;
+            if (path.EndsWith("/whep", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith("/whip", StringComparison.OrdinalIgnoreCase) ||
+                path.Equals("/api/ws", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith("/stream.html", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith("/links.html", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (ConventionalMediaExtensions.Contains(Path.GetExtension(path)))
             {
                 return false;
             }
+
+            throw new InvalidOperationException("HTTP source type is unclear. Select Media (FFmpeg) or WebRTC in Player.");
         }
 
-        return uri.Scheme.Equals("webrtc", StringComparison.OrdinalIgnoreCase) ||
-               uri.Scheme.Equals("ws", StringComparison.OrdinalIgnoreCase) ||
-               uri.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase) ||
-               uri.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase) ||
-               uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ||
-               uri.Scheme.Equals("data", StringComparison.OrdinalIgnoreCase);
+        return false;
     }
 #endif
 

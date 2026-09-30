@@ -66,6 +66,15 @@
                         Orientation="Horizontal">
                 <TextBlock Margin="0,0,8,0"
                            VerticalAlignment="Center"
+                           Text="Player" />
+                <ComboBox x:Name="BackendComboBox"
+                          Width="120"
+                          AutomationProperties.Name="Playback player" />
+            </StackPanel>
+            <StackPanel Margin="0,0,16,0"
+                        Orientation="Horizontal">
+                <TextBlock Margin="0,0,8,0"
+                           VerticalAlignment="Center"
                            Text="Decode" />
                 <ComboBox x:Name="HardwareModeComboBox"
                           Width="150"
