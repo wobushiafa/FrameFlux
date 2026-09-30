@@ -7,6 +7,32 @@ namespace FrameFlux.FFmpeg.Tests;
 
 public sealed class MediaConfigurationTests
 {
+    [Fact]
+    public void HttpBufferDurations_HaveDefaultsAndValidateBounds()
+    {
+        var defaults = new MediaNetworkOptions();
+        Assert.Equal(TimeSpan.FromSeconds(3), defaults.InitialBufferDuration);
+        Assert.Equal(TimeSpan.FromSeconds(2), defaults.RebufferDuration);
+
+        new MediaOpenOptions
+        {
+            Network = new MediaNetworkOptions
+            {
+                InitialBufferDuration = TimeSpan.Zero,
+                RebufferDuration = TimeSpan.FromSeconds(30)
+            }
+        }.Validate();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => new MediaOpenOptions
+        {
+            Network = new MediaNetworkOptions { InitialBufferDuration = TimeSpan.FromTicks(-1) }
+        }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new MediaOpenOptions
+        {
+            Network = new MediaNetworkOptions { RebufferDuration = TimeSpan.FromSeconds(31) }
+        }.Validate());
+    }
+
     [Theory]
     [InlineData(MediaVideoDecodingPolicy.SoftwareOnly, (int)FfmpegVideoDecodingMode.SoftwareOnly)]
     [InlineData(MediaVideoDecodingPolicy.HardwarePreferred, (int)FfmpegVideoDecodingMode.HardwarePreferred)]

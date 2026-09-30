@@ -19,6 +19,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
     private readonly WebRtcFrameBufferPool _framePool;
     private readonly WebRtcVideoSink _videoSink;
     private readonly WebRtcEncodedFrameGate _encodedFrameGate = new();
+    private WebRtcVideoDecodeQueue? _videoDecodeQueue;
 
     private RTCPeerConnection? _peerConnection;
     private Uri? _sessionResourceUri;
@@ -41,6 +42,9 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
     private volatile uint _lastVideoSsrc;
     private volatile bool _hasReceivedKeyFrame;
     private volatile bool _decoderRefreshPending;
+#if ANDROID
+    private long _lastVideoRtpArrival;
+#endif
     private CancellationTokenSource? _keyFrameRequestCts;
     private readonly WebRtcRtpLossDetector _lossDetector;
     private bool _disposed;
@@ -53,8 +57,12 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
     public WebRtcMediaPlayer(WebRtcPlayerOptions? options = null)
     {
         _webrtcOptions = options ?? new WebRtcPlayerOptions();
+#if ANDROID
+        _decoder = _webrtcOptions.VideoDecoder ?? new AndroidWebRtcVideoDecoder();
+#else
         _decoder = _webrtcOptions.VideoDecoder
             ?? (FfmpegWebRtcVideoDecoder.IsSupported ? new FfmpegWebRtcVideoDecoder() : new DefaultWebRtcVideoDecoder());
+#endif
         _audioOutput = _webrtcOptions.AudioOutput
 #if ANDROID
             ?? new WebRtcAudioTrackOutput();
@@ -136,7 +144,13 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                 var pcState = _peerConnection?.connectionState.ToString() ?? "None";
                 var iceState = _peerConnection?.iceConnectionState.ToString() ?? "None";
                 var hwActive = _decoder.IsHardwareAccelerated;
+#if ANDROID
+                var modeDesc = _decoder is AndroidWebRtcVideoDecoder androidDecoder
+                    ? androidDecoder.DecoderDescription
+                    : hwActive ? "D3D11VA (GPU)" : "FFmpeg CPU (SIMD)";
+#else
                 var modeDesc = hwActive ? "D3D11VA (GPU)" : "FFmpeg CPU (SIMD)";
+#endif
                 return new MediaDiagnostics(
                     IsHardwareVideoDecodingActive: hwActive,
                     VideoDecoderDiagnostics: $"WebRTC [{modeDesc}, Policy: {_decoder.DecodingPolicy}] (PC: {pcState}, ICE: {iceState})",
@@ -259,6 +273,12 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         var wantsD3D11 = output?.PreferredFrameStorage == MediaFrameStorageKind.D3D11Texture
             || (output?.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Unknown) ?? false);
         _decoder.CanOutputD3D11Texture = wantsD3D11;
+#if ANDROID
+        if (_decoder is AndroidWebRtcVideoDecoder androidDecoder)
+        {
+            androidDecoder.SetVideoOutput(output);
+        }
+#endif
     }
 
     public TimeSpan Position => _playbackStopwatch.Elapsed;
@@ -341,6 +361,15 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                 throw new NotSupportedException("WebRTC hardware decoding is unavailable on this platform.");
             }
 
+#if ANDROID
+            if (_options.Video.DecodingPolicy == MediaVideoDecodingPolicy.HardwareRequired &&
+                _decoder is AndroidWebRtcVideoDecoder androidDecoder && !androidDecoder.CanUseSurface)
+            {
+                throw new NotSupportedException(
+                    "Android WebRTC hardware decoding requires a Surface video output.");
+            }
+#endif
+
             if (_decoder is DefaultWebRtcVideoDecoder)
             {
                 throw new NotSupportedException(
@@ -357,7 +386,25 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
             };
 
             var pc = new RTCPeerConnection(config);
+#if ANDROID && DEBUG
+            pc.oniceconnectionstatechange += state => global::Android.Util.Log.Info("FrameFluxICE",
+                $"ICE {state}; local candidates: {string.Join("; ", pc.GetRtpChannel().Candidates.Select(c => c.candidate))}");
+#endif
             var connectionGeneration = Interlocked.Increment(ref _peerConnectionGeneration);
+            Action? drainOutput = null;
+#if ANDROID
+            drainOutput = () =>
+            {
+                if (_decoder is AndroidWebRtcVideoDecoder androidDecoder) androidDecoder.DrainPendingOutput();
+            };
+#endif
+            var decodeQueue = new WebRtcVideoDecodeQueue((frame, refresh) =>
+            {
+                if (connectionGeneration != Interlocked.Read(ref _peerConnectionGeneration)) return;
+                if (refresh) _decoderRefreshPending = true;
+                DecodeVideoFrame(frame.Endpoint, frame.Timestamp, frame.Payload, frame.Format);
+            }, _lossDetector.RequestKeyFrameRateLimited, _webrtcOptions, drainOutput);
+            _videoDecodeQueue = decodeQueue;
             lock (_sync)
             {
                 _peerConnection = pc;
@@ -414,6 +461,16 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
 
                 if (mediaType == SDPMediaTypesEnum.video)
                 {
+#if ANDROID
+                    var arrival = System.Diagnostics.Stopwatch.GetTimestamp();
+                    var previousArrival = Interlocked.Exchange(ref _lastVideoRtpArrival, arrival);
+                    if (previousArrival != 0 &&
+                        System.Diagnostics.Stopwatch.GetElapsedTime(previousArrival, arrival).TotalMilliseconds > 500)
+                    {
+                        global::Android.Util.Log.Warn("FrameFluxTiming",
+                            $"RTP gap {System.Diagnostics.Stopwatch.GetElapsedTime(previousArrival, arrival).TotalMilliseconds:F0} ms");
+                    }
+#endif
                     var remoteSsrc = rtpPacket.Header.SyncSource;
                     var previousSsrc = _lastVideoSsrc;
                     var isFirstPacket = previousSsrc == 0;
@@ -423,8 +480,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                     if (streamChanged)
                     {
                         _encodedFrameGate.Reset();
-                        _hasReceivedKeyFrame = false;
-                        _decoderRefreshPending = true;
+                        decodeQueue.RequestRecovery();
                     }
 
                     var localSsrc = pc.VideoLocalTrack?.Ssrc ?? 12345678u;
@@ -432,10 +488,8 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                         localSsrc,
                         remoteSsrc,
                         (ushort)rtpPacket.Header.SequenceNumber);
-                    if (packetLossDetected)
-                    {
-                        _decoderRefreshPending = true;
-                    }
+
+                    if (packetLossDetected) decodeQueue.RequestRecovery();
 
                     var completedFrame = _encodedFrameGate.CompletePacket(
                         rtpPacket.Header.Timestamp,
@@ -443,11 +497,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                         packetLossDetected);
                     if (completedFrame is { } frame)
                     {
-                        DecodeVideoFrame(
-                            frame.Endpoint,
-                            frame.Timestamp,
-                            frame.Payload,
-                            frame.Format);
+                        decodeQueue.Enqueue(frame);
                     }
 
                     if ((isFirstPacket || streamChanged) && !_hasReceivedKeyFrame)
@@ -464,11 +514,15 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                     return;
                 }
 
-                if (state == RTCPeerConnectionState.failed)
+                // SIPSorcery can report peer "failed" for a transient ICE
+                // disconnect during DTLS negotiation, then recover on the next
+                // consent check. Faulting here would disable decode permanently.
+                if (state == RTCPeerConnectionState.failed &&
+                    pc.iceConnectionState != RTCIceConnectionState.disconnected)
                 {
                     ReportError(new MediaPlaybackError(
                         "ConnectionFailed",
-                        "WebRTC peer connection failed.",
+                        $"WebRTC peer connection failed (ICE: {pc.iceConnectionState}).",
                         IsRecoverable: false));
                 }
             };
@@ -872,16 +926,38 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
             {
                 ffmpegDecoder.Flush();
             }
+#if ANDROID
+            if ((!_hasReceivedKeyFrame || _decoderRefreshPending) &&
+                _decoder is AndroidWebRtcVideoDecoder androidDecoder)
+            {
+                androidDecoder.Flush();
+            }
+#endif
 
             _decoderRefreshPending = false;
             _hasReceivedKeyFrame = true;
         }
 
-        if (_decoder.CanDecode(format) &&
-            _decoder.TryDecode(payload, format, _framePool, out var decodedFrame) &&
-            decodedFrame is not null)
+        try
         {
-            DeliverFrame(decodedFrame);
+            if (_decoder.CanDecode(format) &&
+                _decoder.TryDecode(payload, format, _framePool, out var decodedFrame) &&
+                decodedFrame is not null)
+            {
+                DeliverFrame(decodedFrame);
+            }
+        }
+        catch (WebRtcDecoderInputDroppedException)
+        {
+            _decoderRefreshPending = true;
+            _videoDecodeQueue?.RequestRecovery();
+            _lossDetector.RequestKeyFrameRateLimited();
+        }
+        catch (Exception exception)
+        {
+            ReportError(new MediaPlaybackError(
+                "VideoDecodeFailed", exception.Message,
+                IsRecoverable: false, exception));
         }
     }
 
@@ -890,6 +966,9 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         WebRtcResolvedEndpoint endpoint,
         CancellationToken cancellationToken)
     {
+        using var negotiationCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        negotiationCts.CancelAfter(_webrtcOptions.SignalingTimeout);
+        cancellationToken = negotiationCts.Token;
         if (endpoint.Kind == WebRtcEndpointKind.Go2RtcWebSocket)
         {
             var offer = pc.createOffer();
@@ -1199,6 +1278,8 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
     private async Task StopInternalAsync(CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref _peerConnectionGeneration);
+        var decodeQueue = Interlocked.Exchange(ref _videoDecodeQueue, null);
+        if (decodeQueue is not null) await decodeQueue.DisposeAsync().ConfigureAwait(false);
         _playbackStopwatch.Stop();
         _playbackStopwatch.Reset();
         var keyFrameRequestCts = _keyFrameRequestCts;

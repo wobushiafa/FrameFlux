@@ -7,8 +7,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\FrameFlux.Avalonia\FrameFlux.Avalonia.csproj" />
     <ProjectReference Include="..\..\src\FrameFlux.FFmpeg\FrameFlux.FFmpeg.csproj" />
-    <ProjectReference Include="..\..\src\FrameFlux.WebRtc\FrameFlux.WebRtc.csproj"
-                      Condition="'$(TargetFramework)' == 'net8.0'" />
+    <ProjectReference Include="..\..\src\FrameFlux.WebRtc\FrameFlux.WebRtc.csproj" />
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Fonts.Inter" />
     <PackageReference Include="Avalonia.Themes.Fluent" />

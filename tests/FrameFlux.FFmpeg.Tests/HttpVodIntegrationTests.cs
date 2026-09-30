@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -37,6 +38,8 @@ public sealed class HttpVodIntegrationTests
 
             await using var server = new RangeHttpServer(await File.ReadAllBytesAsync(mediaPath));
             await using var player = new FfmpegMediaPlayer();
+            var states = new ConcurrentQueue<MediaPlaybackState>();
+            player.StateChanged += (_, args) => states.Enqueue(args.NewState);
             var frames = 0;
             long latestFramePositionTicks = 0;
             player.FrameReceived += (_, _) =>
@@ -51,6 +54,8 @@ public sealed class HttpVodIntegrationTests
             });
             await player.PlayAsync();
             Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref frames) > 0, TimeSpan.FromSeconds(10)));
+            Assert.Contains(MediaPlaybackState.Buffering, states);
+            Assert.Contains(MediaPlaybackState.Playing, states);
             Assert.InRange(player.Duration!.Value.TotalSeconds, 11.5d, 12.5d);
 
             var framesBeforeSeek = Volatile.Read(ref frames);

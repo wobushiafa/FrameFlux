@@ -357,6 +357,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
             lock (_sync)
             {
                 if (_state is MediaPlaybackState.Playing or
+                    MediaPlaybackState.Buffering or
                     MediaPlaybackState.Opening or
                     MediaPlaybackState.Reconnecting)
                 {

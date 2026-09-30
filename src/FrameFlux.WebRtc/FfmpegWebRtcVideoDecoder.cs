@@ -661,8 +661,8 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
     {
         try
         {
-            var avutilNames = new[] { "avutil-60", "avutil-59", "avutil-58", "avutil-57", "avutil", "libavutil.so.60", "libavutil.so.59", "libavutil.so" };
-            var avcodecNames = new[] { "avcodec-62", "avcodec-61", "avcodec-60", "avcodec-59", "avcodec", "libavcodec.so.62", "libavcodec.so.61", "libavcodec.so" };
+            var avutilNames = new[] { "avutil-60", "avutil-59", "avutil-58", "avutil-57", "avutil", "libavutil.so.60", "libavutil.so.59", "libavutil.so", "libavutil_neon.so" };
+            var avcodecNames = new[] { "avcodec-62", "avcodec-61", "avcodec-60", "avcodec-59", "avcodec", "libavcodec.so.62", "libavcodec.so.61", "libavcodec.so", "libavcodec_neon.so" };
 
             var searchDirs = new List<string>
             {
@@ -672,6 +672,18 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                 Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\..\..\..\native\artifacts\runtimes\win-x64\native")),
                 Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\native\artifacts\runtimes\win-x64\native"))
             };
+
+            // Some Android FFmpeg builds reference libandroid symbols from avutil
+            // without declaring libandroid as a direct dependency. Loading avcodec
+            // first brings both dependencies into the same linker group.
+            if (OperatingSystem.IsAndroid())
+            {
+                var codecName = RuntimeInformation.ProcessArchitecture == Architecture.Arm
+                    ? "libavcodec_neon.so"
+                    : "libavcodec.so";
+                NativeLibrary.TryLoad(codecName, typeof(FfmpegWebRtcVideoDecoder).Assembly,
+                    null, out _avCodecHandle);
+            }
 
             // 1. Try load avutil
             foreach (var name in avutilNames)

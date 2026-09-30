@@ -44,7 +44,8 @@ internal sealed class FfmpegDecoder : IDisposable
     internal FfmpegDecoder(
         string url,
         FfmpegPlaybackOptions options,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<bool>? bufferingChanged = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(url);
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -58,6 +59,8 @@ internal sealed class FfmpegDecoder : IDisposable
             Transport = nativeTransport.Pointer,
             OpenTimeoutMilliseconds = options.OpenTimeoutMilliseconds,
             ReadTimeoutMilliseconds = options.ReadTimeoutMilliseconds,
+            InitialBufferDurationMilliseconds = options.InitialBufferDurationMilliseconds,
+            RebufferDurationMilliseconds = options.RebufferDurationMilliseconds,
             LowLatency = options.LowLatency ? 1 : 0,
             UseHardwareAcceleration =
                 FfmpegPlaybackConfiguration.UsesHardwareDecoding(options.VideoDecodingMode) ? 1 : 0,
@@ -92,6 +95,8 @@ internal sealed class FfmpegDecoder : IDisposable
             session.Dispose();
             throw new ApplicationException(message);
         }
+
+        FrameFluxFFmpegNative.SetBufferingCallback(session, bufferingChanged);
 
         _cancellationRegistration = cancellationToken.Register(
             static state => FrameFluxFFmpegNative.Cancel((NativeFfmpegSessionHandle)state!),

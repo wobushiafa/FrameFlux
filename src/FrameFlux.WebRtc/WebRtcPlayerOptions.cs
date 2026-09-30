@@ -43,6 +43,18 @@ public sealed class WebRtcPlayerOptions
     /// </summary>
     public TimeSpan VideoRtpReorderTimeout { get; init; } = TimeSpan.FromMilliseconds(80);
 
+    /// <summary>Maximum compressed video frames waiting for decode. Defaults to 64 to absorb network bursts.</summary>
+    public int MaxPendingVideoFrames { get; init; } = 64;
+
+    /// <summary>Maximum bytes of compressed video waiting for decode. Defaults to 16 MiB.</summary>
+    public int MaxPendingVideoBytes { get; init; } = 16 * 1024 * 1024;
+
+    /// <summary>
+    /// Maximum time a compressed frame may wait for decode before key-frame recovery.
+    /// This limits backlog, rather than adding a startup delay. Defaults to two seconds.
+    /// </summary>
+    public TimeSpan MaxPendingVideoAge { get; init; } = TimeSpan.FromSeconds(2);
+
     /// <summary>
     /// Optional custom video decoder instance.
     /// </summary>

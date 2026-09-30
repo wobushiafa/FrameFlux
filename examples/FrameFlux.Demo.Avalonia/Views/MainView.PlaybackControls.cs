@@ -96,7 +96,9 @@ public sealed partial class MainView
         {
             PositionSlider.Value = Math.Clamp(position.TotalSeconds, 0d, PositionSlider.Maximum);
         }
-        StartButton.Content = Player.State == MediaPlaybackState.Playing ? "Pause" : "Play";
+        StartButton.Content = Player.State == MediaPlaybackState.Playing
+            ? Player.Capabilities.CanPause ? "Pause" : "Playing"
+            : "Play";
     }
 
     private static TimeSpan GetTimelineRefreshInterval(double playbackRate)

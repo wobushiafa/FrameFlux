@@ -17,6 +17,8 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
     <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
     <ProjectReference Include="..\FrameFlux.Presentation\FrameFlux.Presentation.csproj" />
+    <ProjectReference Include="..\FrameFlux.FFmpeg.Android\FrameFlux.FFmpeg.Android.csproj"
+                      Condition="'$(TargetFramework)' == 'net10.0-android'" />
     <PackageReference Include="NAudio" Condition="'$(TargetFramework)' == 'net8.0'" />
     <PackageReference Include="SIPSorcery" />
     <InternalsVisibleTo Include="FrameFlux.WebRtc.Tests" />

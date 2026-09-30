@@ -69,7 +69,8 @@ public enum MediaPlaybackState
     Reconnecting,
     Stopping,
     Stopped,
-    Faulted
+    Faulted,
+    Buffering
 }
 
 public sealed record MediaPlaybackError(

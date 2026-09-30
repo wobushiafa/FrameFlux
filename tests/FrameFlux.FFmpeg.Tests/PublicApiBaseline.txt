@@ -117,9 +117,11 @@ enum FrameFlux.MediaLatencyMode : System.Int32
 class FrameFlux.MediaNetworkOptions : System.IEquatable<FrameFlux.MediaNetworkOptions>
   constructor MediaNetworkOptions()
   property System.TimeSpan? EndpointProbeTimeout { get; init; }
+  property System.TimeSpan InitialBufferDuration { get; init; }
   property FrameFlux.MediaLatencyMode LatencyMode { get; init; }
   property System.TimeSpan? OpenTimeout { get; init; }
   property System.TimeSpan? ReadTimeout { get; init; }
+  property System.TimeSpan RebufferDuration { get; init; }
   property FrameFlux.MediaReconnectOptions Reconnect { get; init; }
   property FrameFlux.MediaTransport Transport { get; init; }
 class FrameFlux.MediaOpenOptions : System.IEquatable<FrameFlux.MediaOpenOptions>
@@ -154,6 +156,7 @@ enum FrameFlux.MediaPlaybackState : System.Int32
   Stopping = 6
   Stopped = 7
   Faulted = 8
+  Buffering = 9
 class FrameFlux.MediaPlaybackStateChangedEventArgs : System.EventArgs
   constructor MediaPlaybackStateChangedEventArgs(FrameFlux.MediaPlaybackState oldState, FrameFlux.MediaPlaybackState newState)
   property FrameFlux.MediaPlaybackState NewState { get; }

@@ -16,6 +16,10 @@ internal sealed class FfmpegPlaybackOptions
 
     public int ReadTimeoutMilliseconds { get; init; } = 5000;
 
+    public int InitialBufferDurationMilliseconds { get; init; } = 3000;
+
+    public int RebufferDurationMilliseconds { get; init; } = 2000;
+
     public bool ReconnectEnabled { get; init; } = true;
 
     public int ReconnectInitialDelayMilliseconds { get; init; } = 3000;

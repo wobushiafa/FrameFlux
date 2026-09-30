@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Net.WebSockets;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using SIPSorcery.Net;
@@ -17,6 +18,9 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
     private readonly TaskCompletionSource<string> _answerTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly List<string> _earlyCandidates = [];
     private readonly object _sync = new();
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
+    private readonly Dictionary<string, Task> _tcpCandidates = [];
+    private readonly List<IceTcpCandidateBridge> _tcpBridges = [];
     private RTCPeerConnection? _pc;
     private Task? _receiveLoopTask;
     private bool _remoteDescriptionSet;
@@ -53,9 +57,6 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
     {
         _pc = pc;
 
-        // Wire local ICE candidates to trickle to go2rtc
-        _pc.onicecandidate += OnLocalIceCandidate;
-
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, cancellationToken);
         await _ws.ConnectAsync(wsUri, linkedCts.Token).ConfigureAwait(false);
 
@@ -70,6 +71,10 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
         }, WebRtcJsonSerializerContext.Default.Go2RtcSignalingMessage);
 
         await SendTextAsync(offerPayload, linkedCts.Token).ConfigureAwait(false);
+
+        // SIPSorcery replays gathered candidates when the first handler subscribes.
+        // Subscribe only after the socket is open and the offer has been sent.
+        _pc.onicecandidate += OnLocalIceCandidate;
     }
 
     public async Task<string> WaitForAnswerAsync(CancellationToken cancellationToken = default)
@@ -94,11 +99,7 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
             {
                 try
                 {
-                    _pc.addIceCandidate(new RTCIceCandidateInit
-                    {
-                        candidate = candidate,
-                        sdpMid = "0"
-                    });
+                    ApplyRemoteCandidate(candidate);
                 }
                 catch
                 {
@@ -110,19 +111,36 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
 
     private void OnLocalIceCandidate(RTCIceCandidate? candidate)
     {
-        if (_disposed || _ws.State != WebSocketState.Open)
+        if (_disposed || candidate is null)
         {
             return;
         }
 
         var candidateStr = candidate?.candidate ?? string.Empty;
+#if ANDROID && DEBUG
+        global::Android.Util.Log.Info("FrameFluxICE", $"Sending local candidate: {candidateStr}");
+#endif
         var payload = JsonSerializer.Serialize(new Go2RtcSignalingMessage
         {
             Type = "webrtc/candidate",
             Value = candidateStr
         }, WebRtcJsonSerializerContext.Default.Go2RtcSignalingMessage);
 
-        _ = SendTextAsync(payload, _cts.Token);
+        _ = SendCandidateAsync(payload);
+    }
+
+    private async Task SendCandidateAsync(string payload)
+    {
+        try
+        {
+            await SendTextAsync(payload, _cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_disposed || _cts.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            _answerTcs.TrySetException(exception);
+            System.Diagnostics.Trace.TraceWarning("WebRTC candidate send failed: {0}", exception.Message);
+        }
     }
 
     private async Task ReceiveLoopAsync()
@@ -137,6 +155,8 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
                 var result = await _ws.ReceiveAsync(new ArraySegment<byte>(buffer), _cts.Token).ConfigureAwait(false);
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
+                    _answerTcs.TrySetException(new InvalidOperationException(
+                        "WebRTC signaling closed before an SDP answer was received."));
                     break;
                 }
 
@@ -176,10 +196,25 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
 
             if (msg.Type == "webrtc/answer")
             {
+#if ANDROID && DEBUG
+                foreach (var line in (msg.Value ?? string.Empty).Split('\n'))
+                {
+                    if (line.StartsWith("a=candidate:", StringComparison.Ordinal))
+                        global::Android.Util.Log.Info("FrameFluxICE", $"Answer candidate: {line.Trim()}");
+                }
+#endif
                 _answerTcs.TrySetResult(msg.Value ?? string.Empty);
+            }
+            else if (msg.Type == "error")
+            {
+                _answerTcs.TrySetException(new InvalidOperationException(
+                    $"WebRTC signaling error: {msg.Value}"));
             }
             else if (msg.Type == "webrtc/candidate" && !string.IsNullOrWhiteSpace(msg.Value))
             {
+#if ANDROID && DEBUG
+                global::Android.Util.Log.Info("FrameFluxICE", $"Remote candidate: {msg.Value}");
+#endif
                 lock (_sync)
                 {
                     if (!_remoteDescriptionSet)
@@ -191,11 +226,7 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
 
                 try
                 {
-                    _pc?.addIceCandidate(new RTCIceCandidateInit
-                    {
-                        candidate = msg.Value,
-                        sdpMid = "0"
-                    });
+                    ApplyRemoteCandidate(msg.Value);
                 }
                 catch
                 {
@@ -211,23 +242,80 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
 
     private async Task SendTextAsync(string text, CancellationToken cancellationToken)
     {
-        if (_disposed || _ws.State != WebSocketState.Open)
-        {
-            return;
-        }
-
         var bytes = Encoding.UTF8.GetBytes(text);
+        await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             await _ws.SendAsync(
                 new ArraySegment<byte>(bytes),
                 WebSocketMessageType.Text,
                 true,
                 cancellationToken).ConfigureAwait(false);
         }
-        catch
+        finally
         {
-            // Connection closing
+            _sendGate.Release();
+        }
+    }
+
+    private void ApplyRemoteCandidate(string candidate)
+    {
+        var fields = candidate.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (fields.Length >= 8 && fields[2].Equals("tcp", StringComparison.OrdinalIgnoreCase))
+        {
+            // SIPSorcery accepts UDP candidates only. Connect actively to passive
+            // ICE-TCP peers, exposing a private loopback endpoint to its ICE agent.
+            if (fields[1] != "1" || !candidate.Contains("tcptype passive", StringComparison.OrdinalIgnoreCase)
+                || !int.TryParse(fields[5], out var port) || port is < 1 or > 65535) return;
+            lock (_sync)
+            {
+                if (_disposed || _tcpCandidates.ContainsKey(candidate) || _tcpCandidates.Count >= 8) return;
+                _tcpCandidates.Add(candidate, ConnectTcpCandidateAsync(fields[4], port));
+            }
+            return;
+        }
+        _pc?.addIceCandidate(new RTCIceCandidateInit { candidate = candidate, sdpMid = "0" });
+    }
+
+    private async Task ConnectTcpCandidateAsync(string address, int port)
+    {
+        IceTcpCandidateBridge? bridge = null;
+        try
+        {
+            var pc = _pc!;
+            var local = pc.GetRtpChannel().RTPLocalEndPoint;
+            var loopback = local.Address.Equals(IPAddress.IPv6Any) || local.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
+                ? IPAddress.IPv6Loopback : IPAddress.Loopback;
+            bridge = new IceTcpCandidateBridge(new IPEndPoint(loopback, local.Port));
+            await bridge.ConnectAsync(address, port, _cts.Token).ConfigureAwait(false);
+            lock (_sync)
+            {
+                // A go2rtc ICE TCP mux associates the same ICE username with the
+                // active connection. Opening several paths to the same mux can
+                // steal that association and strand DTLS/media on another socket.
+                if (_disposed || _tcpBridges.Count != 0) return;
+                var endpoint = bridge.LocalEndPoint;
+#if ANDROID && DEBUG
+                global::Android.Util.Log.Info("FrameFluxICE", $"TCP transport selected: {address}:{port} via {endpoint}");
+#endif
+                pc.addIceCandidate(new RTCIceCandidateInit
+                {
+                    candidate = $"candidate:tcpbridge 1 udp 2147483647 {endpoint.Address} {endpoint.Port} typ host",
+                    sdpMid = "0"
+                });
+                _tcpBridges.Add(bridge);
+                bridge = null; // Owned by signaling until disconnect.
+            }
+        }
+        catch (Exception ex) when (ex is System.Net.Sockets.SocketException or IOException or OperationCanceledException or ObjectDisposedException or ArgumentException or InvalidOperationException)
+        {
+            if (!_cts.IsCancellationRequested)
+                System.Diagnostics.Trace.TraceWarning("ICE TCP candidate connection failed: {0}", ex.Message);
+        }
+        finally
+        {
+            if (bridge is not null) await bridge.DisposeAsync().ConfigureAwait(false);
         }
     }
 
@@ -247,14 +335,19 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
             _pc.onicecandidate -= OnLocalIceCandidate;
         }
 
-        _cts.Cancel();
-
         try
         {
             if (_ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
             {
                 using var closeCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
-                await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", closeCts.Token).ConfigureAwait(false);
+                await _sendGate.WaitAsync(closeCts.Token).ConfigureAwait(false);
+                try
+                {
+                    // The receive loop already owns ReceiveAsync. Send only the close
+                    // frame before cancellation aborts its pending receive operation.
+                    await _ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "Closing", closeCts.Token).ConfigureAwait(false);
+                }
+                finally { _sendGate.Release(); }
             }
         }
         catch
@@ -262,8 +355,10 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
             // Best effort
         }
 
-        _ws.Dispose();
-        _cts.Dispose();
+        _cts.Cancel();
+
+        await Task.WhenAll(_tcpCandidates.Values).ConfigureAwait(false);
+        foreach (var bridge in _tcpBridges) await bridge.DisposeAsync().ConfigureAwait(false);
 
         if (_receiveLoopTask is not null)
         {
@@ -276,6 +371,8 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
                 // Task canceled
             }
         }
+        _ws.Dispose();
+        _cts.Dispose();
     }
 
     internal sealed class Go2RtcSignalingMessage

@@ -62,6 +62,8 @@ public sealed class FfmpegPlaybackComponentTests
             MaxFramesPerSecond = 24,
             MaxVideoWidth = 1280,
             MaxVideoHeight = 720,
+            InitialBufferDurationMilliseconds = 4500,
+            RebufferDurationMilliseconds = 2500,
             EnableAudio = false,
             Volume = 0.4,
             IsMuted = true,
@@ -76,6 +78,8 @@ public sealed class FfmpegPlaybackComponentTests
         Assert.Equal(source.MaxFramesPerSecond, fallback.MaxFramesPerSecond);
         Assert.Equal(source.MaxVideoWidth, fallback.MaxVideoWidth);
         Assert.Equal(source.MaxVideoHeight, fallback.MaxVideoHeight);
+        Assert.Equal(source.InitialBufferDurationMilliseconds, fallback.InitialBufferDurationMilliseconds);
+        Assert.Equal(source.RebufferDurationMilliseconds, fallback.RebufferDurationMilliseconds);
         Assert.Equal(source.EnableAudio, fallback.EnableAudio);
         Assert.Equal(source.Volume, fallback.Volume);
         Assert.Equal(source.IsMuted, fallback.IsMuted);

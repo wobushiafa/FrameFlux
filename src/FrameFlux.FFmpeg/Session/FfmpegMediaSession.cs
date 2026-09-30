@@ -346,7 +346,11 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             client.SetPaused(paused);
         }
 
-        TransitionTo(paused ? MediaPlaybackState.Paused : MediaPlaybackState.Playing);
+        TransitionTo(paused
+            ? MediaPlaybackState.Paused
+            : _client?.IsBuffering == true
+                ? MediaPlaybackState.Buffering
+                : MediaPlaybackState.Playing);
         return ValueTask.CompletedTask;
     }
 
@@ -443,6 +447,8 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             OpenTimeoutMilliseconds = ToMilliseconds(Options.Network.OpenTimeout),
             EndpointProbeTimeoutMilliseconds = ToMilliseconds(Options.Network.EndpointProbeTimeout),
             ReadTimeoutMilliseconds = ToMilliseconds(Options.Network.ReadTimeout),
+            InitialBufferDurationMilliseconds = ToMilliseconds(Options.Network.InitialBufferDuration),
+            RebufferDurationMilliseconds = ToMilliseconds(Options.Network.RebufferDuration),
             ReconnectEnabled = Options.Network.Reconnect.IsEnabled,
             ReconnectInitialDelayMilliseconds = ToMilliseconds(
                 Options.Network.Reconnect.InitialDelay),
@@ -481,6 +487,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         {
             PlaybackConnectionState.Connecting => MediaPlaybackState.Opening,
             PlaybackConnectionState.Connected => MediaPlaybackState.Playing,
+            PlaybackConnectionState.Buffering => MediaPlaybackState.Buffering,
             PlaybackConnectionState.Reconnecting => MediaPlaybackState.Reconnecting,
             PlaybackConnectionState.Stopped => MediaPlaybackState.Stopped,
             _ => MediaPlaybackState.Idle

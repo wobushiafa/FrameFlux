@@ -51,6 +51,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
     internal bool IsHardwareVideoDecodingActive => _hardwareDecoder is not null;
     internal long LastHardwareTransferTicks => _hardwareDecoder?.LastTransferTicks ?? 0;
     internal bool HasAudio => _audioCodecContext != IntPtr.Zero;
+    internal Action<bool>? BufferingChanged { get; set; }
 
     internal int Open(in NativeFfmpegOptions options)
     {
@@ -166,7 +167,14 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
                 _hlsPacketBuffer = new NetworkPacketPrefetchBuffer(
                     _api,
                     _formatContext,
-                    _packet);
+                    _packet,
+                    _videoStreamIndex,
+                    _videoTimeBaseNumerator,
+                    _videoTimeBaseDenominator,
+                    bufferBeforePlayback: isHttpMedia,
+                    options.InitialBufferDurationMilliseconds,
+                    options.RebufferDurationMilliseconds,
+                    isBuffering => BufferingChanged?.Invoke(isBuffering));
             }
             return result;
         }

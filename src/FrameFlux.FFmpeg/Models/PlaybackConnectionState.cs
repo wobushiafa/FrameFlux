@@ -7,5 +7,6 @@ internal enum PlaybackConnectionState
     Connected,
     Reconnecting,
     Stopped,
-    Failed
+    Failed,
+    Buffering
 }

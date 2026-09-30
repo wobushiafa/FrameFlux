@@ -54,6 +54,7 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
     private int _sourceWidth;
     private int _sourceHeight;
     private int _frameAvailable;
+    private long _lastSurfaceFrameTime;
     private bool _surfaceRequested;
     private bool _releaseRequested;
     private bool _clearRequested;
@@ -430,6 +431,13 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
     private void OnFrameAvailable(object? sender, SurfaceTexture.FrameAvailableEventArgs args)
     {
         if (_disposed) return;
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        var previous = Interlocked.Exchange(ref _lastSurfaceFrameTime, now);
+        if (previous != 0 && System.Diagnostics.Stopwatch.GetElapsedTime(previous, now).TotalMilliseconds > 500)
+        {
+            global::Android.Util.Log.Warn("FrameFluxTiming",
+                $"Surface frame gap {System.Diagnostics.Stopwatch.GetElapsedTime(previous, now).TotalMilliseconds:F0} ms");
+        }
         Interlocked.Exchange(ref _frameAvailable, 1);
         RequestRender();
     }

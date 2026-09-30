@@ -16,6 +16,7 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
     private readonly IMediaVideoOutput? _videoOutput;
     private readonly bool _isLive;
     private readonly bool _isHls;
+    private readonly bool _isHttpMedia;
     private readonly ManualResetEventSlim _playbackGate = new(initialState: true);
     private readonly FfmpegPlaybackSynchronizer _playbackSynchronizer;
     private FfmpegPlaybackOptions _options;
@@ -36,6 +37,7 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
     private long _positionTicks;
     private long _durationTicks = -1;
     private double _playbackRate = 1d;
+    private int _isBuffering;
 
     public string VideoDecoderDiagnostics => Volatile.Read(ref _videoDecoderDiagnostics);
     public MediaAudioDiagnostics AudioDiagnostics =>
@@ -45,6 +47,7 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
     public MediaReconnectDiagnostics ReconnectDiagnostics => _reconnectState.Diagnostics;
 
     internal TimeSpan Position => TimeSpan.FromTicks(Interlocked.Read(ref _positionTicks));
+    internal bool IsBuffering => Volatile.Read(ref _isBuffering) != 0;
     internal TimeSpan? Duration => Interlocked.Read(ref _durationTicks) is var ticks && ticks >= 0 ? TimeSpan.FromTicks(ticks) : null;
 
     internal event FrameReceivedHandler? OnFrameReceived;
@@ -137,6 +140,7 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
         var isHls = hasUri && uri is not null && FfmpegSource.IsHls(uri);
         var isHttpMedia = hasUri && uri is not null && FfmpegSource.IsHttpMedia(uri);
         _isHls = isHls;
+        _isHttpMedia = isHttpMedia;
         _isLive = uri is not null && (uri.Scheme is "rtsp" or "rtsps" || isHls);
         _playbackSynchronizer = new FfmpegPlaybackSynchronizer(
             usesPlaybackClock: !_isLive || isHls,
@@ -264,7 +268,17 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                         : null;
                     if (platformDecoder is null)
                     {
-                        decoder = new FfmpegDecoder(_url, _options, cancellationToken);
+                        decoder = new FfmpegDecoder(_url, _options, cancellationToken,
+                            isBuffering =>
+                            {
+                                Volatile.Write(ref _isBuffering, isBuffering ? 1 : 0);
+                                if (_isRunning && _playbackGate.IsSet)
+                                {
+                                    RaiseConnectionStateChanged(isBuffering
+                                        ? PlaybackConnectionState.Buffering
+                                        : PlaybackConnectionState.Connected);
+                                }
+                            });
                     }
                     if (decoder is not null)
                     {
@@ -297,7 +311,10 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                     HardwareVideoDecodingChanged?.Invoke(
                         this,
                         platformDecoder?.IsHardwareVideoDecodingActive ?? decoder!.IsHardwareVideoDecodingActive);
-                    RaiseConnectionStateChanged(PlaybackConnectionState.Connected);
+                    Volatile.Write(ref _isBuffering, _isHttpMedia ? 1 : 0);
+                    RaiseConnectionStateChanged(_isHttpMedia
+                        ? PlaybackConnectionState.Buffering
+                        : PlaybackConnectionState.Connected);
                     var loopOutcome = platformDecoder is not null
                         ? RunPlatformDecodeLoop(
                             platformDecoder,

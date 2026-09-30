@@ -52,6 +52,16 @@ internal static class FrameFluxFFmpegNative
         }
     }
 
+    internal static void SetBufferingCallback(
+        NativeFfmpegSessionHandle session,
+        Action<bool>? callback)
+    {
+        if (!session.IsInvalid)
+        {
+            GetTarget<DirectFfmpegSession>(session.DangerousGetHandle()).BufferingChanged = callback;
+        }
+    }
+
     internal static void Close(IntPtr sessionHandle)
     {
         ReleaseHandle<DirectFfmpegSession>(sessionHandle, static session => session.Dispose());

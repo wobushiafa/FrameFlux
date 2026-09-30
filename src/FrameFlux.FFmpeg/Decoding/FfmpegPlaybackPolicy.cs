@@ -35,6 +35,8 @@ internal static class FfmpegPlaybackPolicy
             OpenTimeoutMilliseconds = options.OpenTimeoutMilliseconds,
             EndpointProbeTimeoutMilliseconds = options.EndpointProbeTimeoutMilliseconds,
             ReadTimeoutMilliseconds = options.ReadTimeoutMilliseconds,
+            InitialBufferDurationMilliseconds = options.InitialBufferDurationMilliseconds,
+            RebufferDurationMilliseconds = options.RebufferDurationMilliseconds,
             ReconnectEnabled = options.ReconnectEnabled,
             ReconnectInitialDelayMilliseconds = options.ReconnectInitialDelayMilliseconds,
             ReconnectMaximumDelayMilliseconds = options.ReconnectMaximumDelayMilliseconds,

@@ -5,18 +5,14 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using FrameFlux.Avalonia;
 using FrameFlux.FFmpeg;
-#if !ANDROID
 using FrameFlux.WebRtc;
-#endif
 
 namespace FrameFlux.Demo.Avalonia.Views;
 
 public sealed partial class MainView : UserControl
 {
     private static readonly IMediaPlayerFactory FfmpegPlayerFactory = new FfmpegMediaPlayerFactory();
-#if !ANDROID
     private static readonly IMediaPlayerFactory WebRtcPlayerFactory = new WebRtcMediaPlayerFactory();
-#endif
     private static readonly IBrush IdleBrush = new SolidColorBrush(Color.Parse("#6B7280"));
     private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.Parse("#22C55E"));
     private static readonly IBrush BusyBrush = new SolidColorBrush(Color.Parse("#F59E0B"));
@@ -29,19 +25,16 @@ public sealed partial class MainView : UserControl
         InitializeComponent();
         InitializePlaybackControls();
         Player.PlayerFactory = FfmpegPlayerFactory;
-#if !ANDROID
         BackendComboBox.ItemsSource = new[] { "Auto", "Media (FFmpeg)", "WebRTC" };
-#else
-        BackendComboBox.ItemsSource = new[] { "Media (FFmpeg)" };
-#endif
         BackendComboBox.SelectedIndex = 0;
         Player.PropertyChanged += Player_OnPropertyChanged;
         var options = new MediaOpenOptions
         {
             Network = new MediaNetworkOptions
             {
-                LatencyMode = MediaLatencyMode.Low,
-                Transport = MediaTransport.Tcp
+                LatencyMode = MediaLatencyMode.Default,
+                Transport = MediaTransport.Tcp,
+                ReadTimeout = TimeSpan.FromSeconds(20)
             },
             Video = new MediaVideoOptions
             {
@@ -49,7 +42,8 @@ public sealed partial class MainView : UserControl
             },
             Audio = new MediaAudioOptions
             {
-                GainDecibels = 0d
+                GainDecibels = 0d,
+                BufferDuration = TimeSpan.FromMilliseconds(800)
             }
         };
         Player.OpenOptions = options;
@@ -68,6 +62,10 @@ public sealed partial class MainView : UserControl
     {
         if (Player.State == MediaPlaybackState.Playing)
         {
+            if (!Player.Capabilities.CanPause)
+            {
+                return;
+            }
             await Player.PauseAsync();
             return;
         }
@@ -156,19 +154,14 @@ public sealed partial class MainView : UserControl
 
     private IMediaPlayerFactory ResolvePlayerFactory(MediaSource source)
     {
-#if !ANDROID
         return BackendComboBox.SelectedIndex switch
         {
             1 => FfmpegPlayerFactory,
             2 => WebRtcPlayerFactory,
             _ => IsWebRtcSource(source) ? WebRtcPlayerFactory : FfmpegPlayerFactory
         };
-#else
-        return FfmpegPlayerFactory;
-#endif
     }
 
-#if !ANDROID
     private static readonly HashSet<string> ConventionalMediaExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".mp4", ".mkv", ".mov", ".avi", ".webm", ".flv", ".ts",
@@ -206,7 +199,6 @@ public sealed partial class MainView : UserControl
 
         return false;
     }
-#endif
 
     private static async Task<string> CopyToTemporaryFileAsync(IStorageFile file)
     {

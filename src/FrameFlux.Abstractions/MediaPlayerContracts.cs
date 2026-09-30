@@ -94,6 +94,10 @@ public sealed record MediaNetworkOptions
     public TimeSpan? OpenTimeout { get; init; } = TimeSpan.FromSeconds(5);
     public TimeSpan? EndpointProbeTimeout { get; init; }
     public TimeSpan? ReadTimeout { get; init; } = TimeSpan.FromSeconds(5);
+    /// <summary>HTTP file playback duration to buffer before starting. Zero starts immediately.</summary>
+    public TimeSpan InitialBufferDuration { get; init; } = TimeSpan.FromSeconds(3);
+    /// <summary>HTTP file playback duration to buffer after the packet queue runs dry. Zero resumes immediately.</summary>
+    public TimeSpan RebufferDuration { get; init; } = TimeSpan.FromSeconds(2);
     public MediaReconnectOptions Reconnect { get; init; } = new();
     public MediaLatencyMode LatencyMode { get; init; } = MediaLatencyMode.Default;
 
@@ -104,8 +108,17 @@ public sealed record MediaNetworkOptions
         ValidatePositiveTimeout(OpenTimeout, nameof(OpenTimeout));
         ValidatePositiveTimeout(EndpointProbeTimeout, nameof(EndpointProbeTimeout));
         ValidatePositiveTimeout(ReadTimeout, nameof(ReadTimeout));
+        ValidateBufferDuration(InitialBufferDuration, nameof(InitialBufferDuration));
+        ValidateBufferDuration(RebufferDuration, nameof(RebufferDuration));
         ArgumentNullException.ThrowIfNull(Reconnect);
         Reconnect.Validate();
+    }
+
+    private static void ValidateBufferDuration(TimeSpan value, string parameterName)
+    {
+        if (value < TimeSpan.Zero || value > TimeSpan.FromSeconds(30))
+            throw new ArgumentOutOfRangeException(parameterName, value,
+                "HTTP media buffer duration must be between zero and 30 seconds.");
     }
 
     private static void ValidatePositiveTimeout(TimeSpan? value, string parameterName)

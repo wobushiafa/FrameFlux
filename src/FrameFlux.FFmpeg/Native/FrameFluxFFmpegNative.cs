@@ -43,6 +43,8 @@ internal struct NativeFfmpegOptions
     public int PreserveHardwareFrames;
     public int EnableAudio;
     public double MaxFramesPerSecond;
+    public int InitialBufferDurationMilliseconds;
+    public int RebufferDurationMilliseconds;
 }
 
 [StructLayout(LayoutKind.Sequential)]

@@ -79,6 +79,43 @@ or dropping every subsequent frame. Current positions, A/V offset, delayed and
 dropped frame counts, and clock reset count are available from
 `player.Diagnostics.Synchronization`. Reconnects create a fresh synchronizer.
 
+HTTP/HTTPS file playback waits for three seconds of video packets before
+starting by default. If the packet queue runs dry, playback waits for two seconds
+of packets before resuming. Configure `Network.InitialBufferDuration` and
+`Network.RebufferDuration` to tune these thresholds from zero (no wait) to
+30 seconds. These settings do not affect HLS or RTSP. Seeking starts a new buffer.
+Short files and full queues resume with the available packets, so playback does
+not wait indefinitely for the target duration. These thresholds absorb short network stalls; sustained
+download speed still needs to meet the media bitrate.
+
+During HTTP file buffering, `IMediaPlayer.State` becomes
+`MediaPlaybackState.Buffering` and `StateChanged` fires. It returns to `Playing`
+when packets are available. WPF and Avalonia `MediaView.State` expose the same
+state for a loading indicator; `PlaybackStateChanged` can also be handled in code.
+
+For example, an Avalonia view can show an indeterminate progress indicator while
+the video is waiting for packets:
+
+```csharp
+mediaView.PlaybackStateChanged += (_, args) =>
+    loadingIndicator.IsVisible = args.NewState == MediaPlaybackState.Buffering;
+loadingIndicator.IsVisible = mediaView.State == MediaPlaybackState.Buffering;
+```
+
+`MediaView` raises this event on the UI thread. In WPF, use the same event and
+set the indicator's `Visibility` to `Visible` or `Collapsed`.
+
+```csharp
+var options = new MediaOpenOptions
+{
+    Network = new MediaNetworkOptions
+    {
+        InitialBufferDuration = TimeSpan.FromSeconds(5),
+        RebufferDuration = TimeSpan.FromSeconds(3)
+    }
+};
+```
+
 HTTP Live Streaming (`.m3u8`) is treated as a live source. The FFmpeg backend
 prefetches packets and enforces a minimum audio buffer for HLS so short network
 jitter does not immediately underrun the output. Inspect
