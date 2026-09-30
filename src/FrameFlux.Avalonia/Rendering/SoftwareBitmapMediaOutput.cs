@@ -104,27 +104,33 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
                 Source = _bitmap;
             }
 
-            using var framebuffer = _bitmap.Lock();
-            var rowBytes = Math.Min(
-                checked(frame.Width * 4),
-                Math.Min(source.Plane0Stride, framebuffer.RowBytes));
-            var requiredSourceBytes =
-                checked((long)source.Plane0Stride * (frame.Height - 1) + rowBytes);
-            if (source.Size < requiredSourceBytes)
+            using (var framebuffer = _bitmap.Lock())
             {
-                return;
+                var rowBytes = Math.Min(
+                    checked(frame.Width * 4),
+                    Math.Min(source.Plane0Stride, framebuffer.RowBytes));
+                var requiredSourceBytes =
+                    checked((long)source.Plane0Stride * (frame.Height - 1) + rowBytes);
+                if (source.Size < requiredSourceBytes)
+                {
+                    return;
+                }
+
+                for (var row = 0; row < frame.Height; row++)
+                {
+                    var sourceRow = new ReadOnlySpan<byte>(
+                        (byte*)source.Plane0 + row * source.Plane0Stride,
+                        rowBytes);
+                    var destinationRow = new Span<byte>(
+                        (byte*)framebuffer.Address + row * framebuffer.RowBytes,
+                        rowBytes);
+                    sourceRow.CopyTo(destinationRow);
+                }
             }
 
-            for (var row = 0; row < frame.Height; row++)
-            {
-                var sourceRow = new ReadOnlySpan<byte>(
-                    (byte*)source.Plane0 + row * source.Plane0Stride,
-                    rowBytes);
-                var destinationRow = new Span<byte>(
-                    (byte*)framebuffer.Address + row * framebuffer.RowBytes,
-                    rowBytes);
-                sourceRow.CopyTo(destinationRow);
-            }
+            // Updating pixels keeps Source unchanged, so Image does not invalidate
+            // itself. Unlock first, then schedule a redraw for this video frame.
+            InvalidateVisual();
 
             FramePresented?.Invoke(this, EventArgs.Empty);
         }
