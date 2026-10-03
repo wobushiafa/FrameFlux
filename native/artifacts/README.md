@@ -30,7 +30,7 @@ native/artifacts/runtimes/
     libswscale_neon.so
 ```
 
-The same pattern applies to `linux-arm64`, `osx-x64`, `osx-arm64`, `android-x64`, and `android-x86`. All files in one runtime directory must use the same architecture and come from the same FFmpeg build.
+The same pattern applies to `linux-arm64`, `osx-x64`, `osx-arm64`, and `android-x64`. All files in one runtime directory must use the same architecture and come from the same FFmpeg build. The FFmpeg 9 Android test package contains arm64 and x64 libraries; its 32-bit build outputs do not meet the 16 KB page alignment requirement.
 
 Demo projects set `FrameFluxCopyNativeAssets=true`, so the current host RID is copied automatically. Other local projects can opt in or set the RID explicitly:
 
@@ -39,4 +39,3 @@ dotnet build -p:FrameFluxCopyNativeAssets=true -p:FrameFluxNativeRuntimeIdentifi
 ```
 
 Android `.so` files are packaged into the APK under the matching ABI directory. The Android target maps `android-arm`, `android-arm64`, `android-x86`, and `android-x64` to `lib/armeabi-v7a`, `lib/arm64-v8a`, `lib/x86`, and `lib/x86_64`.
-

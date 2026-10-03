@@ -661,8 +661,8 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
     {
         try
         {
-            var avutilNames = new[] { "avutil-60", "avutil-59", "avutil-58", "avutil-57", "avutil", "libavutil.so.60", "libavutil.so.59", "libavutil.so", "libavutil_neon.so" };
-            var avcodecNames = new[] { "avcodec-62", "avcodec-61", "avcodec-60", "avcodec-59", "avcodec", "libavcodec.so.62", "libavcodec.so.61", "libavcodec.so", "libavcodec_neon.so" };
+            var avutilNames = new[] { "avutil-61", "avutil-60", "avutil-59", "avutil-58", "avutil-57", "avutil", "libavutil.so.61", "libavutil.so.60", "libavutil.so.59", "libavutil.so", "libavutil_neon.so" };
+            var avcodecNames = new[] { "avcodec-63", "avcodec-62", "avcodec-61", "avcodec-60", "avcodec-59", "avcodec", "libavcodec.so.63", "libavcodec.so.62", "libavcodec.so.61", "libavcodec.so", "libavcodec_neon.so" };
 
             var searchDirs = new List<string>
             {

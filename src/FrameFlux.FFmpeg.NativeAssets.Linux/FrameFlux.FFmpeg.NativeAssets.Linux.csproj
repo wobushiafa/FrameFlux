@@ -8,8 +8,13 @@
     <PackageId>FrameFlux.FFmpeg.NativeAssets.Linux</PackageId>
     <Description>Linux native FFmpeg runtime assets for FrameFlux.</Description>
     <PackageTags>media;ffmpeg;native;linux;linux-x64</PackageTags>
+    <PackageLicenseExpression></PackageLicenseExpression>
+    <PackageLicenseFile>FFMPEG-LICENSE.txt</PackageLicenseFile>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="..\..\native\licenses\FFMPEG-LICENSE.txt" Pack="true" PackagePath="\" />
+    <None Include="..\..\native\licenses\FFMPEG-SOURCE.txt" Pack="true" PackagePath="\" />
+    <None Include="..\..\native\licenses\FFMPEG-KIT-NEXT-LOCAL.patch" Pack="true" PackagePath="\" />
     <None Include="..\..\native\artifacts\runtimes\linux-x64\native\*"
           Pack="true"
           PackagePath="runtimes\linux-x64\native" />

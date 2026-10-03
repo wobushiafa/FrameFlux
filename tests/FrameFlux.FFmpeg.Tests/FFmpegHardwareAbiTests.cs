@@ -8,6 +8,7 @@ public sealed class FFmpegHardwareAbiTests
     [Theory]
     [InlineData(61)]
     [InlineData(62)]
+    [InlineData(63)]
     public void ConfigureHardwareDecoderCodecContext_WritesValidatedOffsets(
         int codecMajorVersion)
     {
@@ -61,6 +62,7 @@ public sealed class FFmpegHardwareAbiTests
     [Theory]
     [InlineData(61)]
     [InlineData(62)]
+    [InlineData(63)]
     public void ReadFrameFormat_ReadsValidatedFormatField(int codecMajorVersion)
     {
         var frame = Marshal.AllocHGlobal(440);

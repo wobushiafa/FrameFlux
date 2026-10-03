@@ -87,7 +87,7 @@ internal sealed class FFmpegHardwareDecoderContext : IHardwareDecoderContext
         context = null;
         if (!FFmpegAbi.SupportsHardwareDecoderLayout(api.CodecMajorVersion))
         {
-            error = $"{backend.DisplayName} ABI is validated for FFmpeg 7 and 8 x64; " +
+            error = $"{backend.DisplayName} ABI is validated for FFmpeg 7, 8 and 9 x64; " +
                 $"found avcodec {api.CodecMajorVersion}";
             return false;
         }

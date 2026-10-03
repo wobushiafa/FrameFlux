@@ -184,8 +184,9 @@ internal sealed class FFmpegApi
             60 => (Format: 60, Util: 58, Scale: 7, Resample: 4, Filter: 9, Release: 6),
             61 => (Format: 61, Util: 59, Scale: 8, Resample: 5, Filter: 10, Release: 7),
             62 => (Format: 62, Util: 60, Scale: 9, Resample: 6, Filter: 11, Release: 8),
+            63 => (Format: 63, Util: 61, Scale: 10, Resample: 7, Filter: 12, Release: 9),
             _ => throw new NotSupportedException(
-                $"This FrameFlux build supports FFmpeg avcodec major versions 60, 61 and 62; found {codecMajor}.")
+                $"This FrameFlux build supports FFmpeg avcodec major versions 60, 61, 62 and 63; found {codecMajor}.")
         };
 
         if (formatMajor == expected.Format &&

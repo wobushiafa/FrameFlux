@@ -79,6 +79,7 @@ public sealed class FFmpegDurationAbiTests
     [InlineData(60, 72)]
     [InlineData(61, 104)]
     [InlineData(62, 104)]
+    [InlineData(63, 104)]
     public void GetFormatDurationMicroseconds_ReadsVersionedPublicHeaderLayout(
         int formatMajorVersion,
         int durationOffset)

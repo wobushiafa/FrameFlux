@@ -142,8 +142,17 @@ more. Set an explicit value to override it, or `null` to disable limiting.
 Platform-specific native binaries are distributed separately in
 `FrameFlux.FFmpeg.NativeAssets.Windows`, `FrameFlux.FFmpeg.NativeAssets.Linux`,
 and `FrameFlux.FFmpeg.NativeAssets.Android`. The core package contains no
-native libraries. Applications may instead provide their own platform FFmpeg
-shared-library directory before creating a player:
+native libraries. On Linux, applications using the native assets package should
+register FFmpeg at process startup, before initializing UI or other media
+libraries. This loads the packaged FFmpeg components before a system library
+with the same SONAME can be loaded:
+
+```csharp
+FFmpegHelper.RegisterFFmpeg();
+```
+
+Applications may instead provide their own platform FFmpeg shared-library
+directory at process startup:
 
 ```csharp
 FFmpegHelper.RegisterFFmpeg(@"C:\ffmpeg\bin");

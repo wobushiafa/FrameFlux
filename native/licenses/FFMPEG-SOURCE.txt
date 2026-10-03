@@ -1,0 +1,8 @@
+FFmpeg 9.0.1 native libraries built with FFmpegKitNext 9.0.0.
+Build repository: https://github.com/arthenica/ffmpeg-kit-next
+Local build source commit: 5e51b2da4c3593c0f2f9b49f53eeb497d93e39d3
+FFmpeg source tag: n9.0.1 from https://github.com/arthenica/FFmpeg
+Linux build: prebuilt/bundle-linux/ffmpeg-kit-next; Android build: prebuilt/bundle-android-aar-24-maven.
+The Android builder has local changes recorded in FFMPEG-KIT-NEXT-LOCAL.patch. Apply with git apply --unidiff-zero.
+The included FFmpeg libraries are LGPLv3. FFmpegKitNext uses --enable-version3 and does not enable --enable-gpl by default.
+Corresponding source and build scripts must be made available with any public binary distribution.

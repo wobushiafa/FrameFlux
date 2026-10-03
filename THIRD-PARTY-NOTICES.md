@@ -26,6 +26,12 @@ Do not publish `FrameFlux.FFmpeg.NativeAssets.Windows` or `FrameFlux.FFmpeg.Nati
 
 The Android assets include FFmpeg-family shared libraries and `libc++_shared.so`. Their exact FFmpegKit or other build origin, upstream revisions, patches, configure flags, NDK version, and applicable licenses must be recorded before redistribution.
 
-The current Android binaries also use 4 KB ELF LOAD alignment. They must be replaced with 16 KB page-aligned builds before the Android native asset package is published.
+The older Android 32-bit binaries use 4 KB ELF LOAD alignment. They are excluded from the FFmpeg 9 local package candidate and require aligned replacements before 32-bit distribution.
+
+## FFmpeg 9 local package candidates
+
+The Linux x64 and Android arm64/x64 native package candidates use FFmpeg 9.0.1 built by FFmpegKitNext 9.0.0 from source commit `5e51b2da4c3593c0f2f9b49f53eeb497d93e39d3`. The FFmpeg source tag is `n9.0.1`. The Linux binary reports `--enable-version3`, no `--enable-gpl`, and `LGPL version 3 or later`. The package candidates include the LGPL text and a source provenance note under `native/licenses`.
+
+These locally packed files are not approved for public distribution yet. The source note identifies upstream sources but does not itself provide the corresponding source, patches, and build instructions required for redistribution. The Linux binary also requires glibc 2.43, so it is unsuitable for a general `linux-x64` release. The Android package candidate includes only arm64 and x64: the 32-bit FFmpeg 9 outputs have 4 KB ELF LOAD alignment.
 
 This notice is an engineering inventory. It does not by itself satisfy any third-party license obligation and is not legal advice.

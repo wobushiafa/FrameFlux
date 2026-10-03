@@ -94,7 +94,7 @@ internal static class FFmpegDurationAbi
         {
             60 => Marshal.PtrToStructure<FFmpeg6FormatContextPrefix>(
                 formatContext).Duration,
-            61 or 62 => Marshal.PtrToStructure<FFmpeg7FormatContextPrefix>(
+            61 or 62 or 63 => Marshal.PtrToStructure<FFmpeg7FormatContextPrefix>(
                 formatContext).Duration,
             _ => long.MinValue
         };

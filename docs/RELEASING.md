@@ -8,6 +8,8 @@ All FrameFlux packages must declare the approved MIT license through `PackageLic
 
 Do not publish any `FrameFlux.FFmpeg.NativeAssets.*` package until the relevant provenance, license texts, build configuration, and source obligations in `THIRD-PARTY-NOTICES.md` are resolved. Android assets additionally require verified 16 KB ELF LOAD alignment.
 
+The FFmpeg 9 Linux and Android candidates can be packed for local integration testing. Before publishing them, provide corresponding source and complete build records, rebuild Linux against the intended minimum glibc version, and validate playback on the supported Android devices. The current Android candidate package supports arm64 and x64 only.
+
 ## Managed package set
 
 The supported managed package set is explicitly listed in `eng/pack-managed.ps1`. Example applications are not packable and must never appear in release output.

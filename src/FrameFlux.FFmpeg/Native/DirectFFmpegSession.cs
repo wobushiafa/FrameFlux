@@ -1188,7 +1188,7 @@ internal static class FFmpegAbi
     }
 
     internal static bool SupportsHardwareDecoderLayout(int codecMajorVersion) =>
-        IntPtr.Size == 8 && codecMajorVersion is 61 or 62;
+        IntPtr.Size == 8 && codecMajorVersion is 61 or 62 or 63;
 
     internal static int ReadFrameFormat(IntPtr frame, int codecMajorVersion)
     {
@@ -1219,11 +1219,11 @@ internal static class FFmpegAbi
         if (!SupportsHardwareDecoderLayout(codecMajorVersion))
         {
             throw new NotSupportedException(
-                $"The hardware decoder ABI is only validated for FFmpeg 7 and 8 x64; " +
+                $"The hardware decoder ABI is only validated for FFmpeg 7, 8 and 9 x64; " +
                 $"found avcodec {codecMajorVersion}.");
         }
 
-        // Generated from the matching FFmpeg 7/8 public headers with offsetof.
+        // Verified against FFmpeg 9.0.1 public headers with offsetof.
         return new HardwareDecoderAbiLayout(
             GetFormatOffset: 192,
             HardwareDeviceContextOffset: 560,

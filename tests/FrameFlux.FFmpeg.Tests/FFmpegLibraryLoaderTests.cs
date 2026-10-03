@@ -340,6 +340,7 @@ public sealed class FFmpegLibraryLoaderTests
     [InlineData(60, 60, 58, 7, 4, 9)]
     [InlineData(61, 61, 59, 8, 5, 10)]
     [InlineData(62, 62, 60, 9, 6, 11)]
+    [InlineData(63, 63, 61, 10, 7, 12)]
     public void VersionValidation_AcceptsCompleteSupportedFamilies(
         int codec,
         int format,
@@ -381,7 +382,7 @@ public sealed class FFmpegLibraryLoaderTests
     public void VersionValidation_RejectsUnsupportedCodecMajor()
     {
         Assert.Throws<NotSupportedException>(
-            () => FFmpegApi.ValidateVersionFamily(63, 63, 61, 10, 7, 12));
+            () => FFmpegApi.ValidateVersionFamily(64, 64, 62, 11, 8, 13));
     }
 
     private static NativeAudioFrame CreateAudioFrame(short[] samples)

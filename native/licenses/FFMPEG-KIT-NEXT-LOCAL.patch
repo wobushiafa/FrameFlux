@@ -1,0 +1,14 @@
+diff --git a/android.sh b/android.sh
+index a00e5c2..5b280ea 100755
+--- a/android.sh
++++ b/android.sh
+@@ -350 +350 @@ if [[ -n ${ANDROID_ARCHITECTURES} ]]; then
+-    export JAVA_TOOL_OPTIONS="''${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Duser.language=en -Duser.country=US"
++    export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Duser.language=en -Duser.country=US"
+diff --git a/scripts/android/cpu-features.sh b/scripts/android/cpu-features.sh
+index 341405b..1345047 100755
+--- a/scripts/android/cpu-features.sh
++++ b/scripts/android/cpu-features.sh
+@@ -3 +3 @@
+-$(android_ndk_cmake) || return 1
++$(android_ndk_cmake) -DBUILD_TESTING=OFF || return 1

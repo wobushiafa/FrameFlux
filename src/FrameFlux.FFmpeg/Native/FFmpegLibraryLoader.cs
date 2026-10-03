@@ -241,6 +241,11 @@ internal static class FFmpegLibraryLoader
                 ["avcodec"] = 62, ["avformat"] = 62, ["avutil"] = 60,
                 ["swscale"] = 9, ["swresample"] = 6, ["avfilter"] = 11
             },
+            63 => new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                ["avcodec"] = 63, ["avformat"] = 63, ["avutil"] = 61,
+                ["swscale"] = 10, ["swresample"] = 7, ["avfilter"] = 12
+            },
             _ => throw new NotSupportedException(
                 $"The selected avcodec library has unsupported major version {codecMajor}.")
         };
