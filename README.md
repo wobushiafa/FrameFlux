@@ -49,7 +49,7 @@
 | `src/FrameFlux.Avalonia.Windows` | `FrameFlux.Avalonia.Windows` | Avalonia 在 Windows 下的 D3D11 合成后端。 |
 | `src/FrameFlux.Avalonia.Linux` | `FrameFlux.Avalonia.Linux` | Avalonia 在 Linux 下的 EGL / DMA-BUF 合成后端。 |
 | `src/FrameFlux.Avalonia.Android` | `FrameFlux.Avalonia.Android` | Avalonia 在 Android 下的 MediaCodec / OES 零拷贝后端。 |
-| `src/FrameFlux.FFmpeg.NativeAssets.*` | 平台 Native 运行库 | 包含 Windows x64、Linux x64、Android 架构编译好的 FFmpeg 动静态库。 |
+| `src/FrameFlux.FFmpeg.NativeAssets.*` | 平台 Native 运行库 | 包含 Windows x64、Linux x64/ARM64、Android 架构编译好的 FFmpeg 动静态库。 |
 
 ---
 

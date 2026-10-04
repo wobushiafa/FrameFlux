@@ -11,11 +11,19 @@ native/artifacts/runtimes/
     swresample-5.dll
     swscale-8.dll
   linux-x64/native/
-    libavcodec.so.62.30.100
-    libavformat.so.62.13.102
-    libavutil.so.60.30.100
-    libswresample.so.6.1.100
-    libswscale.so.9.7.100
+    libavcodec.so.63
+    libavfilter.so.12
+    libavformat.so.63
+    libavutil.so.61
+    libswresample.so.7
+    libswscale.so.10
+  linux-arm64/native/
+    libavcodec.so.63
+    libavfilter.so.12
+    libavformat.so.63
+    libavutil.so.61
+    libswresample.so.7
+    libswscale.so.10
   android-arm64/native/
     libavcodec.so
     libavformat.so
@@ -30,7 +38,7 @@ native/artifacts/runtimes/
     libswscale_neon.so
 ```
 
-The same pattern applies to `linux-arm64`, `osx-x64`, `osx-arm64`, and `android-x64`. All files in one runtime directory must use the same architecture and come from the same FFmpeg build. The FFmpeg 9 Android test package contains arm64 and x64 libraries; its 32-bit build outputs do not meet the 16 KB page alignment requirement.
+The same pattern applies to `osx-x64`, `osx-arm64`, and `android-x64`. All files in one runtime directory must use the same architecture and come from the same FFmpeg build. The FFmpeg 9 Android test package contains arm64 and x64 libraries; its 32-bit build outputs do not meet the 16 KB page alignment requirement.
 
 Demo projects set `FrameFluxCopyNativeAssets=true`, so the current host RID is copied automatically. Other local projects can opt in or set the RID explicitly:
 

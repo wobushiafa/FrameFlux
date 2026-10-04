@@ -9,6 +9,15 @@ Apply FFMPEG-KIT-NEXT-LINUX-VAAPI.patch to the FFmpegKitNext checkout, install
 libva and libdrm development headers plus nasm, and run:
 FFMPEG_KIT_SYSTEM_PKG_CONFIG_LIBDIR=/usr/lib/x86_64-linux-gnu/pkgconfig ./linux.sh --enable-lib-linux-vaapi
 Copy the six matching FFmpeg shared libraries from prebuilt/linux-x86_64/ffmpeg/lib.
+Linux ARM64 build: FFmpeg source tag n9.0.1 (commit bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa),
+cross-compiled with aarch64-linux-gnu GCC 15 and the Debian
+libc6-arm64-cross/libc6-dev-arm64-cross 2.36-8cross1 sysroot.
+Configuration: --target-os=linux --arch=aarch64 --enable-cross-compile
+--cross-prefix=aarch64-linux-gnu- --enable-shared --disable-static --enable-version3
+--disable-programs --disable-doc --disable-debug --disable-autodetect.
+Build with make, then use the six versioned FFmpeg shared libraries from the build.
+This ARM64 build uses FFmpeg's software decoders and has no VAAPI or platform-specific
+hardware acceleration enabled.
 The Android builder has local changes recorded in FFMPEG-KIT-NEXT-LOCAL.patch. Apply with git apply --unidiff-zero.
 The included FFmpeg libraries are LGPLv3. FFmpegKitNext uses --enable-version3 and does not enable --enable-gpl by default.
 Corresponding source and build scripts must be made available with any public binary distribution.
