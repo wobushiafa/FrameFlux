@@ -34,7 +34,8 @@ public sealed partial class MainView : UserControl
             {
                 LatencyMode = MediaLatencyMode.Default,
                 Transport = MediaTransport.Tcp,
-                ReadTimeout = TimeSpan.FromSeconds(20)
+                ReadTimeout = TimeSpan.FromSeconds(20),
+                InitialBufferDuration=TimeSpan.FromSeconds(3)
             },
             Video = new MediaVideoOptions
             {
@@ -43,7 +44,7 @@ public sealed partial class MainView : UserControl
             Audio = new MediaAudioOptions
             {
                 GainDecibels = 0d,
-                BufferDuration = TimeSpan.FromMilliseconds(800)
+                BufferDuration = TimeSpan.FromMilliseconds(500)
             }
         };
         Player.OpenOptions = options;
