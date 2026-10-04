@@ -426,7 +426,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
             layout.Format,
             destinationWidth,
             destinationHeight,
-            FFmpegAbi.PixelFormatBgra,
+            _api.PixelFormatBgra,
             flags,
             IntPtr.Zero,
             IntPtr.Zero,
@@ -1061,8 +1061,6 @@ internal sealed class DirectVideoPacket(FFmpegApi api, IntPtr pointer) : IDispos
 
 internal static class FFmpegAbi
 {
-    internal const int PixelFormatBgra = 28;
-
     internal static IntPtr GetStream(IntPtr formatContext, int index)
     {
         if (formatContext == IntPtr.Zero || index < 0)
@@ -1270,15 +1268,18 @@ internal static class FFmpegAbi
         int HardwareDeviceContextOffset,
         int FrameFormatOffset);
 
-    internal static NativePixelFormat MapPixelFormat(int pixelFormat) => pixelFormat switch
+    internal static NativePixelFormat MapPixelFormat(int pixelFormat)
     {
-        0 => NativePixelFormat.Yuv420P,
-        23 => NativePixelFormat.Nv12,
-        24 => NativePixelFormat.Nv21,
-        26 => NativePixelFormat.Rgba32,
-        PixelFormatBgra => NativePixelFormat.Bgra32,
-        _ => NativePixelFormat.Unknown
-    };
+        if (pixelFormat < 0) return NativePixelFormat.Unknown;
+
+        var api = FFmpegApi.Instance;
+        if (pixelFormat == api.PixelFormatYuv420P) return NativePixelFormat.Yuv420P;
+        if (pixelFormat == api.PixelFormatNv12) return NativePixelFormat.Nv12;
+        if (pixelFormat == api.PixelFormatNv21) return NativePixelFormat.Nv21;
+        if (pixelFormat == api.PixelFormatRgba) return NativePixelFormat.Rgba32;
+        if (pixelFormat == api.PixelFormatBgra) return NativePixelFormat.Bgra32;
+        return NativePixelFormat.Unknown;
+    }
 
     private static int GetCodecParametersWidthOffset(int codecMajorVersion)
     {

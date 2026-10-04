@@ -25,6 +25,7 @@ internal sealed class FFmpegApi
         AvFindBestStream = Load<FindBestStreamDelegate>("avformat", "av_find_best_stream");
         AvCodecFindDecoder = Load<FindDecoderDelegate>("avcodec", "avcodec_find_decoder");
         AvCodecGetName = Load<GetCodecNameDelegate>("avcodec", "avcodec_get_name");
+        AvGetPixelFormat = Load<GetPixelFormatDelegate>("avutil", "av_get_pix_fmt");
         AvReadFrame = Load<ReadFrameDelegate>("avformat", "av_read_frame");
         AvSeekFrame = Load<SeekFrameDelegate>("avformat", "av_seek_frame");
         AvFormatCloseInput = Load<FormatCloseInputDelegate>("avformat", "avformat_close_input");
@@ -88,6 +89,16 @@ internal sealed class FFmpegApi
             ResampleMajorVersion,
             FilterMajorVersion);
 
+        PixelFormatYuv420P = AvGetPixelFormat("yuv420p");
+        PixelFormatNv12 = AvGetPixelFormat("nv12");
+        PixelFormatNv21 = AvGetPixelFormat("nv21");
+        PixelFormatRgba = AvGetPixelFormat("rgba");
+        PixelFormatBgra = AvGetPixelFormat("bgra");
+        if (PixelFormatBgra < 0)
+        {
+            throw new NotSupportedException("The loaded FFmpeg build does not support the bgra pixel format.");
+        }
+
         _ = AvFormatNetworkInit();
     }
 
@@ -114,6 +125,12 @@ internal sealed class FFmpegApi
     internal FindBestStreamDelegate AvFindBestStream { get; }
     internal FindDecoderDelegate AvCodecFindDecoder { get; }
     internal GetCodecNameDelegate AvCodecGetName { get; }
+    internal GetPixelFormatDelegate AvGetPixelFormat { get; }
+    internal int PixelFormatYuv420P { get; }
+    internal int PixelFormatNv12 { get; }
+    internal int PixelFormatNv21 { get; }
+    internal int PixelFormatRgba { get; }
+    internal int PixelFormatBgra { get; }
     internal ReadFrameDelegate AvReadFrame { get; }
     internal SeekFrameDelegate AvSeekFrame { get; }
     internal FormatCloseInputDelegate AvFormatCloseInput { get; }
@@ -221,6 +238,7 @@ internal sealed class FFmpegApi
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FindBestStreamDelegate(IntPtr context, int mediaType, int wantedStream, int relatedStream, out IntPtr decoder, int flags);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr FindDecoderDelegate(int codecId);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr GetCodecNameDelegate(int codecId);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int GetPixelFormatDelegate([MarshalAs(UnmanagedType.LPUTF8Str)] string name);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int ReadFrameDelegate(IntPtr context, IntPtr packet);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int SeekFrameDelegate(IntPtr context, int streamIndex, long timestamp, int flags);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void FormatCloseInputDelegate(ref IntPtr context);
