@@ -73,6 +73,28 @@ public sealed class HttpVodIntegrationTests
                 position >= TimeSpan.FromSeconds(1) && position <= TimeSpan.FromSeconds(4),
                 TimeSpan.FromSeconds(10)));
             await player.StopAsync();
+
+            using var packetReader = new NativeFfmpegPacketReader(
+                server.Url,
+                new FfmpegPlaybackOptions { EnableAudio = false },
+                CancellationToken.None);
+            Assert.InRange(packetReader.Duration!.Value.TotalSeconds, 11.5d, 12.5d);
+            packetReader.Seek(TimeSpan.FromSeconds(9));
+            Assert.True(packetReader.TryReadPacket(out var packetAfterSeek));
+            using (packetAfterSeek)
+            {
+                var seconds = packetAfterSeek!.Info.PresentationTimestamp *
+                    (double)packetReader.TimeBaseNumerator / packetReader.TimeBaseDenominator;
+                Assert.InRange(seconds, 8d, 10d);
+            }
+            packetReader.Seek(TimeSpan.FromSeconds(2));
+            Assert.True(packetReader.TryReadPacket(out var packetAfterBackwardSeek));
+            using (packetAfterBackwardSeek)
+            {
+                var seconds = packetAfterBackwardSeek!.Info.PresentationTimestamp *
+                    (double)packetReader.TimeBaseNumerator / packetReader.TimeBaseDenominator;
+                Assert.InRange(seconds, 1d, 3d);
+            }
         }
         finally
         {

@@ -259,13 +259,11 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                         continue;
                     }
 
-                    platformDecoder = _isLive
-                        ? PlatformVideoDecoderRegistry.TryCreate(
-                            _url,
-                            _options,
-                            _videoOutput,
-                            cancellationToken)
-                        : null;
+                    platformDecoder = PlatformVideoDecoderRegistry.TryCreate(
+                        _url,
+                        _options,
+                        _videoOutput,
+                        cancellationToken);
                     if (platformDecoder is null)
                     {
                         decoder = new FfmpegDecoder(_url, _options, cancellationToken,
@@ -284,6 +282,11 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                     {
                         Interlocked.Exchange(ref _durationTicks, decoder.Duration?.Ticks ?? -1);
                         _ = ProcessPendingSeek(decoder);
+                    }
+                    else if (platformDecoder is ISeekablePlatformVideoDecoder seekableDecoder)
+                    {
+                        Interlocked.Exchange(ref _durationTicks, seekableDecoder.Duration?.Ticks ?? -1);
+                        _ = ProcessPendingSeek(seekableDecoder);
                     }
                     if ((platformDecoder?.HasAudio ?? decoder!.HasAudio) && _options.EnableAudio)
                     {
@@ -431,6 +434,25 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
         {
             return false;
         }
+
+        try
+        {
+            decoder.Seek(request.Position);
+            Interlocked.Exchange(ref _positionTicks, request.Position.Ticks);
+            request.Completion.TrySetResult(null);
+        }
+        catch (Exception exception)
+        {
+            request.Completion.TrySetException(exception);
+        }
+
+        return true;
+    }
+
+    private bool ProcessPendingSeek(ISeekablePlatformVideoDecoder decoder)
+    {
+        var request = Interlocked.Exchange(ref _pendingSeek, null);
+        if (request is null) return false;
 
         try
         {

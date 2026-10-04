@@ -135,6 +135,34 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
                 return Fail(result, "av_find_best_stream");
             }
 
+            // Prefer a playable motion-video track if FFmpeg selected cover art.
+            var selectedStream = FFmpegAbi.GetStream(_formatContext, result);
+            var selectedParameters = FFmpegAbi.GetCodecParameters(selectedStream);
+            if (selectedParameters != IntPtr.Zero &&
+                Marshal.PtrToStringUTF8(_api.AvCodecGetName(
+                    Marshal.ReadInt32(selectedParameters, sizeof(int)))) is not ("h264" or "hevc"))
+            {
+                for (var index = 0; index < 64; index++)
+                {
+                    var candidateStream = FFmpegAbi.GetStream(_formatContext, index);
+                    if (candidateStream == IntPtr.Zero) break;
+                    var candidateParameters = FFmpegAbi.GetCodecParameters(candidateStream);
+                    if (candidateParameters == IntPtr.Zero ||
+                        Marshal.PtrToStringUTF8(_api.AvCodecGetName(
+                            Marshal.ReadInt32(candidateParameters, sizeof(int)))) is not ("h264" or "hevc"))
+                    {
+                        continue;
+                    }
+
+                    var candidateDecoder = _api.AvCodecFindDecoder(
+                        Marshal.ReadInt32(candidateParameters, sizeof(int)));
+                    if (candidateDecoder == IntPtr.Zero && !_packetReader) continue;
+                    result = index;
+                    decoder = candidateDecoder;
+                    break;
+                }
+            }
+
             _videoStreamIndex = result;
             _stream = FFmpegAbi.GetStream(_formatContext, _videoStreamIndex);
             _codecParameters = FFmpegAbi.GetCodecParameters(_stream);
@@ -194,7 +222,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
 
     internal int Seek(long timestamp)
     {
-        if (_packetReader || _formatContext == IntPtr.Zero || _codecContext == IntPtr.Zero)
+        if (_formatContext == IntPtr.Zero || (!_packetReader && _codecContext == IntPtr.Zero))
         {
             Error = "This FFmpeg session does not support seeking.";
             return -1;
@@ -210,12 +238,18 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
             return Fail(result, "av_seek_frame");
         }
 
-        _api.AvCodecFlushBuffers(_codecContext);
+        if (_codecContext != IntPtr.Zero)
+        {
+            _api.AvCodecFlushBuffers(_codecContext);
+        }
         if (_audioCodecContext != IntPtr.Zero)
         {
             _api.AvCodecFlushBuffers(_audioCodecContext);
         }
-        _api.AvFrameUnref(_decodeFrame);
+        if (_decodeFrame != IntPtr.Zero)
+        {
+            _api.AvFrameUnref(_decodeFrame);
+        }
         if (_audioDecodeFrame != IntPtr.Zero)
         {
             _api.AvFrameUnref(_audioDecodeFrame);
@@ -1081,10 +1115,11 @@ internal static class FFmpegAbi
         {
             Width = Marshal.ReadInt32(codecParameters, widthOffset),
             Height = Marshal.ReadInt32(codecParameters, widthOffset + sizeof(int)),
-            Codec = Marshal.ReadInt32(codecParameters, sizeof(int)) switch
+            Codec = Marshal.PtrToStringUTF8(FFmpegApi.Instance.AvCodecGetName(
+                Marshal.ReadInt32(codecParameters, sizeof(int)))) switch
             {
-                27 => NativeVideoCodec.H264,
-                173 => NativeVideoCodec.Hevc,
+                "h264" => NativeVideoCodec.H264,
+                "hevc" => NativeVideoCodec.Hevc,
                 _ => NativeVideoCodec.Unknown
             },
             CodecExtraData = extraData,

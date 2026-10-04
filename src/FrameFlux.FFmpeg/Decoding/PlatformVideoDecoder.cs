@@ -28,6 +28,13 @@ internal interface IPlatformVideoDecoder : IDisposable
     bool TryDequeueAudioFrame(out NativeAudioFrame? frame);
 }
 
+internal interface ISeekablePlatformVideoDecoder : IPlatformVideoDecoder
+{
+    TimeSpan? Duration { get; }
+
+    void Seek(TimeSpan position);
+}
+
 internal interface IPlatformDecodedVideoFrame : IDisposable
 {
     int Width { get; }

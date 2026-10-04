@@ -27,6 +27,7 @@ internal sealed class NativeEncodedPacket : IDisposable
 internal sealed class NativeFfmpegPacketReader : IDisposable
 {
     private readonly NativeFfmpegSessionHandle _session;
+    private readonly NativeStreamInfo _streamInfo;
     private readonly CancellationTokenRegistration _cancellationRegistration;
     private bool _disposed;
 
@@ -76,6 +77,8 @@ internal sealed class NativeFfmpegPacketReader : IDisposable
             throw new ApplicationException("The native media packet reader returned invalid stream information.");
         }
 
+        _streamInfo = streamInfo;
+
         Width = streamInfo.Width;
         Height = streamInfo.Height;
         Codec = streamInfo.Codec;
@@ -107,6 +110,22 @@ internal sealed class NativeFfmpegPacketReader : IDisposable
     internal int TimeBaseDenominator { get; }
 
     internal bool HasAudio => FrameFluxFFmpegNative.HasAudio(_session);
+
+    internal TimeSpan? Duration => _streamInfo.DurationTimestamp > 0 &&
+        _streamInfo.TimeBaseDenominator > 0
+            ? TimeSpan.FromSeconds(_streamInfo.DurationTimestamp *
+                (double)_streamInfo.TimeBaseNumerator / _streamInfo.TimeBaseDenominator)
+            : null;
+
+    internal void Seek(TimeSpan position)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var timestamp = FfmpegDecoder.GetSeekTimestamp(position, _streamInfo);
+        if (FrameFluxFFmpegNative.Seek(_session, timestamp) < 0)
+        {
+            throw new ApplicationException(FrameFluxFFmpegNative.GetError(_session));
+        }
+    }
 
     internal bool TryDequeueAudioFrame(out NativeAudioFrame? frame) =>
         FrameFluxFFmpegNative.TryDequeueAudioFrame(_session, out frame);

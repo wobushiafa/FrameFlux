@@ -23,6 +23,8 @@ internal sealed class FFmpegApi
         AvFormatOpenInput = Load<FormatOpenInputDelegate>("avformat", "avformat_open_input");
         AvFormatFindStreamInfo = Load<FormatFindStreamInfoDelegate>("avformat", "avformat_find_stream_info");
         AvFindBestStream = Load<FindBestStreamDelegate>("avformat", "av_find_best_stream");
+        AvCodecFindDecoder = Load<FindDecoderDelegate>("avcodec", "avcodec_find_decoder");
+        AvCodecGetName = Load<GetCodecNameDelegate>("avcodec", "avcodec_get_name");
         AvReadFrame = Load<ReadFrameDelegate>("avformat", "av_read_frame");
         AvSeekFrame = Load<SeekFrameDelegate>("avformat", "av_seek_frame");
         AvFormatCloseInput = Load<FormatCloseInputDelegate>("avformat", "avformat_close_input");
@@ -110,6 +112,8 @@ internal sealed class FFmpegApi
     internal FormatOpenInputDelegate AvFormatOpenInput { get; }
     internal FormatFindStreamInfoDelegate AvFormatFindStreamInfo { get; }
     internal FindBestStreamDelegate AvFindBestStream { get; }
+    internal FindDecoderDelegate AvCodecFindDecoder { get; }
+    internal GetCodecNameDelegate AvCodecGetName { get; }
     internal ReadFrameDelegate AvReadFrame { get; }
     internal SeekFrameDelegate AvSeekFrame { get; }
     internal FormatCloseInputDelegate AvFormatCloseInput { get; }
@@ -215,6 +219,8 @@ internal sealed class FFmpegApi
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FormatOpenInputDelegate(ref IntPtr context, IntPtr url, IntPtr format, ref IntPtr options);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FormatFindStreamInfoDelegate(IntPtr context, IntPtr options);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int FindBestStreamDelegate(IntPtr context, int mediaType, int wantedStream, int relatedStream, out IntPtr decoder, int flags);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr FindDecoderDelegate(int codecId);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr GetCodecNameDelegate(int codecId);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int ReadFrameDelegate(IntPtr context, IntPtr packet);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int SeekFrameDelegate(IntPtr context, int streamIndex, long timestamp, int flags);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void FormatCloseInputDelegate(ref IntPtr context);

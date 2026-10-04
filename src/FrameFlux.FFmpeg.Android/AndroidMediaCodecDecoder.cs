@@ -44,7 +44,7 @@ internal sealed class AndroidMediaCodecDecoderFactory : IPlatformVideoDecoderFac
     }
 }
 
-internal sealed class AndroidMediaCodecDecoder : IPlatformVideoDecoder
+internal sealed class AndroidMediaCodecDecoder : ISeekablePlatformVideoDecoder
 {
     private const int OutputFormatChanged = -2;
     private const long CodecTimeoutMicroseconds = 10_000;
@@ -122,6 +122,16 @@ internal sealed class AndroidMediaCodecDecoder : IPlatformVideoDecoder
     }
 
     public bool HasAudio => _reader.HasAudio;
+
+    public TimeSpan? Duration => _reader.Duration;
+
+    public void Seek(TimeSpan position)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _reader.Seek(position);
+        _codec.Flush();
+        _nextFallbackTimestampMicroseconds = (long)(position.TotalSeconds * 1_000_000);
+    }
 
     public bool IsHardwareVideoDecodingActive => true;
 

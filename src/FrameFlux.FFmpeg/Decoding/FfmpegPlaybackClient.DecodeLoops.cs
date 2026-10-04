@@ -23,8 +23,29 @@ internal sealed partial class FfmpegPlaybackClient
         var lastFrameAt = 0L;
         while (_isRunning && !threadCancellationTokenSource.IsCancellationRequested)
         {
+            if (!_isLive && !_playbackGate.IsSet)
+            {
+                if (platformDecoder is ISeekablePlatformVideoDecoder pausedDecoder &&
+                    ProcessPendingSeek(pausedDecoder))
+                {
+                    _playbackSynchronizer.ResetPlaybackClock(Position.TotalSeconds);
+                    audioPlayback?.Reset();
+                }
+
+                _playbackGate.Wait(TimeSpan.FromMilliseconds(25), cancellationToken);
+                continue;
+            }
+
             var decodeStart = Stopwatch.GetTimestamp();
             var hasFrame = platformDecoder.TryDecodeNextFrame(out var frame);
+            if (platformDecoder is ISeekablePlatformVideoDecoder seekableDecoder &&
+                ProcessPendingSeek(seekableDecoder))
+            {
+                _playbackSynchronizer.ResetPlaybackClock(Position.TotalSeconds);
+                audioPlayback?.Reset();
+                frame?.Dispose();
+                continue;
+            }
             _playbackSynchronizer.DrainAudio(
                 platformDecoder,
                 audioPlayback,
@@ -33,6 +54,19 @@ internal sealed partial class FfmpegPlaybackClient
             if (hasFrame && frame is not null)
             {
                 RegisterReconnectSuccess();
+                if (_isHttpMedia)
+                {
+                    Volatile.Write(ref _isBuffering, 0);
+                    if (_connectionState == PlaybackConnectionState.Buffering)
+                    {
+                        RaiseConnectionStateChanged(PlaybackConnectionState.Connected);
+                    }
+                }
+                if (!_isLive && frame.PresentationSeconds is { } presentationSeconds)
+                {
+                    Interlocked.Exchange(ref _positionTicks,
+                        TimeSpan.FromSeconds(Math.Max(0, presentationSeconds)).Ticks);
+                }
                 using (frame)
                 {
                     if (!_playbackSynchronizer.SynchronizeVideo(
@@ -66,6 +100,23 @@ internal sealed partial class FfmpegPlaybackClient
             if (!_isRunning || threadCancellationTokenSource.IsCancellationRequested)
             {
                 return DecodeLoopOutcome.Terminate;
+            }
+
+            if (!_isLive)
+            {
+                while (_isRunning &&
+                       !threadCancellationTokenSource.IsCancellationRequested &&
+                       Volatile.Read(ref _pendingSeek) is null)
+                {
+                    cancellationToken.WaitHandle.WaitOne(25);
+                }
+
+                if (platformDecoder is ISeekablePlatformVideoDecoder endedDecoder &&
+                    ProcessPendingSeek(endedDecoder))
+                {
+                    _playbackSynchronizer.ResetSession();
+                }
+                continue;
             }
 
             var reconnect = RegisterReconnectFailure();
