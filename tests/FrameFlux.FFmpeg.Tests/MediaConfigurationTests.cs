@@ -176,6 +176,21 @@ public sealed class MediaConfigurationTests
                 isHls));
     }
 
+    [Theory]
+    [InlineData(100, 500)]
+    [InlineData(750, 750)]
+    public void HttpAudioBufferDuration_AbsorbsPacingJitter(
+        int configuredMilliseconds,
+        int expectedMilliseconds)
+    {
+        Assert.Equal(
+            expectedMilliseconds,
+            FfmpegPlaybackClient.GetAudioBufferDurationMilliseconds(
+                configuredMilliseconds,
+                isHls: false,
+                isHttpMedia: true));
+    }
+
     [Fact]
     public void ReconnectPolicy_RespectsDisableAttemptLimitAndDelayCap()
     {

@@ -31,6 +31,7 @@ The older Android 32-bit binaries use 4 KB ELF LOAD alignment. They are excluded
 ## FFmpeg 9 local package candidates
 
 The Linux x64 and Android arm64/x64 native package candidates use FFmpeg 9.0.1 built by FFmpegKitNext 9.0.0 from source commit `5e51b2da4c3593c0f2f9b49f53eeb497d93e39d3`. The FFmpeg source tag is `n9.0.1`. The Linux binary reports `--enable-version3`, no `--enable-gpl`, and `LGPL version 3 or later`. The package candidates include the LGPL text and a source provenance note under `native/licenses`.
+The Linux x64 binary enables VAAPI and libdrm and dynamically links against the system libva, libva-drm, and libdrm runtimes. Its build patch is recorded in `native/licenses/FFMPEG-KIT-NEXT-LINUX-VAAPI.patch`.
 
 These locally packed files are not approved for public distribution yet. The source note identifies upstream sources but does not itself provide the corresponding source, patches, and build instructions required for redistribution. The Linux binary also requires glibc 2.43, so it is unsuitable for a general `linux-x64` release. The Android package candidate includes only arm64 and x64: the 32-bit FFmpeg 9 outputs have 4 KB ELF LOAD alignment.
 

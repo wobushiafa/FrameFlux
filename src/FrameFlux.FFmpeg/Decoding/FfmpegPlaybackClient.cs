@@ -152,7 +152,8 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                 ? TimeSpan.FromMilliseconds(
                     GetAudioBufferDurationMilliseconds(
                         options.AudioBufferDurationMilliseconds,
-                        isHls) + HlsAdditionalAudioDriftToleranceMilliseconds)
+                        isHls,
+                        isHttpMedia) + HlsAdditionalAudioDriftToleranceMilliseconds)
                 : null);
         FfmpegRuntimeDiagnostics.OnStreamClientCreated();
     }
@@ -298,7 +299,8 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                             bufferDuration: TimeSpan.FromMilliseconds(
                                 GetAudioBufferDurationMilliseconds(
                                     _options.AudioBufferDurationMilliseconds,
-                                    _isHls)));
+                                    _isHls,
+                                    _isHttpMedia)));
                         audioPlayback.SetPlaybackRate(Volatile.Read(ref _playbackRate));
                         Volatile.Write(ref _audioPlayback, audioPlayback);
                     }
@@ -412,9 +414,10 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
 
     internal static int GetAudioBufferDurationMilliseconds(
         int configuredDurationMilliseconds,
-        bool isHls)
+        bool isHls,
+        bool isHttpMedia = false)
     {
-        return isHls
+        return isHls || isHttpMedia
             ? Math.Max(configuredDurationMilliseconds, HlsMinimumAudioBufferDurationMilliseconds)
             : configuredDurationMilliseconds;
     }

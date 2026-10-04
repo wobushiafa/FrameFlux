@@ -66,6 +66,8 @@ and exponential backoff are configured under `Network.Reconnect`.
 master volume. `Audio.OutputDeviceId` selects a platform output endpoint;
 `null` follows the operating-system default. `Audio.BufferDuration` controls
 the requested output latency and accepts 10 milliseconds through 2 seconds.
+HTTP/HTTPS MP4 and HLS playback use at least 500 milliseconds internally to
+absorb download and decoding jitter; larger configured values still apply.
 Windows uses shared-mode WASAPI by default and falls back to `waveOut` only
 when WASAPI initialization fails. Linux maps the device ID to an ALSA PCM name.
 The effective backend, selected endpoint, queued duration, recovery count, and
