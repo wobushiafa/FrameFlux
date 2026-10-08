@@ -9,11 +9,6 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        if (OperatingSystem.IsLinux())
-        {
-            FFmpegHelper.RegisterFFmpeg();
-        }
-
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 
