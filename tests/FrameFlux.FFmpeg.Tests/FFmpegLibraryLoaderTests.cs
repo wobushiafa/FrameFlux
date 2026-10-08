@@ -246,8 +246,8 @@ public sealed class FFmpegLibraryLoaderTests
             "win-x64",
             "native");
 
-        Assert.True(File.Exists(Path.Combine(libraryDirectory, "avcodec-62.dll")));
-        Assert.True(File.Exists(Path.Combine(libraryDirectory, "avfilter-11.dll")));
+        Assert.True(File.Exists(Path.Combine(libraryDirectory, "avcodec-63.dll")));
+        Assert.True(File.Exists(Path.Combine(libraryDirectory, "avfilter-12.dll")));
         Assert.False(File.Exists(Path.Combine(libraryDirectory, "frameflux_ffmpeg.dll")));
 
         FFmpegHelper.RegisterFFmpeg(libraryDirectory);

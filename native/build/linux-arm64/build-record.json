@@ -1,0 +1,38 @@
+[
+  {
+    "rid": "linux-arm64",
+    "library": "libavcodec.so.63",
+    "sha256": "5d69544e638be16e1bf4220d0c60fe7b67678d884d7c1a65017ad44a8ae0c033",
+    "configure": "--prefix=/tmp/frameflux-ffmpeg-arm64-old-install --target-os=linux --arch=aarch64 --enable-cross-compile --cross-prefix=/tmp/frameflux-arm64-toolchain/usr/bin/aarch64-linux-gnu- --cc=/tmp/frameflux-arm64-cc-old --sysroot=/tmp/frameflux-arm64-oldsysroot --extra-cflags=-I/tmp/frameflux-arm64-oldsysroot/usr/aarch64-linux-gnu/include --enable-shared --disable-static --enable-version3 --disable-programs --disable-doc --disable-debug --disable-autodetect"
+  },
+  {
+    "rid": "linux-arm64",
+    "library": "libavfilter.so.12",
+    "sha256": "4901e4a423fa33f91e532841f95e2ced942dcc890cd6510520e99957b1d234ad",
+    "configure": "--prefix=/tmp/frameflux-ffmpeg-arm64-old-install --target-os=linux --arch=aarch64 --enable-cross-compile --cross-prefix=/tmp/frameflux-arm64-toolchain/usr/bin/aarch64-linux-gnu- --cc=/tmp/frameflux-arm64-cc-old --sysroot=/tmp/frameflux-arm64-oldsysroot --extra-cflags=-I/tmp/frameflux-arm64-oldsysroot/usr/aarch64-linux-gnu/include --enable-shared --disable-static --enable-version3 --disable-programs --disable-doc --disable-debug --disable-autodetect"
+  },
+  {
+    "rid": "linux-arm64",
+    "library": "libavformat.so.63",
+    "sha256": "3bbb8d2a01eb06aa43eb598e8ca94dd0c51e04804f83f5b2491d8a7fbb08f8bc",
+    "configure": "--prefix=/tmp/frameflux-ffmpeg-arm64-old-install --target-os=linux --arch=aarch64 --enable-cross-compile --cross-prefix=/tmp/frameflux-arm64-toolchain/usr/bin/aarch64-linux-gnu- --cc=/tmp/frameflux-arm64-cc-old --sysroot=/tmp/frameflux-arm64-oldsysroot --extra-cflags=-I/tmp/frameflux-arm64-oldsysroot/usr/aarch64-linux-gnu/include --enable-shared --disable-static --enable-version3 --disable-programs --disable-doc --disable-debug --disable-autodetect"
+  },
+  {
+    "rid": "linux-arm64",
+    "library": "libavutil.so.61",
+    "sha256": "3c72efb6d83d416e1c36c5f7588dbd0532853959ff27e0cde0174bcf15ce5890",
+    "configure": "--prefix=/tmp/frameflux-ffmpeg-arm64-old-install --target-os=linux --arch=aarch64 --enable-cross-compile --cross-prefix=/tmp/frameflux-arm64-toolchain/usr/bin/aarch64-linux-gnu- --cc=/tmp/frameflux-arm64-cc-old --sysroot=/tmp/frameflux-arm64-oldsysroot --extra-cflags=-I/tmp/frameflux-arm64-oldsysroot/usr/aarch64-linux-gnu/include --enable-shared --disable-static --enable-version3 --disable-programs --disable-doc --disable-debug --disable-autodetect"
+  },
+  {
+    "rid": "linux-arm64",
+    "library": "libswresample.so.7",
+    "sha256": "a35c08b650e8a295d8e0275f8b2d008b9a0f134f0d0fc0822aaecc352d6c4760",
+    "configure": "--prefix=/tmp/frameflux-ffmpeg-arm64-old-install --target-os=linux --arch=aarch64 --enable-cross-compile --cross-prefix=/tmp/frameflux-arm64-toolchain/usr/bin/aarch64-linux-gnu- --cc=/tmp/frameflux-arm64-cc-old --sysroot=/tmp/frameflux-arm64-oldsysroot --extra-cflags=-I/tmp/frameflux-arm64-oldsysroot/usr/aarch64-linux-gnu/include --enable-shared --disable-static --enable-version3 --disable-programs --disable-doc --disable-debug --disable-autodetect"
+  },
+  {
+    "rid": "linux-arm64",
+    "library": "libswscale.so.10",
+    "sha256": "0ddfc37ad8a1e4e1ba7a702cf4cab9135e5dc39d138cb7f967510297e22734ee",
+    "configure": "--prefix=/tmp/frameflux-ffmpeg-arm64-old-install --target-os=linux --arch=aarch64 --enable-cross-compile --cross-prefix=/tmp/frameflux-arm64-toolchain/usr/bin/aarch64-linux-gnu- --cc=/tmp/frameflux-arm64-cc-old --sysroot=/tmp/frameflux-arm64-oldsysroot --extra-cflags=-I/tmp/frameflux-arm64-oldsysroot/usr/aarch64-linux-gnu/include --enable-shared --disable-static --enable-version3 --disable-programs --disable-doc --disable-debug --disable-autodetect"
+  }
+]

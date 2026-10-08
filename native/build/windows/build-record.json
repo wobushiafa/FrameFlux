@@ -1,0 +1,92 @@
+{
+  "directory": "D:\\CodeRepository\\FrameFlux\\.verify\\windows-ffmpeg9\\output\\bin",
+  "libraries": {
+    "avutil": {
+      "file": "avutil-61.dll",
+      "version": "61.1.101",
+      "license": "LGPL version 3 or later",
+      "configuration": "--prefix=/out --target-os=mingw32 --arch=x86_64 --enable-cross-compile --cross-prefix=x86_64-w64-mingw32- --cc=x86_64-w64-mingw32-gcc-posix --enable-shared --disable-static --enable-version3 --disable-programs --disable-doc --disable-debug --disable-avdevice --disable-autodetect --enable-w32threads --enable-network --enable-d3d11va --enable-dxva2 --enable-schannel --extra-ldflags=-static-libgcc",
+      "sha256": "fd10e9747b2ac4f6ddc0ef9c5523745b977c2022e9a7cfa6550d5e8229db2b34"
+    },
+    "swresample": {
+      "file": "swresample-7.dll",
+      "version": "7.1.101",
+      "license": "LGPL version 3 or later",
+      "configuration": "--prefix=/out --target-os=mingw32 --arch=x86_64 --enable-cross-compile --cross-prefix=x86_64-w64-mingw32- --cc=x86_64-w64-mingw32-gcc-posix --enable-shared --disable-static --enable-version3 --disable-programs --disable-doc --disable-debug --disable-avdevice --disable-autodetect --enable-w32threads --enable-network --enable-d3d11va --enable-dxva2 --enable-schannel --extra-ldflags=-static-libgcc",
+      "sha256": "26c619b24a380b784d77826e2a86c0898a877b34693d42e360d04646d6ff94fa"
+    },
+    "swscale": {
+      "file": "swscale-10.dll",
+      "version": "10.1.101",
+      "license": "LGPL version 3 or later",
+      "configuration": "--prefix=/out --target-os=mingw32 --arch=x86_64 --enable-cross-compile --cross-prefix=x86_64-w64-mingw32- --cc=x86_64-w64-mingw32-gcc-posix --enable-shared --disable-static --enable-version3 --disable-programs --disable-doc --disable-debug --disable-avdevice --disable-autodetect --enable-w32threads --enable-network --enable-d3d11va --enable-dxva2 --enable-schannel --extra-ldflags=-static-libgcc",
+      "sha256": "9e1dcf6aedce4b84e4901f70887599f9886741350ef959e10e78318351615e7f"
+    },
+    "avcodec": {
+      "file": "avcodec-63.dll",
+      "version": "63.1.101",
+      "license": "LGPL version 3 or later",
+      "configuration": "--prefix=/out --target-os=mingw32 --arch=x86_64 --enable-cross-compile --cross-prefix=x86_64-w64-mingw32- --cc=x86_64-w64-mingw32-gcc-posix --enable-shared --disable-static --enable-version3 --disable-programs --disable-doc --disable-debug --disable-avdevice --disable-autodetect --enable-w32threads --enable-network --enable-d3d11va --enable-dxva2 --enable-schannel --extra-ldflags=-static-libgcc",
+      "sha256": "b46acafeeb8d299d9ebe79186a67bf2aa67fcac1e1b7bdaf8336d017a8dc0c68"
+    },
+    "avformat": {
+      "file": "avformat-63.dll",
+      "version": "63.1.101",
+      "license": "LGPL version 3 or later",
+      "configuration": "--prefix=/out --target-os=mingw32 --arch=x86_64 --enable-cross-compile --cross-prefix=x86_64-w64-mingw32- --cc=x86_64-w64-mingw32-gcc-posix --enable-shared --disable-static --enable-version3 --disable-programs --disable-doc --disable-debug --disable-avdevice --disable-autodetect --enable-w32threads --enable-network --enable-d3d11va --enable-dxva2 --enable-schannel --extra-ldflags=-static-libgcc",
+      "sha256": "849957f18dea661b89f9db2b5140f2b60c151a7100f2fb07f14e217618a568c2"
+    },
+    "avfilter": {
+      "file": "avfilter-12.dll",
+      "version": "12.1.101",
+      "license": "LGPL version 3 or later",
+      "configuration": "--prefix=/out --target-os=mingw32 --arch=x86_64 --enable-cross-compile --cross-prefix=x86_64-w64-mingw32- --cc=x86_64-w64-mingw32-gcc-posix --enable-shared --disable-static --enable-version3 --disable-programs --disable-doc --disable-debug --disable-avdevice --disable-autodetect --enable-w32threads --enable-network --enable-d3d11va --enable-dxva2 --enable-schannel --extra-ldflags=-static-libgcc",
+      "sha256": "0822d2d165086e351fc6d8a8b4e5a91be6d431c7617f75645d911d8eab70a780"
+    }
+  },
+  "hardware": {
+    "d3d11va": {
+      "device_type": 7,
+      "create_result": 0
+    },
+    "dxva2": {
+      "device_type": 4,
+      "create_result": 0
+    }
+  },
+  "required_exports_found": 68,
+  "input_protocols": [
+    "async",
+    "cache",
+    "concat",
+    "concatf",
+    "crypto",
+    "data",
+    "fd",
+    "ffrtmphttp",
+    "file",
+    "ftp",
+    "gopher",
+    "gophers",
+    "http",
+    "httpproxy",
+    "https",
+    "mmsh",
+    "mmst",
+    "pipe",
+    "rtmp",
+    "rtmps",
+    "rtmpt",
+    "rtmpts",
+    "rtp",
+    "srtp",
+    "subfile",
+    "tcp",
+    "tls",
+    "dtls",
+    "udp",
+    "udplite",
+    "ipfs",
+    "ipns"
+  ]
+}

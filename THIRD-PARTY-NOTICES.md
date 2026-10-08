@@ -1,38 +1,41 @@
 # Third-Party Notices
 
-FrameFlux depends on third-party managed libraries and can redistribute optional native FFmpeg builds. Package consumers remain responsible for reviewing the licenses that apply to their chosen dependency graph and deployment.
+FrameFlux source and managed packages are MIT licensed. Native packages carry
+separate third-party licenses; FrameFlux's MIT license does not replace them.
+Managed dependency versions are recorded in Directory.Packages.props and the
+NuGet dependency groups, including Avalonia, SIPSorcery, FFmpeg.AutoGen and NAudio.
 
-FrameFlux source code and managed packages are licensed under the MIT License. That license does not replace or modify the licenses of any third-party dependency or native binary.
+## FFmpeg 9.0.1 native packages
 
-## Managed dependencies
+All three native packages use FFmpeg n9.0.1 from arthenica/FFmpeg, commit
+bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa. The configurations enable version3
+without GPL or nonfree components. The six FFmpeg libraries are
+LGPL-3.0-or-later. Each package includes the corresponding source archive,
+LGPL and GPL texts, provenance, reproduction instructions and build records.
+The GPL text is included because the LGPL incorporates GPL terms; it does
+not mean these builds enable FFmpeg's GPL-only components.
 
-The managed packages reference components including Avalonia, Avalonia UI platform packages, FFmpeg.AutoGen, Microsoft.Extensions.DependencyInjection.Abstractions, and System.Collections.Immutable. Exact versions are defined in `Directory.Packages.props` and emitted into each NuGet package dependency group.
+- Windows x64: MinGW-w64 GCC 13.2, D3D11VA/DXVA2 and Schannel. MinGW runtime
+  notices are included. FFmpegKit and external codecs are not bundled.
+- Linux x64: Ubuntu 22.04, GCC 11.4, glibc 2.35 baseline, VAAPI, libdrm and
+  GnuTLS. libva, libva-drm, libdrm and GnuTLS are dynamic system dependencies.
+- Linux ARM64: software-decoding build using GCC 15 and the Debian
+  2.36-8cross1 cross sysroot; highest required glibc symbol version is 2.35.
+- Android arm64/x64: NDK 27.3.13750724, API 24, FFmpegKitNext 9.0.0 build
+  scripts at commit 5e51b2da4c3593c0f2f9b49f53eeb497d93e39d3 with the included
+  local patch. Corresponding FFmpegKitNext scripts and cpu_features 0.11.0
+  source are included. The static ndk_compat component is Apache 2.0 licensed;
+  its license is included. All packaged ELF LOAD segments meet 16 KB alignment.
 
-Before release, the license and notice requirements for each resolved managed dependency must be reviewed against the shipped package contents.
+See native/licenses/FFMPEG-SOURCE.txt, native/build, and the package's source
+and source-build directories for exact configurations and checksums. Runtime
+libraries remain shared so applications can replace them with compatible builds.
+Application distributors must retain the relevant notices and meet the upstream
+licenses' requirements for their distribution.
 
-## Windows and Linux FFmpeg binaries
+## Historical assets
 
-The FFmpeg binaries currently stored in this repository report builds configured with `--enable-gpl` and `--enable-version3`. They must therefore be treated as GPLv3-or-later builds unless the original build records establish a different result.
-
-Do not publish `FrameFlux.FFmpeg.NativeAssets.Windows` or `FrameFlux.FFmpeg.NativeAssets.Linux` until all of the following are recorded and supplied as required by the applicable licenses:
-
-- Exact upstream source revision and patches.
-- Complete configure command and reproducible build instructions.
-- Corresponding source distribution or a legally sufficient source offer.
-- Full applicable license texts and copyright notices.
-- Licenses and source obligations for every enabled external codec or library.
-
-## Android FFmpeg binaries
-
-The Android assets include FFmpeg-family shared libraries and `libc++_shared.so`. Their exact FFmpegKit or other build origin, upstream revisions, patches, configure flags, NDK version, and applicable licenses must be recorded before redistribution.
-
-The older Android 32-bit binaries use 4 KB ELF LOAD alignment. They are excluded from the FFmpeg 9 local package candidate and require aligned replacements before 32-bit distribution.
-
-## FFmpeg 9 local package candidates
-
-The Linux x64 and Android arm64/x64 native package candidates use FFmpeg 9.0.1 built by FFmpegKitNext 9.0.0 from source commit `5e51b2da4c3593c0f2f9b49f53eeb497d93e39d3`. The FFmpeg source tag is `n9.0.1`. The Linux binary reports `--enable-version3`, no `--enable-gpl`, and `LGPL version 3 or later`. The package candidates include the LGPL text and a source provenance note under `native/licenses`.
-The Linux x64 binary enables VAAPI and libdrm and dynamically links against the system libva, libva-drm, and libdrm runtimes. Its build patch is recorded in `native/licenses/FFMPEG-KIT-NEXT-LINUX-VAAPI.patch`.
-
-These locally packed files are not approved for public distribution yet. The source note identifies upstream sources but does not itself provide the corresponding source, patches, and build instructions required for redistribution. The Linux binary also requires glibc 2.43, so it is unsuitable for a general `linux-x64` release. The Android package candidate includes only arm64 and x64: the 32-bit FFmpeg 9 outputs have 4 KB ELF LOAD alignment.
-
-This notice is an engineering inventory. It does not by itself satisfy any third-party license obligation and is not legal advice.
+The earlier Windows/Linux builds enabled GPL and version3 and must be treated
+as GPLv3-or-later. They are replaced by the FFmpeg 9 packages described above.
+Older Android 32-bit and wrapper libraries remain in the repository for history
+but are excluded from the published Android package, as is libc++_shared.so.

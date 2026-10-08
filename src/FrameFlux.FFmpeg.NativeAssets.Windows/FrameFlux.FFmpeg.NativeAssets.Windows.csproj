@@ -8,10 +8,17 @@
     <PackageId>FrameFlux.FFmpeg.NativeAssets.Windows</PackageId>
     <Description>Windows native FFmpeg runtime assets for FrameFlux.</Description>
     <PackageTags>media;ffmpeg;native;windows;win-x64</PackageTags>
+    <PackageLicenseExpression></PackageLicenseExpression>
+    <PackageLicenseFile>FFMPEG-LICENSE.txt</PackageLicenseFile>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="..\..\native\licenses\FFMPEG-LICENSE.txt" Pack="true" PackagePath="\" />
+    <None Include="..\..\native\licenses\MINGW-W64-NOTICES.txt" Pack="true" PackagePath="\" />
+    <None Include="..\..\native\licenses\FFMPEG-SOURCE.txt" Pack="true" PackagePath="\" />
+    <None Include="..\..\native\build\windows\*" Pack="true" PackagePath="source-build\windows" />
     <None Include="..\..\native\artifacts\runtimes\win-x64\native\*"
           Pack="true"
           PackagePath="runtimes\win-x64\native" />
   </ItemGroup>
+  <Import Project="..\..\native\build\NativePackageSources.targets" />
 </Project>

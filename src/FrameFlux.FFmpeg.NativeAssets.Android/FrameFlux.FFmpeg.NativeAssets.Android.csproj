@@ -17,6 +17,10 @@
     <None Include="..\..\native\licenses\FFMPEG-LICENSE.txt" Pack="true" PackagePath="\" />
     <None Include="..\..\native\licenses\FFMPEG-SOURCE.txt" Pack="true" PackagePath="\" />
     <None Include="..\..\native\licenses\FFMPEG-KIT-NEXT-LOCAL.patch" Pack="true" PackagePath="\" />
+    <None Include="..\..\artifacts\sources\ffmpeg-kit-next-9.0.0.tar.gz" Pack="true" PackagePath="source" />
+    <None Include="..\..\artifacts\sources\cpu-features-0.11.0.tar.gz" Pack="true" PackagePath="source" />
+    <None Include="..\..\native\licenses\CPU-FEATURES-LICENSE.txt" Pack="true" PackagePath="\" />
+    <None Include="..\..\native\build\android\*" Pack="true" PackagePath="source-build\android" />
     <None Include="..\..\native\artifacts\runtimes\android-arm64\native\libavcodec.so;
                    ..\..\native\artifacts\runtimes\android-arm64\native\libavfilter.so;
                    ..\..\native\artifacts\runtimes\android-arm64\native\libavformat.so;
@@ -40,4 +44,5 @@
           PackagePath="buildTransitive\FrameFlux.FFmpeg.NativeAssets.Android.targets" />
   </ItemGroup>
 
+  <Import Project="..\..\native\build\NativePackageSources.targets" />
 </Project>

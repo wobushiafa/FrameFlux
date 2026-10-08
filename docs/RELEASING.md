@@ -1,58 +1,48 @@
 # Releasing FrameFlux
 
-FrameFlux separates managed integration packages from optional native FFmpeg redistribution packages. Release them as two independently reviewed groups.
+Version 0.1.3 publishes 11 managed packages and three optional native FFmpeg
+packages. Managed packages are MIT licensed; native package licenses are
+recorded in THIRD-PARTY-NOTICES.md and their package license files.
 
-## Hard gates
+## Validation and packaging
 
-All FrameFlux packages must declare the approved MIT license through `PackageLicenseExpression`, and the repository must contain the matching `LICENSE` file.
-
-Do not publish any `FrameFlux.FFmpeg.NativeAssets.*` package until the relevant provenance, license texts, build configuration, and source obligations in `THIRD-PARTY-NOTICES.md` are resolved. Android assets additionally require verified 16 KB ELF LOAD alignment.
-
-The FFmpeg 9 Linux and Android candidates can be packed for local integration testing. Before publishing them, provide corresponding source and complete build records, rebuild Linux against the intended minimum glibc version, and validate playback on the supported Android devices. The current Android candidate package supports arm64 and x64 only.
-
-## Managed package set
-
-The supported managed package set is explicitly listed in `eng/pack-managed.ps1`. Example applications are not packable and must never appear in release output.
-
-From the repository root, validate and pack the managed packages:
+Run the full Release build and tests, including the appropriate native playback
+smoke tests. Android binaries must pass 16 KB ELF LOAD alignment without an
+override. Windows and Linux packages must contain a complete matching FFmpeg
+ABI family and the recorded source/build artifacts.
 
 ```powershell
-dotnet build FrameFlux.slnx -c Release -p:FrameFluxAllowUnsupportedAndroidPageAlignment=true
-dotnet test FrameFlux.slnx -c Release --no-build -p:FrameFluxAllowUnsupportedAndroidPageAlignment=true
-.\eng\pack-managed.ps1
+./eng/prepare-native-sources.ps1
+dotnet build FrameFlux.slnx -c Release
+dotnet test FrameFlux.slnx -c Release --no-build
+./eng/pack-managed.ps1
 ```
 
-The Android alignment override only permits local validation of managed code. It is not approval to publish the current Android native binaries.
+The source preparation script downloads pinned archives and checks their SHA-256.
+Native projects require corresponding source when packing. The publishing
+workflow checks out Git LFS binaries, packs all 14 projects, and runs
+eng/verify-packages.py to validate package identities, exact internal dependency
+versions, licenses, sources, native architecture, Android alignment and Linux
+glibc requirements. Examples must never appear as NuGet packages.
 
-## Package inspection
+## Native runtime support
 
-The managed output must contain exactly one `.nupkg` and one `.snupkg` for each project listed by the script. Confirm that:
-
-- No package ID begins with `FrameFlux.Demo`.
-- Every package contains its README and repository metadata.
-- Internal FrameFlux dependencies use exact versions matching the release version.
-- Package contents do not contain repository-local native binaries unless the package is an approved native asset package.
-
-## Consumer validation
-
-Create disposable applications using only the local package directory as a package source and build at least these combinations:
-
-- .NET 8 console application referencing `FrameFlux.FFmpeg`.
-- .NET 8 console application referencing `FrameFlux.WebRtc`.
-- .NET 8 Windows WPF application referencing `FrameFlux.Wpf`.
-- .NET 8 Avalonia desktop application referencing the core Avalonia and desktop platform packages.
-- .NET 10 Android application referencing `FrameFlux.Avalonia.Android`.
-
-Run real-device smoke tests for each platform backend before promoting a version from prerelease to stable.
-
-The WebRTC go2rtc smoke tests require a reachable external endpoint and are
-opt-in with `FRAMEFLUX_GO2RTC_URL` set to its `stream.html?src=...` address.
-The FFmpeg HTTP VOD integration test uses a local HTTP server and generated
-media; run it separately with
-`FRAMEFLUX_RUN_NATIVE_HTTP_TESTS=1` and `FRAMEFLUX_FFMPEG_LIBRARY_DIR` set to
-the local FFmpeg shared-library directory. The latter test also requires an
-`ffmpeg` executable on `PATH`.
+- Windows: x64, FFmpeg 9.0.1, D3D11VA/DXVA2 and Schannel.
+- Linux: x64 and ARM64, glibc 2.35 or newer. x64 additionally requires libva,
+  libva-drm, libdrm and GnuTLS; VAAPI needs a driver and accessible render node.
+- Android: arm64-v8a and x86_64, API 24+, 16 KB aligned. Android native libraries
+  are already built; publishing does not rebuild them. The 32-bit assets,
+  libc++ and FFmpegKit wrappers are excluded from the native package.
 
 ## Publication
 
-Review `CHANGELOG.md`, set the release date, and ensure the package version matches the intended tag. Committing, pushing, tagging, and uploading packages are separate operations and require explicit approval.
+Update CHANGELOG.md and Directory.Build.props together. With user authorization,
+commit and push the release, then push the matching v<version> tag. The
+publish-nuget.yml workflow authenticates through NuGet trusted publishing and
+uploads all packages and managed symbol packages. Confirm the workflow succeeds
+and verify every package version on NuGet before reporting completion.
+
+For external WebRTC smoke tests, set FRAMEFLUX_GO2RTC_URL to a reachable go2rtc
+stream.html?src=... endpoint. Set FRAMEFLUX_RUN_NATIVE_HTTP_TESTS=1 and
+FRAMEFLUX_FFMPEG_LIBRARY_DIR to run FFmpeg HTTP playback and seek tests; these
+also require an ffmpeg executable on PATH.

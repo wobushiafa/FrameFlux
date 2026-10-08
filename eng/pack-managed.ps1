@@ -38,7 +38,11 @@ foreach ($project in $projects) {
         $Configuration
         '--output'
         $outputPath
-        '-p:FrameFluxAllowUnsupportedAndroidPageAlignment=true'
+        '--disable-build-servers'
+        '-m:1'
+        '-nr:false'
+        '-p:BuildInParallel=false'
+        '-p:RestoreDisableParallel=true'
     )
 
     if ($Version) {

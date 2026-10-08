@@ -11,7 +11,10 @@ public sealed class WebRtcVideoSink : IVideoSink, IDisposable
 {
     private readonly List<VideoFormat> _supportedFormats =
     [
-        new VideoFormat(VideoCodecsEnum.H264, 96),
+        // Pion/go2rtc requires a compatible profile and packetization mode in SDP.
+        // Without them H.264 can be omitted from the answer while PT=96 is still sent.
+        new VideoFormat(VideoCodecsEnum.H264, 96,
+            parameters: "packetization-mode=1;profile-level-id=42e01f;level-asymmetry-allowed=1"),
         new VideoFormat(VideoCodecsEnum.H265, 97),
         new VideoFormat(VideoCodecsEnum.VP8, 98),
         new VideoFormat(VideoCodecsEnum.VP9, 99),

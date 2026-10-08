@@ -2,6 +2,18 @@
 
 All notable changes to FrameFlux are documented in this file.
 
+## [0.1.3] - 2026-10-08
+
+### Fixed
+
+- Restored H.264 video with go2rtc/Pion WebRTC sources by advertising compatible SDP profile and packetization parameters.
+
+### Changed
+
+- Replaced the Windows x64 runtime with FFmpeg 9.0.1, including D3D11VA/DXVA2 hardware decoding and Schannel HTTPS.
+- Rebuilt Linux x64 FFmpeg 9.0.1 on Ubuntu 22.04 for a glibc 2.35 baseline, retaining VAAPI, libdrm and HTTPS support.
+- Publish Windows, Linux and Android native asset packages with corresponding source, build instructions and LGPL license texts. Android packages include the existing 16 KB aligned arm64 and x64 libraries.
+
 ## [0.1.2] - 2026-09-20
 
 ### Added

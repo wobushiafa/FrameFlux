@@ -5,11 +5,12 @@ Place one complete FFmpeg build for each runtime under the NuGet runtime layout 
 ```text
 native/artifacts/runtimes/
   win-x64/native/
-    avcodec-61.dll
-    avformat-61.dll
-    avutil-59.dll
-    swresample-5.dll
-    swscale-8.dll
+    avcodec-63.dll
+    avfilter-12.dll
+    avformat-63.dll
+    avutil-61.dll
+    swresample-7.dll
+    swscale-10.dll
   linux-x64/native/
     libavcodec.so.63
     libavfilter.so.12
@@ -26,19 +27,25 @@ native/artifacts/runtimes/
     libswscale.so.10
   android-arm64/native/
     libavcodec.so
+    libavfilter.so
     libavformat.so
     libavutil.so
     libswresample.so
     libswscale.so
-  android-arm/native/
-    libavcodec_neon.so
-    libavformat_neon.so
-    libavutil_neon.so
-    libswresample_neon.so
-    libswscale_neon.so
+  android-x64/native/
+    libavcodec.so
+    libavfilter.so
+    libavformat.so
+    libavutil.so
+    libswresample.so
+    libswscale.so
 ```
 
-The same pattern applies to `osx-x64`, `osx-arm64`, and `android-x64`. All files in one runtime directory must use the same architecture and come from the same FFmpeg build. The FFmpeg 9 Android test package contains arm64 and x64 libraries; its 32-bit build outputs do not meet the 16 KB page alignment requirement.
+All files in one runtime directory must use the same architecture and come from
+the same FFmpeg build. The published Android package contains arm64 and x64
+libraries with 16 KB ELF LOAD alignment. Older 32-bit and wrapper libraries are
+excluded. Linux packages require glibc 2.35 or newer. Source and build records
+are included in each native package.
 
 Demo projects set `FrameFluxCopyNativeAssets=true`, so the current host RID is copied automatically. Other local projects can opt in or set the RID explicitly:
 

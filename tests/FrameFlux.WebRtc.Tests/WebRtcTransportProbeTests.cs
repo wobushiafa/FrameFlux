@@ -22,8 +22,9 @@ public sealed class WebRtcTransportProbeTests(ITestOutputHelper output)
         Trace.Listeners.Add(trace);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
         using var pc = new RTCPeerConnection(new RTCConfiguration { iceServers = new WebRtcPlayerOptions().IceServers });
+        using var sink = new WebRtcVideoSink();
         pc.addTrack(new MediaStreamTrack(
-            new List<VideoFormat> { new(VideoCodecsEnum.H264, 96), new(VideoCodecsEnum.H265, 97) },
+            sink.GetVideoSinkFormats(),
             MediaStreamStatusEnum.RecvOnly));
         pc.VideoStream.AddBuffer(TimeSpan.FromMilliseconds(80));
         var packets = 0;

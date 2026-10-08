@@ -1,18 +1,17 @@
 # FrameFlux FFmpeg Native Assets for Android
 
-This package supplies the six FFmpeg components and libc++ runtime required by
-FrameFlux for armeabi-v7a, arm64-v8a, x86, and x86_64. Consumers must target
-Android API level 24 or later.
+This package supplies FFmpeg 9.0.1's six shared libraries for arm64-v8a and
+x86_64. Consumers must target Android API level 24 or later. The libraries
+were built with NDK 27.3.13750724 and have 16 KB ELF LOAD alignment.
 
-Packing is blocked when any ELF LOAD segment is aligned below 16 KB. The
-currently checked-in assets are 4 KB builds, so they must be replaced before
-publishing for Android 16. For temporary local testing only, the guard can be
-bypassed with the FrameFluxAllowUnsupportedAndroidPageAlignment MSBuild
-property set to true.
+Packing validates every shipped library's ELF LOAD alignment. The older
+32-bit assets in the repository are excluded from this package.
 
 The package intentionally excludes FFmpegKit and avdevice libraries that are
-not in FrameFlux's direct dependency closure.
+not in FrameFlux's direct dependency closure. These libraries also do not
+depend on libc++_shared.so, which is excluded.
 
-Native FFmpeg, FFmpegKit, codec, and libc++ licensing is separate from the
-managed FrameFlux source license. Review all upstream redistribution
-requirements before publishing an application.
+The native libraries are LGPL-3.0-or-later, separately from FrameFlux's MIT
+license. The package includes the license texts, corresponding FFmpeg and
+cpu_features sources, FFmpegKitNext build scripts, local patches and binary
+build records. See `source-build/android/README.md` for reproduction instructions.

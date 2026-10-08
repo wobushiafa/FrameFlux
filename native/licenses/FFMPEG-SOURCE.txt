@@ -2,13 +2,12 @@ FFmpeg 9.0.1 native libraries built with FFmpegKitNext 9.0.0.
 Build repository: https://github.com/arthenica/ffmpeg-kit-next
 Local build source commit: 5e51b2da4c3593c0f2f9b49f53eeb497d93e39d3
 FFmpeg source tag: n9.0.1 from https://github.com/arthenica/FFmpeg
-Linux build: prebuilt/bundle-linux/ffmpeg-kit-next; Android build: prebuilt/bundle-android-aar-24-maven.
-The Linux x64 build enables VAAPI, VAAPI DRM display support, and libdrm for DRM PRIME export.
-It links to the system libva, libva-drm, and libdrm runtimes.
-Apply FFMPEG-KIT-NEXT-LINUX-VAAPI.patch to the FFmpegKitNext checkout, install
-libva and libdrm development headers plus nasm, and run:
-FFMPEG_KIT_SYSTEM_PKG_CONFIG_LIBDIR=/usr/lib/x86_64-linux-gnu/pkgconfig ./linux.sh --enable-lib-linux-vaapi
-Copy the six matching FFmpeg shared libraries from prebuilt/linux-x86_64/ffmpeg/lib.
+Android build: prebuilt/bundle-android-aar-24-maven, NDK 27.3.13750724, API 24.
+Android package ABIs: arm64-v8a and x86_64, with 16 KB ELF LOAD alignment.
+It includes six directly loaded FFmpeg shared libraries, without FFmpegKit,
+avdevice, 32-bit assets or libc++_shared.so. Build records are in source-build/android.
+The static ndk_compat component uses arthenica/cpu_features v0.11.0,
+commit 81d13c49649f0714dd41fb56bb246398b6584085, under Apache 2.0.
 Linux ARM64 build: FFmpeg source tag n9.0.1 (commit bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa),
 cross-compiled with aarch64-linux-gnu GCC 15 and the Debian
 libc6-arm64-cross/libc6-dev-arm64-cross 2.36-8cross1 sysroot.
@@ -20,4 +19,38 @@ This ARM64 build uses FFmpeg's software decoders and has no VAAPI or platform-sp
 hardware acceleration enabled.
 The Android builder has local changes recorded in FFMPEG-KIT-NEXT-LOCAL.patch. Apply with git apply --unidiff-zero.
 The included FFmpeg libraries are LGPLv3. FFmpegKitNext uses --enable-version3 and does not enable --enable-gpl by default.
-Corresponding source and build scripts must be made available with any public binary distribution.
+Every native package includes the corresponding FFmpeg source archive under source.
+The Android package also includes FFmpegKitNext and cpu_features source archives,
+build scripts, local patches, and the cpu_features Apache 2.0 license.
+FFmpeg archive SHA256: fb1931fd4eb29297ee1c1017a24f800c4d8fbea35b4f2aaeb28308a48a9149b4.
+FFmpegKitNext archive SHA256: 4eb50b840334b22e72b3d02fa72c9b39cf014372bae163896e8bdab9cc0e4b7d.
+cpu_features archive SHA256: ab2463f2d38fcaff1ce806be8e4c91333449931f5e02009d543b2569a3fa471a.
+
+Linux x64 build: FFmpeg n9.0.1 directly from the included source archive,
+without FFmpegKit. Ubuntu 22.04, GCC 11.4, NASM 2.15.05, glibc baseline 2.35.
+Build recipe and records: source-build/linux (native/build/linux in the repository).
+Configuration: --prefix=/out --target-os=linux --arch=x86_64
+--enable-shared --disable-static --enable-version3 --disable-programs --disable-doc
+--disable-debug --disable-avdevice --disable-autodetect --enable-pthreads
+--enable-network --enable-vaapi --enable-libdrm --enable-gnutls.
+Target systems supply libva 2.14+, libva-drm, libdrm, GnuTLS 3.7.3+ and glibc 2.35+.
+No --enable-gpl or --enable-nonfree is used; external runtimes are dynamically
+linked system dependencies and are not redistributed inside the NuGet package.
+
+Windows x64 build: FFmpeg source tag n9.0.1, commit
+bf1b838f2ab88b4f8fd83443325c782ea0e0f7fa from https://github.com/arthenica/FFmpeg.
+The FFmpeg libraries are built directly, without the FFmpegKit wrapper or patches.
+Build recipe: native/build/windows/Dockerfile and native/build/windows/README.md
+(included in the Windows NuGet package under source-build/windows).
+Toolchain: Ubuntu 24.04 MinGW-w64 GCC 13.2.0, MinGW-w64 headers 11.0.1, NASM 2.16.01.
+Configuration: --prefix=/out --target-os=mingw32 --arch=x86_64 --enable-cross-compile
+--cross-prefix=x86_64-w64-mingw32- --cc=x86_64-w64-mingw32-gcc-posix
+--enable-shared --disable-static --enable-version3 --disable-programs --disable-doc
+--disable-debug --disable-avdevice --disable-autodetect --enable-w32threads
+--enable-network --enable-d3d11va --enable-dxva2 --enable-schannel
+--extra-ldflags=-static-libgcc.
+Before make, prepend -L/static-runtime to ffbuild/config.mak LDFLAGS, with
+libwinpthread.a and its libpthread.a alias from the MinGW toolchain staged in
+/static-runtime. This links
+MinGW's clock_gettime/nanosleep support statically without an extra runtime DLL.
+No --enable-gpl or --enable-nonfree is used; the Windows DLLs are LGPLv3-or-later.

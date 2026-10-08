@@ -1,0 +1,14 @@
+<Project>
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\artifacts\sources\ffmpeg-9.0.1.tar.gz"
+          Pack="true" PackagePath="source" />
+    <None Include="$(MSBuildThisFileDirectory)..\licenses\FFMPEG-GPL-3.0.txt"
+          Pack="true" PackagePath="" />
+  </ItemGroup>
+  <Target Name="RequireFrameFluxCorrespondingSource" BeforeTargets="GenerateNuspec">
+    <Error Condition="!Exists('$(MSBuildThisFileDirectory)..\..\artifacts\sources\ffmpeg-9.0.1.tar.gz')"
+           Text="Run eng/prepare-native-sources.ps1 before packing native assets; corresponding FFmpeg source is required." />
+    <Error Condition="'$(PackageId)' == 'FrameFlux.FFmpeg.NativeAssets.Android' and !Exists('$(MSBuildThisFileDirectory)..\..\artifacts\sources\ffmpeg-kit-next-9.0.0.tar.gz')"
+           Text="Run eng/prepare-native-sources.ps1 before packing Android native assets; corresponding build scripts are required." />
+  </Target>
+</Project>
