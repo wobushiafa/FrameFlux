@@ -2,6 +2,25 @@
 
 All notable changes to FrameFlux are documented in this file.
 
+## [0.1.4] - 2026-11-20
+
+### Added
+
+- Multi-platform `MediaSessionSharingMode.Shared` support across all video presentation modes (`Automatic`, `GpuComposition`, `NativeSurface`, `SoftwareBitmap`), including mixed-mode multi-view delivery and dynamic view attach/detach on Windows D3D11 (WPF and Avalonia), Linux X11/EGL/DMA-BUF (Avalonia), and Android MediaCodec/EGL/SurfaceTexture (Avalonia).
+- Public `IMediaAudioOutput` contract and `FfmpegMediaPlayerFactoryOptions.AudioOutputFactory` for custom PCM audio sinks.
+- `.NET Standard 2.1` target framework support for `FrameFlux.Abstractions`, `FrameFlux.Presentation`, `FrameFlux.FFmpeg`, and `FrameFlux.WebRtc`.
+- Unity 2022.3 LTS (Windows x64) UPM preview package sources and packaging scripts (`com.frameflux.player`, `MediaView`, `MediaRawImage`, `MediaMaterial`, `UnityAudioOutput`).
+
+### Changed
+
+- Synchronized shared D3D11 device and video context operations (`WindowsD3D11DeviceSynchronizer`) and reserved extra hardware decode surfaces (`extra_hw_frames`) for concurrent shared hardware rendering on Windows.
+- Made concurrent `DisposeAsync` calls share a single disposal task, preserved injected audio factories across software decoder fallback, and reported injected audio sinks in WebRTC diagnostics.
+- Removed redundant eager FFmpeg registration from the Avalonia desktop demo.
+
+### Fixed
+
+- Set `eglSwapInterval(..., 0)` on Linux X11 `NativeSurface` presenters to prevent multi-view presentation blocking.
+
 ## [0.1.3] - 2026-10-08
 
 ### Fixed

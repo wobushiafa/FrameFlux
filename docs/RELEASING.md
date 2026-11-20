@@ -1,6 +1,6 @@
 # Releasing FrameFlux
 
-Version 0.1.3 publishes 11 managed packages and three optional native FFmpeg
+Version 0.1.4 publishes 11 managed packages and three optional native FFmpeg
 packages. Managed packages are MIT licensed; native package licenses are
 recorded in THIRD-PARTY-NOTICES.md and their package license files.
 
