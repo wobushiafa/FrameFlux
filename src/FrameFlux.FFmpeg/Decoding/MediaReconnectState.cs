@@ -13,7 +13,7 @@ internal sealed class MediaReconnectState
     public MediaReconnectState(FfmpegPlaybackOptions options, Func<int, int>? nextJitter = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
-        _nextJitter = nextJitter ?? Random.Shared.Next;
+        _nextJitter = nextJitter ?? RuntimeCompat.NextRandom;
     }
 
     public MediaReconnectDiagnostics Diagnostics

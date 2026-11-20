@@ -27,6 +27,7 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
     private ID3D11DeviceContext? _deviceContext;
     private ID3D11VideoDevice? _videoDevice;
     private ID3D11VideoContext? _videoContext;
+    private WindowsD3D11DeviceSynchronizer? _deviceSynchronizer;
     private ID3D11VideoProcessorEnumerator? _enumerator;
     private ID3D11VideoProcessor? _processor;
     private ID3D11Texture2D? _sourceTexture;
@@ -101,7 +102,10 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         }
 
         var sourceTexture = EnsureDevice(frame.Texture);
-        EnsurePipeline(sourceWidth, sourceHeight, outputWidth, outputHeight);
+        using (_deviceSynchronizer!.EnterScope())
+        {
+            EnsurePipeline(sourceWidth, sourceHeight, outputWidth, outputHeight);
+        }
 
         if (_keyedMutex is not null)
         {
@@ -111,18 +115,25 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         var rendered = false;
         try
         {
-            var inputView = GetOrCreateInputView(sourceTexture, frame.ArraySlice);
-            _streams[0] = new VideoProcessorStream
+            using (_deviceSynchronizer.EnterScope())
             {
-                Enable = true,
-                InputSurface = inputView
-            };
-            _videoContext!.VideoProcessorBlt(
-                _processor!,
-                _outputView!,
-                0,
-                1,
-                _streams).CheckError();
+                var inputView = GetOrCreateInputView(sourceTexture, frame.ArraySlice);
+                _streams[0] = new VideoProcessorStream
+                {
+                    Enable = true,
+                    InputSurface = inputView
+                };
+                _videoContext!.VideoProcessorBlt(
+                    _processor!,
+                    _outputView!,
+                    0,
+                    1,
+                    _streams).CheckError();
+                if (_keyedMutex is null)
+                {
+                    _deviceContext!.Flush();
+                }
+            }
 
             rendered = true;
         }
@@ -131,10 +142,6 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
             if (_keyedMutex is not null)
             {
                 _keyedMutex.ReleaseSync(rendered ? 1UL : 0UL);
-            }
-            else if (rendered)
-            {
-                _deviceContext!.Flush();
             }
         }
 
@@ -193,6 +200,9 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
                 _videoDevice = _device.QueryInterface<ID3D11VideoDevice>();
                 _deviceContext = _device.ImmediateContext;
                 _videoContext = _deviceContext.QueryInterface<ID3D11VideoContext>();
+                _deviceSynchronizer = new WindowsD3D11DeviceSynchronizer(
+                    _device,
+                    _deviceContext);
             }
 
             _sourceTexture = sourceTexture;
@@ -364,6 +374,8 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         _deviceContext = null;
         _videoDevice?.Dispose();
         _videoDevice = null;
+        _deviceSynchronizer?.Dispose();
+        _deviceSynchronizer = null;
         _device?.Dispose();
         _device = null;
     }

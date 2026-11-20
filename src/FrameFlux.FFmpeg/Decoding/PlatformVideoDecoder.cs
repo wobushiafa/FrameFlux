@@ -1,8 +1,26 @@
 namespace FrameFlux.FFmpeg;
 
+internal interface ISharedPlatformVideoOutput : IMediaVideoOutput, IDisposable
+{
+    bool HandlesOutputNatively(IMediaVideoOutput output);
+
+    void AttachOutput(IMediaVideoOutput output);
+
+    void DetachOutput(IMediaVideoOutput output);
+
+    void ConfigureCpuFrameDelivery(
+        Func<int, FfmpegMediaFrameLease>? rentLease,
+        FrameLeaseReceivedHandler? onCpuFrameLeaseReceived,
+        bool required);
+}
+
 internal interface IPlatformVideoDecoderFactory
 {
     bool CanCreate(IMediaVideoOutput? output, FfmpegPlaybackOptions options);
+
+    bool HandlesSharedOutputNatively(IMediaVideoOutput output, FfmpegPlaybackOptions options) => false;
+
+    ISharedPlatformVideoOutput? TryCreateSharedOutput(FfmpegPlaybackOptions options) => null;
 
     IPlatformVideoDecoder Create(
         string url,
@@ -52,7 +70,7 @@ internal static class PlatformVideoDecoderRegistry
 
     internal static void RegisterAndroidFactory(IPlatformVideoDecoderFactory factory)
     {
-        ArgumentNullException.ThrowIfNull(factory);
+        RuntimeCompat.NotNull(factory, nameof(factory));
         var existing = Interlocked.CompareExchange(ref _androidFactory, factory, null);
         if (existing is not null && existing.GetType() != factory.GetType())
         {
@@ -78,5 +96,29 @@ internal static class PlatformVideoDecoderRegistry
         return factory?.CanCreate(output, options) == true
             ? factory.Create(url, options, output, cancellationToken)
             : null;
+    }
+
+    internal static ISharedPlatformVideoOutput? TryCreateSharedOutput(FfmpegPlaybackOptions options)
+    {
+        if (!OperatingSystem.IsAndroid() ||
+            !FfmpegPlaybackConfiguration.UsesHardwareDecoding(options.VideoDecodingMode))
+        {
+            return null;
+        }
+
+        return Volatile.Read(ref _androidFactory)?.TryCreateSharedOutput(options);
+    }
+
+    internal static bool HandlesSharedOutputNatively(
+        IMediaVideoOutput output,
+        FfmpegPlaybackOptions options)
+    {
+        if (!OperatingSystem.IsAndroid() ||
+            !FfmpegPlaybackConfiguration.UsesHardwareDecoding(options.VideoDecodingMode))
+        {
+            return false;
+        }
+
+        return Volatile.Read(ref _androidFactory)?.HandlesSharedOutputNatively(output, options) == true;
     }
 }

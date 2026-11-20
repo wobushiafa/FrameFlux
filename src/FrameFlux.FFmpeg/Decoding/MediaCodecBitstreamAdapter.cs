@@ -94,7 +94,7 @@ internal static class MediaCodecBitstreamAdapter
     private static void EnsureCapacity(ref byte[] destination, int requiredLength)
     {
         if (destination.Length >= requiredLength) return;
-        destination = GC.AllocateUninitializedArray<byte>(requiredLength);
+        destination = RuntimeCompat.AllocateBytes(requiredLength);
     }
 
     private static MediaCodecInitializationData ParseAvcConfiguration(ReadOnlySpan<byte> data)

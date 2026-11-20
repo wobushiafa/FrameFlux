@@ -18,6 +18,7 @@ internal sealed class FfmpegMediaSessionFactory : IFfmpegMediaSessionFactory
     private readonly ILoggerFactory _loggerFactory;
     private readonly SharedMediaSessionPool _sharedPool;
     private readonly SemaphoreSlim? _openOperationSemaphore;
+    private readonly Func<int, int, IMediaAudioOutput>? _audioOutputFactory;
 
     internal FfmpegMediaSessionFactory(
         ILoggerFactory? loggerFactory = null,
@@ -38,6 +39,7 @@ internal sealed class FfmpegMediaSessionFactory : IFfmpegMediaSessionFactory
         options.Validate();
         _loggerFactory = loggerFactory;
         _sharedPool = sharedPool;
+        _audioOutputFactory = options.AudioOutputFactory;
         _openOperationSemaphore = options.MaximumConcurrentOpenOperations is { } limit
             ? FfmpegOpenStreamLimiter.GetSemaphore(limit)
             : null;
@@ -50,22 +52,36 @@ internal sealed class FfmpegMediaSessionFactory : IFfmpegMediaSessionFactory
         bool isMuted,
         IMediaVideoOutput? videoOutput)
     {
-        ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(options);
+        RuntimeCompat.NotNull(source, nameof(source));
+        RuntimeCompat.NotNull(options, nameof(options));
         options.Validate();
 
         if (options.SessionSharing == MediaSessionSharingMode.Shared)
         {
+            if (_audioOutputFactory is not null)
+                throw new NotSupportedException("Custom audio outputs require a dedicated media session.");
             return _sharedPool.Acquire(
                 source,
                 options,
                 volume,
                 isMuted,
-                () => CreateDedicated(source, options, volume, isMuted, videoOutput: null),
+                () => CreateDedicated(
+                    source,
+                    options,
+                    volume,
+                    isMuted,
+                    videoOutput: null,
+                    isSharedPhysicalSession: true),
                 videoOutput);
         }
 
-        return CreateDedicated(source, options, volume, isMuted, videoOutput);
+        return CreateDedicated(
+            source,
+            options,
+            volume,
+            isMuted,
+            videoOutput,
+            isSharedPhysicalSession: false);
     }
 
     private IFfmpegMediaSession CreateDedicated(
@@ -73,7 +89,8 @@ internal sealed class FfmpegMediaSessionFactory : IFfmpegMediaSessionFactory
         MediaOpenOptions options,
         double volume,
         bool isMuted,
-        IMediaVideoOutput? videoOutput) =>
+        IMediaVideoOutput? videoOutput,
+        bool isSharedPhysicalSession) =>
         new FfmpegMediaSession(
             source,
             options,
@@ -81,5 +98,7 @@ internal sealed class FfmpegMediaSessionFactory : IFfmpegMediaSessionFactory
             isMuted,
             videoOutput,
             _openOperationSemaphore,
-            _loggerFactory.CreateLogger<FfmpegMediaSession>());
+            _loggerFactory.CreateLogger<FfmpegMediaSession>(),
+            _audioOutputFactory,
+            isSharedPhysicalSession);
 }

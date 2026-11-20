@@ -13,7 +13,7 @@ internal sealed class WebRtcVideoDecodeQueue : IAsyncDisposable
     private readonly Action<WebRtcEncodedFrame, bool> _decode;
     private readonly Action _requestKeyFrame;
     private readonly Action? _drainOutput;
-    private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _bytes;
     private bool _needsKeyFrame = true;
     private bool _stopped;
@@ -22,8 +22,8 @@ internal sealed class WebRtcVideoDecodeQueue : IAsyncDisposable
         WebRtcPlayerOptions? options = null, Action? drainOutput = null)
     {
         options ??= new WebRtcPlayerOptions();
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.MaxPendingVideoFrames);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(options.MaxPendingVideoBytes);
+        RuntimeCompat.AtLeast(options.MaxPendingVideoFrames, 1, nameof(options.MaxPendingVideoFrames));
+        RuntimeCompat.AtLeast(options.MaxPendingVideoBytes, 1, nameof(options.MaxPendingVideoBytes));
         if (options.MaxPendingVideoAge <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(options.MaxPendingVideoAge));
         _maximumFrames = options.MaxPendingVideoFrames;
@@ -52,7 +52,7 @@ internal sealed class WebRtcVideoDecodeQueue : IAsyncDisposable
         {
             if (_stopped) return;
             if (_frames.Count >= _maximumFrames || _bytes + (long)frame.Payload.Length > _maximumBytes ||
-                _frames.TryPeek(out var oldest) && Stopwatch.GetElapsedTime(oldest.Arrival) > _maximumAge)
+                _frames.TryPeek(out var oldest) && RuntimeCompat.Elapsed(oldest.Arrival) > _maximumAge)
             {
                 _frames.Clear();
                 _bytes = 0;
@@ -117,7 +117,7 @@ internal sealed class WebRtcVideoDecodeQueue : IAsyncDisposable
                     {
                         next = _frames.Dequeue();
                         _bytes -= next.Frame.Payload.Length;
-                        expired = Stopwatch.GetElapsedTime(next.Arrival) > _maximumAge;
+                        expired = RuntimeCompat.Elapsed(next.Arrival) > _maximumAge;
                         if (expired)
                         {
                             _frames.Clear();
@@ -147,7 +147,7 @@ internal sealed class WebRtcVideoDecodeQueue : IAsyncDisposable
         }
         finally
         {
-            _completion.TrySetResult();
+            _completion.TrySetResult(true);
         }
     }
 }

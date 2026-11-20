@@ -66,8 +66,8 @@ internal sealed class FFmpegAudioTempoFilter : IDisposable
         double playbackRate,
         Action<IntPtr, FrameLayout> output)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        ArgumentNullException.ThrowIfNull(output);
+        RuntimeCompat.NotDisposed(_disposed, this);
+        RuntimeCompat.NotNull(output, nameof(output));
         if (playbackRate == 1d)
         {
             ResetGraph();
@@ -87,8 +87,8 @@ internal sealed class FFmpegAudioTempoFilter : IDisposable
 
     internal void Flush(Action<IntPtr, FrameLayout> output)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        ArgumentNullException.ThrowIfNull(output);
+        RuntimeCompat.NotDisposed(_disposed, this);
+        RuntimeCompat.NotNull(output, nameof(output));
         if (_graph == IntPtr.Zero)
         {
             return;
@@ -177,11 +177,7 @@ internal sealed class FFmpegAudioTempoFilter : IDisposable
             }
 
             var channelLayout = DescribeChannelLayout();
-            var sourceArguments = string.Create(
-                CultureInfo.InvariantCulture,
-                $"time_base={_timeBaseNumerator}/{_timeBaseDenominator}:" +
-                $"sample_rate={_sampleRate}:sample_fmt={sampleFormat}:" +
-                $"channel_layout={channelLayout}");
+            var sourceArguments = RuntimeCompat.Invariant($"time_base={_timeBaseNumerator}/{_timeBaseDenominator}:sample_rate={_sampleRate}:sample_fmt={sampleFormat}:channel_layout={channelLayout}");
             _source = CreateFilter("abuffer", "tempo_input", sourceArguments);
             _sink = CreateFilter("abuffersink", "tempo_output", null);
 
@@ -189,9 +185,7 @@ internal sealed class FFmpegAudioTempoFilter : IDisposable
             var factors = CreateTempoFactors(playbackRate);
             for (var index = 0; index < factors.Count; index++)
             {
-                var arguments = string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"tempo={factors[index]:0.########}");
+                var arguments = RuntimeCompat.Invariant($"tempo={factors[index]:0.########}");
                 var tempo = CreateFilter("atempo", $"tempo_{index}", arguments);
                 Link(previous, tempo);
                 previous = tempo;

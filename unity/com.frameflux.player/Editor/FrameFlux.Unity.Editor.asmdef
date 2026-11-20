@@ -1,0 +1,7 @@
+{
+  "name": "FrameFlux.Unity.Editor",
+  "rootNamespace": "FrameFlux.Unity.Editor",
+  "references": ["FrameFlux.Unity"],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": true
+}

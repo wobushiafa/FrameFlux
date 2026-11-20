@@ -19,9 +19,9 @@ internal static class MediaPresentationPolicy
         bool platformGpuPresentationAvailable,
         bool hasOverlay)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        RuntimeCompat.NotNull(options, nameof(options));
         options.Validate();
-        if (!Enum.IsDefined(requestedMode))
+        if (!RuntimeCompat.IsDefined(requestedMode))
         {
             throw new ArgumentOutOfRangeException(
                 nameof(requestedMode),
@@ -37,14 +37,13 @@ internal static class MediaPresentationPolicy
 
         var gpuPresentationAvailable =
             platformGpuPresentationAvailable &&
-            options.SessionSharing == MediaSessionSharingMode.Dedicated &&
             options.Video.DecodingPolicy != MediaVideoDecodingPolicy.SoftwareOnly;
         if (!gpuPresentationAvailable &&
             requestedMode is MediaVideoPresentationMode.NativeSurface or
                 MediaVideoPresentationMode.GpuComposition)
         {
             throw new InvalidOperationException(
-                "The requested GPU presentation mode requires an available platform backend, a dedicated session, and hardware-capable decoding.");
+                "The requested GPU presentation mode requires an available platform backend and hardware-capable decoding.");
         }
 
         var effectiveMode = requestedMode == MediaVideoPresentationMode.Automatic
@@ -82,7 +81,7 @@ internal sealed class AdaptiveMediaVideoOutput(
 
     public object? GetVideoOutputFeature(Type featureType)
     {
-        ArgumentNullException.ThrowIfNull(featureType);
+        RuntimeCompat.NotNull(featureType, nameof(featureType));
         return GetFeature(primary, featureType) ?? GetFeature(softwareFallback, featureType);
     }
 
@@ -111,7 +110,7 @@ internal sealed class MediaPresentationFailureTracker(int maximumAttempts = 3)
 
     internal MediaPresentationFailure Register(Exception exception)
     {
-        ArgumentNullException.ThrowIfNull(exception);
+        RuntimeCompat.NotNull(exception, nameof(exception));
         var failureCount = Interlocked.Increment(ref _consecutiveFailureCount);
         var requiresFallback = failureCount == maximumAttempts;
         var requiresBackendRestart = failureCount < maximumAttempts;

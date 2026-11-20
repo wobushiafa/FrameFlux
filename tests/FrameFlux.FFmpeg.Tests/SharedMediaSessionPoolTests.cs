@@ -1,5 +1,6 @@
 using FrameFlux;
 using FrameFlux.FFmpeg;
+using FrameFlux.Presentation;
 using Xunit;
 
 namespace FrameFlux.FFmpeg.Tests;
@@ -273,6 +274,230 @@ public sealed class SharedMediaSessionPoolTests
         Assert.Equal(MediaPlaybackState.Playing, lease.State);
     }
 
+    [Fact]
+    public async Task SharedMode_DistributesReferenceCountedD3D11TextureToMultipleOutputs()
+    {
+        var pool = new SharedMediaSessionPool();
+        var source = MediaSource.Parse("rtsp://camera/live");
+        var options = new MediaOpenOptions { SessionSharing = MediaSessionSharingMode.Shared };
+        var physical = new LeaseTrackingSession(source, options, MediaFrameStorageKind.D3D11Texture);
+        var firstOutput = new RetainingGpuVideoOutput(MediaFrameStorageKind.D3D11Texture);
+        var secondOutput = new RetainingGpuVideoOutput(MediaFrameStorageKind.D3D11Texture);
+        var returnCount = 0;
+
+        await using var first = pool.Acquire(source, options, 1d, false, () => physical, firstOutput);
+        await using var second = pool.Acquire(source, options, 1d, false, () => physical, secondOutput);
+        await first.StartAsync();
+        await second.StartAsync();
+
+        Assert.True(physical.RequiresNativeFrames);
+        Assert.False(physical.RequiresCpuFrames);
+
+        var texturePtr = new IntPtr(0x1234);
+        var frame = new FfmpegMediaFrameLease(
+            IntPtr.Zero,
+            0,
+            _ => Interlocked.Increment(ref returnCount));
+        frame.ResetD3D11(1280, 720, texturePtr, arraySlice: 3);
+        physical.EmitFrameLease(frame);
+
+        Assert.NotNull(firstOutput.Frame);
+        Assert.NotNull(secondOutput.Frame);
+        Assert.True(firstOutput.Frame.TryGetD3D11Texture(out var firstTexture));
+        Assert.True(secondOutput.Frame.TryGetD3D11Texture(out var secondTexture));
+        Assert.Equal(texturePtr, firstTexture.Texture);
+        Assert.Equal(3, firstTexture.ArraySlice);
+        Assert.Equal(texturePtr, secondTexture.Texture);
+        Assert.Equal(3, secondTexture.ArraySlice);
+        Assert.Equal(0, Volatile.Read(ref returnCount));
+
+        firstOutput.Release();
+        Assert.Equal(0, Volatile.Read(ref returnCount));
+        secondOutput.Release();
+        Assert.Equal(1, Volatile.Read(ref returnCount));
+    }
+
+    [Fact]
+    public async Task SharedMode_DistributesReferenceCountedDmaBufToMultipleOutputs()
+    {
+        var pool = new SharedMediaSessionPool();
+        var source = MediaSource.Parse("rtsp://camera/live");
+        var options = new MediaOpenOptions { SessionSharing = MediaSessionSharingMode.Shared };
+        var physical = new LeaseTrackingSession(source, options, MediaFrameStorageKind.DmaBuf);
+        var firstOutput = new RetainingGpuVideoOutput(MediaFrameStorageKind.DmaBuf);
+        var secondOutput = new RetainingGpuVideoOutput(MediaFrameStorageKind.DmaBuf);
+        var returnCount = 0;
+
+        await using var first = pool.Acquire(source, options, 1d, false, () => physical, firstOutput);
+        await using var second = pool.Acquire(source, options, 1d, false, () => physical, secondOutput);
+        await first.StartAsync();
+        await second.StartAsync();
+
+        var expectedDmaBuf = new MediaDmaBufFrameBuffer(
+            new[] { new MediaDmaBufObject(42, 4096, 0x10UL) },
+            new[]
+            {
+                new MediaDmaBufLayer(
+                    0x3231564E,
+                    new[] { new MediaDmaBufPlane(0, 0, 1280), new MediaDmaBufPlane(0, 1280 * 720, 1280) })
+            });
+        var frame = new FfmpegMediaFrameLease(
+            IntPtr.Zero,
+            0,
+            _ => Interlocked.Increment(ref returnCount));
+        frame.ResetDmaBuf(1280, 720, expectedDmaBuf);
+        physical.EmitFrameLease(frame);
+
+        Assert.NotNull(firstOutput.Frame);
+        Assert.NotNull(secondOutput.Frame);
+        Assert.True(firstOutput.Frame.TryGetDmaBuf(out var firstDmaBuf));
+        Assert.True(secondOutput.Frame.TryGetDmaBuf(out var secondDmaBuf));
+        Assert.Equal(42, firstDmaBuf.Objects.Span[0].FileDescriptor);
+        Assert.Equal(42, secondDmaBuf.Objects.Span[0].FileDescriptor);
+        Assert.Equal(0x3231564Eu, firstDmaBuf.Layers.Span[0].Format);
+        Assert.Equal(0, Volatile.Read(ref returnCount));
+
+        firstOutput.Release();
+        Assert.Equal(0, Volatile.Read(ref returnCount));
+        secondOutput.Release();
+        Assert.Equal(1, Volatile.Read(ref returnCount));
+    }
+
+    [Fact]
+    public async Task SharedMode_MixedOutputsRouteGpuAndSupplementaryCpuFramesWithoutFlicker()
+    {
+        var pool = new SharedMediaSessionPool();
+        var source = MediaSource.Parse("rtsp://camera/live");
+        var options = new MediaOpenOptions { SessionSharing = MediaSessionSharingMode.Shared };
+        var physical = new LeaseTrackingSession(source, options, MediaFrameStorageKind.D3D11Texture);
+
+        var gpuPrimary = new RetainingGpuVideoOutput(MediaFrameStorageKind.D3D11Texture);
+        var gpuSoftwareFallback = new RetainingVideoOutput();
+        var adaptiveGpuOutput = new AdaptiveMediaVideoOutput(gpuPrimary, gpuSoftwareFallback);
+        var cpuOnlyOutput = new RetainingVideoOutput();
+
+        await using var gpuLease = pool.Acquire(source, options, 1d, false, () => physical, adaptiveGpuOutput);
+        await using var cpuLease = pool.Acquire(source, options, 1d, false, () => physical, cpuOnlyOutput);
+        await gpuLease.StartAsync();
+        await cpuLease.StartAsync();
+
+        Assert.True(physical.RequiresNativeFrames);
+        Assert.True(physical.RequiresCpuFrames);
+
+        var gpuReturnCount = 0;
+        var gpuFrame = new FfmpegMediaFrameLease(IntPtr.Zero, 0, _ => Interlocked.Increment(ref gpuReturnCount));
+        gpuFrame.ResetD3D11(1920, 1080, new IntPtr(0xBEEF), 0);
+        physical.EmitFrameLease(gpuFrame);
+
+        Assert.NotNull(gpuPrimary.Frame);
+        Assert.Null(gpuSoftwareFallback.Frame);
+        Assert.Null(cpuOnlyOutput.Frame);
+        gpuPrimary.Release();
+        Assert.Equal(1, gpuReturnCount);
+
+        var cpuReturnCount = 0;
+        var supplementaryCpuFrame = new FfmpegMediaFrameLease(
+            new IntPtr(1),
+            16,
+            _ => Interlocked.Increment(ref cpuReturnCount));
+        supplementaryCpuFrame.ResetBgra(2, 2, 8);
+        physical.EmitSupplementaryCpuFrameLease(supplementaryCpuFrame);
+
+        Assert.Null(gpuSoftwareFallback.Frame);
+        Assert.NotNull(cpuOnlyOutput.Frame);
+        cpuOnlyOutput.Release();
+        Assert.Equal(1, cpuReturnCount);
+
+        var fallbackFrame = new FfmpegMediaFrameLease(new IntPtr(2), 16, _ => { });
+        fallbackFrame.ResetBgra(2, 2, 8);
+        physical.EmitFrameLease(fallbackFrame);
+
+        Assert.NotNull(gpuSoftwareFallback.Frame);
+        Assert.NotNull(cpuOnlyOutput.Frame);
+        gpuSoftwareFallback.Release();
+        cpuOnlyOutput.Release();
+    }
+
+    [Fact]
+    public async Task SharedMode_UpdatesFrameRequirementsAndAttachedOutputsDynamically()
+    {
+        var pool = new SharedMediaSessionPool();
+        var source = MediaSource.Parse("rtsp://camera/live");
+        var options = new MediaOpenOptions { SessionSharing = MediaSessionSharingMode.Shared };
+        var physical = new LeaseTrackingSession(source, options, MediaFrameStorageKind.D3D11Texture);
+        var cpuOutput = new TrackingVideoOutput();
+        var gpuOutput = new RetainingGpuVideoOutput(MediaFrameStorageKind.D3D11Texture);
+
+        await using var cpuLease = pool.Acquire(source, options, 1d, false, () => physical, cpuOutput);
+        await using var gpuLease = pool.Acquire(source, options, 1d, false, () => physical, gpuOutput);
+
+        await cpuLease.StartAsync();
+        Assert.False(physical.RequiresNativeFrames);
+        Assert.True(physical.RequiresCpuFrames);
+        Assert.Single(physical.AttachedOutputs, cpuOutput);
+
+        await gpuLease.StartAsync();
+        Assert.True(physical.RequiresNativeFrames);
+        Assert.True(physical.RequiresCpuFrames);
+        Assert.Equal(2, physical.AttachedOutputs.Count);
+
+        await cpuLease.StopAsync();
+        Assert.True(physical.RequiresNativeFrames);
+        Assert.False(physical.RequiresCpuFrames);
+        Assert.Single(physical.AttachedOutputs, gpuOutput);
+
+        await gpuLease.StopAsync();
+        Assert.False(physical.RequiresNativeFrames);
+        Assert.False(physical.RequiresCpuFrames);
+        Assert.Empty(physical.AttachedOutputs);
+    }
+
+    [Fact]
+    public async Task SharedMode_FfmpegMediaSessionResolvesPlatformNativeStorageKind()
+    {
+        var source = MediaSource.Parse("rtsp://camera/live");
+        await using var hwSession = new FfmpegMediaSession(
+            source,
+            new MediaOpenOptions
+            {
+                SessionSharing = MediaSessionSharingMode.Shared,
+                Video = new MediaVideoOptions { DecodingPolicy = MediaVideoDecodingPolicy.HardwarePreferred }
+            },
+            1d,
+            false,
+            videoOutput: null,
+            isSharedPhysicalSession: true);
+        await using var swSession = new FfmpegMediaSession(
+            source,
+            new MediaOpenOptions
+            {
+                SessionSharing = MediaSessionSharingMode.Shared,
+                Video = new MediaVideoOptions { DecodingPolicy = MediaVideoDecodingPolicy.SoftwareOnly }
+            },
+            1d,
+            false,
+            videoOutput: null,
+            isSharedPhysicalSession: true);
+
+        var hwLeaseSource = Assert.IsAssignableFrom<IMediaFrameLeaseSource>(hwSession);
+        var swLeaseSource = Assert.IsAssignableFrom<IMediaFrameLeaseSource>(swSession);
+        Assert.Equal(MediaFrameStorageKind.CpuMemory, swLeaseSource.NativeFrameStorageKind);
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal(MediaFrameStorageKind.D3D11Texture, hwLeaseSource.NativeFrameStorageKind);
+            Assert.True(hwLeaseSource.HandlesOutputNatively(
+                new RetainingGpuVideoOutput(MediaFrameStorageKind.D3D11Texture)));
+            Assert.False(hwLeaseSource.HandlesOutputNatively(new RetainingVideoOutput()));
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            Assert.Equal(MediaFrameStorageKind.DmaBuf, hwLeaseSource.NativeFrameStorageKind);
+            Assert.True(hwLeaseSource.HandlesOutputNatively(
+                new RetainingGpuVideoOutput(MediaFrameStorageKind.DmaBuf)));
+            Assert.False(hwLeaseSource.HandlesOutputNatively(new RetainingVideoOutput()));
+        }
+    }
+
     private sealed class TrackingSession(
         MediaSource source,
         MediaOpenOptions options) : IFfmpegMediaSession
@@ -361,10 +586,13 @@ public sealed class SharedMediaSessionPoolTests
 
     private sealed class LeaseTrackingSession(
         MediaSource source,
-        MediaOpenOptions options) : IFfmpegMediaSession, IMediaFrameLeaseSource
+        MediaOpenOptions options,
+        MediaFrameStorageKind nativeFrameStorageKind = MediaFrameStorageKind.CpuMemory)
+        : IFfmpegMediaSession, IMediaFrameLeaseSource
     {
         private EventHandler<MediaVideoFrame>? _frameReceived;
         private Action<IMediaFrameLease>? _frameLeaseConsumer;
+        private Action<IMediaFrameLease>? _supplementaryCpuFrameLeaseConsumer;
 
         public MediaSource Source { get; } = source;
         public MediaOpenOptions Options { get; } = options;
@@ -372,9 +600,13 @@ public sealed class SharedMediaSessionPoolTests
         public MediaDiagnostics Diagnostics { get; } = MediaDiagnostics.Empty;
         public double Volume { get; set; } = 1d;
         public bool IsMuted { get; set; }
+        public MediaFrameStorageKind NativeFrameStorageKind { get; } = nativeFrameStorageKind;
         internal int FrameSubscriberCount { get; private set; }
         internal int StartCount { get; private set; }
         internal bool FailNextFrameLeaseConsumerChange { get; set; }
+        internal bool RequiresNativeFrames { get; private set; }
+        internal bool RequiresCpuFrames { get; private set; }
+        internal List<IMediaVideoOutput> AttachedOutputs { get; } = [];
 
         public event EventHandler<MediaPlaybackStateChangedEventArgs>? StateChanged;
         public event EventHandler<MediaPlaybackErrorEventArgs>? Error { add { } remove { } }
@@ -421,6 +653,11 @@ public sealed class SharedMediaSessionPoolTests
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
+        public bool HandlesOutputNatively(IMediaVideoOutput output) =>
+            NativeFrameStorageKind is MediaFrameStorageKind.D3D11Texture or MediaFrameStorageKind.DmaBuf &&
+            (output.PreferredFrameStorage == NativeFrameStorageKind ||
+             output.Supports(NativeFrameStorageKind, MediaPixelFormat.Unknown));
+
         public void SetFrameLeaseConsumer(Action<IMediaFrameLease>? consumer)
         {
             if (FailNextFrameLeaseConsumerChange)
@@ -433,6 +670,19 @@ public sealed class SharedMediaSessionPoolTests
             _frameLeaseConsumer = consumer;
         }
 
+        public void SetSupplementaryCpuFrameLeaseConsumer(Action<IMediaFrameLease>? consumer) =>
+            _supplementaryCpuFrameLeaseConsumer = consumer;
+
+        public void UpdateSharedFrameRequirements(bool requiresNativeFrames, bool requiresCpuFrames)
+        {
+            RequiresNativeFrames = requiresNativeFrames;
+            RequiresCpuFrames = requiresCpuFrames;
+        }
+
+        public void AttachSharedVideoOutput(IMediaVideoOutput output) => AttachedOutputs.Add(output);
+
+        public void DetachSharedVideoOutput(IMediaVideoOutput output) => AttachedOutputs.Remove(output);
+
         internal void EmitFrameLease(IMediaFrameLease frame)
         {
             var consumer = _frameLeaseConsumer;
@@ -443,6 +693,41 @@ public sealed class SharedMediaSessionPoolTests
             }
 
             consumer(frame);
+        }
+
+        internal void EmitSupplementaryCpuFrameLease(IMediaFrameLease frame)
+        {
+            var consumer = _supplementaryCpuFrameLeaseConsumer;
+            if (consumer is null)
+            {
+                frame.Dispose();
+                throw new InvalidOperationException("No supplementary CPU frame lease consumer is attached.");
+            }
+
+            consumer(frame);
+        }
+    }
+
+    private sealed class RetainingGpuVideoOutput(
+        MediaFrameStorageKind storageKind) : IMediaVideoOutput
+    {
+        internal IMediaFrameLease? Frame { get; private set; }
+
+        public MediaFrameStorageKind PreferredFrameStorage => storageKind;
+
+        public bool Supports(MediaFrameStorageKind candidateStorageKind, MediaPixelFormat pixelFormat) =>
+            candidateStorageKind == storageKind;
+
+        public bool TryPresent(IMediaFrameLease frame)
+        {
+            Frame = frame;
+            return true;
+        }
+
+        internal void Release()
+        {
+            Frame?.Dispose();
+            Frame = null;
         }
     }
 

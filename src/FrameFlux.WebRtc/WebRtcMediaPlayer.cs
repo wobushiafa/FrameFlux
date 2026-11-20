@@ -14,6 +14,8 @@ namespace FrameFlux.WebRtc;
 public sealed class WebRtcMediaPlayer : IMediaPlayer
 {
     private readonly object _sync = new();
+    private readonly object _disposeSync = new();
+    private Task? _disposeTask;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly WebRtcPlayerOptions _webrtcOptions;
     private readonly WebRtcFrameBufferPool _framePool;
@@ -157,7 +159,12 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                     ReadMilliseconds: 0,
                     DecodeMilliseconds: 0,
                     PerformanceSampleCount: (int)Volatile.Read(ref _frameSequence),
-                    LastError: null);
+                    LastError: null)
+                {
+                    Audio = _audioOutput is IMediaAudioOutput audioOutput
+                        ? audioOutput.Diagnostics
+                        : MediaAudioDiagnostics.Empty
+                };
             }
         }
     }
@@ -337,13 +344,13 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         MediaOpenOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        RuntimeCompat.NotNull(source, nameof(source));
         options?.Validate();
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            RuntimeCompat.NotDisposed(_disposed, this);
             await StopInternalAsync(cancellationToken).ConfigureAwait(false);
 
             lock (_sync)
@@ -465,10 +472,10 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                     var arrival = System.Diagnostics.Stopwatch.GetTimestamp();
                     var previousArrival = Interlocked.Exchange(ref _lastVideoRtpArrival, arrival);
                     if (previousArrival != 0 &&
-                        System.Diagnostics.Stopwatch.GetElapsedTime(previousArrival, arrival).TotalMilliseconds > 500)
+                        RuntimeCompat.Elapsed(previousArrival, arrival).TotalMilliseconds > 500)
                     {
                         global::Android.Util.Log.Warn("FrameFluxTiming",
-                            $"RTP gap {System.Diagnostics.Stopwatch.GetElapsedTime(previousArrival, arrival).TotalMilliseconds:F0} ms");
+                            $"RTP gap {RuntimeCompat.Elapsed(previousArrival, arrival).TotalMilliseconds:F0} ms");
                     }
 #endif
                     var remoteSsrc = rtpPacket.Header.SyncSource;
@@ -559,7 +566,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            RuntimeCompat.NotDisposed(_disposed, this);
             if (_state != MediaPlaybackState.Ready && _state != MediaPlaybackState.Paused)
             {
                 if (_state == MediaPlaybackState.Playing)
@@ -617,11 +624,16 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
     {
         lock (_sync)
         {
-            return ValueTask.FromResult(_latestSnapshot);
+            return RuntimeCompat.Result(_latestSnapshot);
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
+    {
+        lock (_disposeSync) return new ValueTask(_disposeTask ??= DisposeCoreAsync());
+    }
+
+    private async Task DisposeCoreAsync()
     {
         await _gate.WaitAsync().ConfigureAwait(false);
         try
@@ -651,7 +663,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
     /// </summary>
     public void DeliverFrame(IMediaFrameLease frameLease)
     {
-        ArgumentNullException.ThrowIfNull(frameLease);
+        RuntimeCompat.NotNull(frameLease, nameof(frameLease));
 
         if (_disposed || _state != MediaPlaybackState.Playing)
         {

@@ -7,6 +7,8 @@ namespace FrameFlux.FFmpeg;
 public sealed class FfmpegMediaPlayer : IMediaPlayer
 {
     private readonly object _sync = new();
+    private readonly object _disposeSync = new();
+    private Task? _disposeTask;
     private readonly SemaphoreSlim _commands = new(1, 1);
     private readonly IFfmpegMediaSessionFactory _sessionFactory;
     private IFfmpegMediaSession? _session;
@@ -259,7 +261,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         MediaOpenOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        RuntimeCompat.NotNull(source, nameof(source));
         var resolvedOptions = options ?? new MediaOpenOptions();
         resolvedOptions.Validate();
 
@@ -556,7 +558,12 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         return snapshot;
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
+    {
+        lock (_disposeSync) return new ValueTask(_disposeTask ??= DisposeCoreAsync());
+    }
+
+    private async Task DisposeCoreAsync()
     {
         await _commands.WaitAsync().ConfigureAwait(false);
         try
@@ -781,13 +788,17 @@ public sealed class FfmpegMediaPlayerFactory : IMediaPlayerFactory
 
 public sealed record FfmpegMediaPlayerFactoryOptions
 {
+    /// <summary>Creates a player-owned PCM sink. Called on the decode worker, once per decoder session.</summary>
+    /// <remarks>Custom outputs require dedicated sessions. A fresh output must be returned on every invocation.</remarks>
+    public Func<int, int, IMediaAudioOutput>? AudioOutputFactory { get; init; }
+
     public int? MaximumConcurrentOpenOperations { get; init; } =
         CalculateRecommendedMaximumConcurrentOpenOperations(Environment.ProcessorCount);
 
     internal static int CalculateRecommendedMaximumConcurrentOpenOperations(
         int processorCount)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(processorCount, 1);
+        RuntimeCompat.AtLeast(processorCount, 1, nameof(processorCount));
         return Math.Clamp((processorCount + 3) / 4, 2, 4);
     }
 

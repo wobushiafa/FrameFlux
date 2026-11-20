@@ -24,6 +24,7 @@ internal sealed class WindowsD3D11Presenter : IDisposable
     private ID3D11Device? _device;
     private ID3D11VideoDevice? _videoDevice;
     private ID3D11VideoContext? _videoContext;
+    private WindowsD3D11DeviceSynchronizer? _deviceSynchronizer;
     private IDXGISwapChain1? _swapChain;
     private ID3D11VideoProcessorEnumerator? _enumerator;
     private ID3D11VideoProcessor? _processor;
@@ -80,52 +81,55 @@ internal sealed class WindowsD3D11Presenter : IDisposable
         Marshal.AddRef(frame.Texture);
         using var texture = new ID3D11Texture2D(frame.Texture);
         EnsureDevice(texture);
-        EnsurePipeline(
-            sourceWidth,
-            sourceHeight,
-            Math.Max(1, outputWidth),
-            Math.Max(1, outputHeight));
-
-        var inputDescription = new VideoProcessorInputViewDescription
+        using (_deviceSynchronizer!.EnterScope())
         {
-            ViewDimension = VideoProcessorInputViewDimension.Texture2D,
-            Texture2D = new Texture2DVideoProcessorInputView
-            {
-                MipSlice = 0,
-                ArraySlice = checked((uint)frame.ArraySlice)
-            }
-        };
-        _videoDevice!.CreateVideoProcessorInputView(
-            texture,
-            _enumerator!,
-            inputDescription,
-            out var inputView).CheckError();
-        using (inputView)
-        {
-            var sourceRect = new RawRect(0, 0, sourceWidth, sourceHeight);
-            var destinationRect = CalculateDestinationRect(
+            EnsurePipeline(
                 sourceWidth,
                 sourceHeight,
-                _outputWidth,
-                _outputHeight,
-                stretch);
-            _videoContext!.VideoProcessorSetStreamSourceRect(_processor!, 0, true, sourceRect);
-            _videoContext.VideoProcessorSetStreamDestRect(_processor!, 0, true, destinationRect);
-            _videoContext.VideoProcessorSetOutputTargetRect(
-                _processor!,
-                true,
-                new RawRect(0, 0, _outputWidth, _outputHeight));
-            var stream = new VideoProcessorStream
+                Math.Max(1, outputWidth),
+                Math.Max(1, outputHeight));
+
+            var inputDescription = new VideoProcessorInputViewDescription
             {
-                Enable = true,
-                InputSurface = inputView
+                ViewDimension = VideoProcessorInputViewDimension.Texture2D,
+                Texture2D = new Texture2DVideoProcessorInputView
+                {
+                    MipSlice = 0,
+                    ArraySlice = checked((uint)frame.ArraySlice)
+                }
             };
-            _videoContext.VideoProcessorBlt(
-                _processor!,
-                _outputView!,
-                0,
-                1,
-                [stream]).CheckError();
+            _videoDevice!.CreateVideoProcessorInputView(
+                texture,
+                _enumerator!,
+                inputDescription,
+                out var inputView).CheckError();
+            using (inputView)
+            {
+                var sourceRect = new RawRect(0, 0, sourceWidth, sourceHeight);
+                var destinationRect = CalculateDestinationRect(
+                    sourceWidth,
+                    sourceHeight,
+                    _outputWidth,
+                    _outputHeight,
+                    stretch);
+                _videoContext!.VideoProcessorSetStreamSourceRect(_processor!, 0, true, sourceRect);
+                _videoContext.VideoProcessorSetStreamDestRect(_processor!, 0, true, destinationRect);
+                _videoContext.VideoProcessorSetOutputTargetRect(
+                    _processor!,
+                    true,
+                    new RawRect(0, 0, _outputWidth, _outputHeight));
+                var stream = new VideoProcessorStream
+                {
+                    Enable = true,
+                    InputSurface = inputView
+                };
+                _videoContext.VideoProcessorBlt(
+                    _processor!,
+                    _outputView!,
+                    0,
+                    1,
+                    [stream]).CheckError();
+            }
         }
 
         _swapChain!.Present(0, PresentFlags.None).CheckError();
@@ -171,6 +175,9 @@ internal sealed class WindowsD3D11Presenter : IDisposable
         _videoDevice = _device.QueryInterface<ID3D11VideoDevice>();
         using var immediateContext = _device.ImmediateContext;
         _videoContext = immediateContext.QueryInterface<ID3D11VideoContext>();
+        _deviceSynchronizer = new WindowsD3D11DeviceSynchronizer(
+            _device,
+            immediateContext);
     }
 
     private void EnsurePipeline(
@@ -290,6 +297,8 @@ internal sealed class WindowsD3D11Presenter : IDisposable
         _videoContext = null;
         _videoDevice?.Dispose();
         _videoDevice = null;
+        _deviceSynchronizer?.Dispose();
+        _deviceSynchronizer = null;
         _device?.Dispose();
         _device = null;
     }

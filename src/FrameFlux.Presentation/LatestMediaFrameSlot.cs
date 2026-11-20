@@ -18,7 +18,7 @@ internal sealed class LatestMediaFrameSlot : IDisposable
 
     public bool TrySubmit(IMediaFrameLease frame, out bool schedulePresentation)
     {
-        ArgumentNullException.ThrowIfNull(frame);
+        RuntimeCompat.NotNull(frame, nameof(frame));
 
         IMediaFrameLease? replacedFrame;
         lock (_sync)

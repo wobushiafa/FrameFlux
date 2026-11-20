@@ -67,8 +67,8 @@ internal static class FFmpegLibraryLoader
             }
 
             var directories = _configuredDirectory is null
-                ? GetCandidateDirectories(AppContext.BaseDirectory, RuntimeInformation.RuntimeIdentifier)
-                : GetCandidateDirectories(_configuredDirectory, RuntimeInformation.RuntimeIdentifier);
+                ? GetCandidateDirectories(AppContext.BaseDirectory, RuntimeCompat.RuntimeIdentifier)
+                : GetCandidateDirectories(_configuredDirectory, RuntimeCompat.RuntimeIdentifier);
             if (_configuredDirectory is not null)
             {
                 ValidateFFmpegDirectory(directories);
@@ -108,7 +108,7 @@ internal static class FFmpegLibraryLoader
         directories
             .SelectMany(Directory.EnumerateFiles)
             .Where(path => IsComponentLibrary(Path.GetFileName(path), component, platform))
-            .OrderDescending(NaturalFileNameComparer.Instance)
+            .OrderByDescending(path => path, NaturalFileNameComparer.Instance)
             .FirstOrDefault();
 
     private static void ValidateFFmpegDirectory(IReadOnlyCollection<string> directories)
@@ -385,7 +385,7 @@ internal static class FFmpegLibraryLoader
                 $"The configured FFmpeg library directory does not exist: '{fullPath}'.");
         }
 
-        return Path.TrimEndingDirectorySeparator(fullPath);
+        return RuntimeCompat.TrimDirectorySeparator(fullPath);
     }
 
     private static bool IsComponentLibrary(string fileName, string component, FFmpegLibraryPlatform platform)

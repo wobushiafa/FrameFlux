@@ -22,9 +22,7 @@ internal static class FfmpegRuntimeDiagnostics
     public static string CreateSummary()
     {
         using var process = Process.GetCurrentProcess();
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"rss {FormatMegabytes(process.WorkingSet64)} | private {FormatMegabytes(process.PrivateMemorySize64)} | gc {FormatMegabytes(GC.GetTotalMemory(false))} | threads {process.Threads.Count} | clients {Volatile.Read(ref _activeStreamClients)}");
+        return RuntimeCompat.Invariant($"rss {FormatMegabytes(process.WorkingSet64)} | private {FormatMegabytes(process.PrivateMemorySize64)} | gc {FormatMegabytes(GC.GetTotalMemory(false))} | threads {process.Threads.Count} | clients {Volatile.Read(ref _activeStreamClients)}");
     }
 
     private static string FormatMegabytes(long bytes)

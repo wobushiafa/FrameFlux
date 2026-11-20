@@ -24,8 +24,8 @@ public sealed class WebRtcFrameBufferPool : IDisposable
         int maximumBufferCount = DefaultMaximumBufferCount,
         long maximumRetainedBytes = DefaultMaximumRetainedBytes)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(maximumBufferCount, 1);
-        ArgumentOutOfRangeException.ThrowIfLessThan(maximumRetainedBytes, 1);
+        RuntimeCompat.AtLeast(maximumBufferCount, 1, nameof(maximumBufferCount));
+        RuntimeCompat.AtLeast(maximumRetainedBytes, 1, nameof(maximumRetainedBytes));
         _maximumBufferCount = maximumBufferCount;
         _maximumRetainedBytes = maximumRetainedBytes;
     }
@@ -54,10 +54,10 @@ public sealed class WebRtcFrameBufferPool : IDisposable
 
     public IntPtr Rent(int requiredSize)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(requiredSize, 1);
+        RuntimeCompat.AtLeast(requiredSize, 1, nameof(requiredSize));
         lock (_sync)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            RuntimeCompat.NotDisposed(_disposed, this);
             if (_buffersBySize.TryGetValue(requiredSize, out var buffers) &&
                 buffers.TryPop(out var buffer))
             {
@@ -120,7 +120,7 @@ public sealed class WebRtcFrameBufferPool : IDisposable
     {
         lock (_sync)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            RuntimeCompat.NotDisposed(_disposed, this);
             _acceptingReturns = true;
         }
     }

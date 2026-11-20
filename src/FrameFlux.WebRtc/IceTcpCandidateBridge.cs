@@ -83,9 +83,9 @@ internal sealed class IceTcpCandidateBridge : IAsyncDisposable
             if (length == 0) continue;
             await stream.ReadExactlyAsync(packet.AsMemory(0, length), _cts.Token).ConfigureAwait(false);
             var now = System.Diagnostics.Stopwatch.GetTimestamp();
-            if (lastPacket != 0 && System.Diagnostics.Stopwatch.GetElapsedTime(lastPacket, now).TotalMilliseconds > 500)
+            if (lastPacket != 0 && RuntimeCompat.Elapsed(lastPacket, now).TotalMilliseconds > 500)
                 System.Diagnostics.Trace.TraceWarning("ICE TCP incoming gap {0:F0}ms, next packet type {1}",
-                    System.Diagnostics.Stopwatch.GetElapsedTime(lastPacket, now).TotalMilliseconds, packet[0]);
+                    RuntimeCompat.Elapsed(lastPacket, now).TotalMilliseconds, packet[0]);
             lastPacket = now;
             await _udp.SendAsync(packet.AsMemory(0, length), _cts.Token).ConfigureAwait(false);
         }

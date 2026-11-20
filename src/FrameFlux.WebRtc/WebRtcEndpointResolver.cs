@@ -32,7 +32,7 @@ public static class WebRtcEndpointResolver
     /// </summary>
     public static WebRtcResolvedEndpoint Resolve(MediaSource source, WebRtcPlayerOptions? options = null)
     {
-        ArgumentNullException.ThrowIfNull(source);
+        RuntimeCompat.NotNull(source, nameof(source));
 
         var uri = source.Uri;
         var uriString = uri.ToString();
@@ -125,8 +125,8 @@ public static class WebRtcEndpointResolver
         HttpClient? customClient = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(whepUrl);
-        ArgumentException.ThrowIfNullOrWhiteSpace(offerSdp);
+        RuntimeCompat.NotNull(whepUrl, nameof(whepUrl));
+        RuntimeCompat.NotBlank(offerSdp, nameof(offerSdp));
 
         var client = customClient ?? options.HttpClient ?? SharedHttpClient;
         using var request = new HttpRequestMessage(HttpMethod.Post, whepUrl)

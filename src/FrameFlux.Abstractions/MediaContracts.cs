@@ -8,7 +8,7 @@ public sealed record MediaSource
 {
     public MediaSource(Uri uri)
     {
-        ArgumentNullException.ThrowIfNull(uri);
+        RuntimeCompat.NotNull(uri, nameof(uri));
         if (!uri.IsAbsoluteUri)
         {
             throw new ArgumentException("Media source URI must be absolute.", nameof(uri));
@@ -25,13 +25,13 @@ public sealed record MediaSource
 
     public static MediaSource FromFile(string path)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        RuntimeCompat.NotBlank(path, nameof(path));
         return new MediaSource(new Uri(Path.GetFullPath(path)));
     }
 
     public static MediaSource Parse(string value)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        RuntimeCompat.NotBlank(value, nameof(value));
         if (Path.IsPathFullyQualified(value))
         {
             return FromFile(value);

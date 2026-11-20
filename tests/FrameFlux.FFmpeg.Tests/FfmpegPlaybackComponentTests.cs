@@ -57,6 +57,7 @@ public sealed class FfmpegPlaybackComponentTests
     {
         var source = new FfmpegPlaybackOptions
         {
+            AudioOutputFactory = (_, _) => throw new InvalidOperationException("Test audio factory"),
             FrameDeliveryMode = FfmpegFrameDeliveryMode.DmaBuf,
             Transport = "udp",
             MaxFramesPerSecond = 24,
@@ -73,6 +74,7 @@ public sealed class FfmpegPlaybackComponentTests
         var fallback = FfmpegPlaybackPolicy.CreateSoftwareFallbackOptions(source);
 
         Assert.Equal(FfmpegVideoDecodingMode.SoftwareOnly, fallback.VideoDecodingMode);
+        Assert.Same(source.AudioOutputFactory, fallback.AudioOutputFactory);
         Assert.Equal(source.FrameDeliveryMode, fallback.FrameDeliveryMode);
         Assert.Equal(source.Transport, fallback.Transport);
         Assert.Equal(source.MaxFramesPerSecond, fallback.MaxFramesPerSecond);

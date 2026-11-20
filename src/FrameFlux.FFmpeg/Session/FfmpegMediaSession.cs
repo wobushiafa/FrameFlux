@@ -44,10 +44,10 @@ internal interface IFfmpegMediaSession : IAsyncDisposable
     ValueTask StopAsync(CancellationToken cancellationToken = default);
 
     ValueTask SetPausedAsync(bool paused, CancellationToken cancellationToken = default) =>
-        ValueTask.FromException(new NotSupportedException("This media session does not support pausing."));
+        RuntimeCompat.Failure(new NotSupportedException("This media session does not support pausing."));
 
     ValueTask SeekAsync(TimeSpan position, CancellationToken cancellationToken = default) =>
-        ValueTask.FromException(
+        RuntimeCompat.Failure(
             new NotSupportedException("This media session does not support seeking."));
 
 
@@ -59,12 +59,19 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
     private readonly object _sync = new();
     private readonly ILogger _logger;
     private readonly IMediaVideoOutput? _videoOutput;
+    private readonly bool _isSharedPhysicalSession;
     private readonly SemaphoreSlim? _openOperationSemaphore;
+    private readonly HashSet<IMediaVideoOutput> _sharedVideoOutputs = [];
     private FfmpegPlaybackClient? _client;
+    private ISharedPlatformVideoOutput? _sharedPlatformOutput;
+    private readonly Func<int, int, IMediaAudioOutput>? _audioOutputFactory;
     private Task? _stopTask;
     private DiagnosticActivity? _activity;
     private EventHandler<MediaVideoFrame>? _frameReceived;
     private Action<IMediaFrameLease>? _frameLeaseConsumer;
+    private Action<IMediaFrameLease>? _supplementaryCpuFrameLeaseConsumer;
+    private bool _requiresNativeFrames = true;
+    private bool _requiresCpuFrames;
     private MediaPlaybackState _state = MediaPlaybackState.Idle;
     private MediaSnapshot? _lastSnapshot;
     private FfmpegPerformanceSnapshot _lastPerformance;
@@ -83,7 +90,9 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         bool isMuted,
         IMediaVideoOutput? videoOutput,
         SemaphoreSlim? openOperationSemaphore = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        Func<int, int, IMediaAudioOutput>? audioOutputFactory = null,
+        bool isSharedPhysicalSession = false)
     {
         Source = source ?? throw new ArgumentNullException(nameof(source));
         Options = options ?? throw new ArgumentNullException(nameof(options));
@@ -91,7 +100,9 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         _volume = volume;
         _isMuted = isMuted;
         _videoOutput = videoOutput;
+        _isSharedPhysicalSession = isSharedPhysicalSession;
         _openOperationSemaphore = openOperationSemaphore;
+        _audioOutputFactory = audioOutputFactory;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
     }
 
@@ -252,6 +263,35 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         }
     }
 
+    MediaFrameStorageKind IMediaFrameLeaseSource.NativeFrameStorageKind =>
+        ResolveNativeFrameStorageKind();
+
+    bool IMediaFrameLeaseSource.HandlesOutputNatively(IMediaVideoOutput output)
+    {
+        RuntimeCompat.NotNull(output, nameof(output));
+        ISharedPlatformVideoOutput? sharedPlatformOutput;
+        lock (_sync)
+        {
+            sharedPlatformOutput = _sharedPlatformOutput;
+        }
+
+        if (sharedPlatformOutput is not null)
+        {
+            return sharedPlatformOutput.HandlesOutputNatively(output);
+        }
+
+        if (_isSharedPhysicalSession &&
+            PlatformVideoDecoderRegistry.HandlesSharedOutputNatively(output, CreateEngineOptions()))
+        {
+            return true;
+        }
+
+        var nativeStorageKind = ResolveNativeFrameStorageKind();
+        return nativeStorageKind is MediaFrameStorageKind.D3D11Texture or MediaFrameStorageKind.DmaBuf &&
+            (output.PreferredFrameStorage == nativeStorageKind ||
+             output.Supports(nativeStorageKind, MediaPixelFormat.Unknown));
+    }
+
     void IMediaFrameLeaseSource.SetFrameLeaseConsumer(
         Action<IMediaFrameLease>? consumer)
     {
@@ -277,39 +317,144 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         }
     }
 
+    void IMediaFrameLeaseSource.SetSupplementaryCpuFrameLeaseConsumer(
+        Action<IMediaFrameLease>? consumer)
+    {
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (consumer is not null &&
+                _videoOutput is not null)
+            {
+                throw new InvalidOperationException(
+                    "A media session cannot use a video output and an internal frame consumer together.");
+            }
+            if (consumer is not null &&
+                _supplementaryCpuFrameLeaseConsumer is not null &&
+                _supplementaryCpuFrameLeaseConsumer != consumer)
+            {
+                throw new InvalidOperationException(
+                    "The media session already has an internal CPU frame consumer.");
+            }
+
+            _supplementaryCpuFrameLeaseConsumer = consumer;
+            UpdateFrameDeliveryLocked();
+        }
+    }
+
+    void IMediaFrameLeaseSource.UpdateSharedFrameRequirements(
+        bool requiresNativeFrames,
+        bool requiresCpuFrames)
+    {
+        lock (_sync)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _requiresNativeFrames = requiresNativeFrames;
+            _requiresCpuFrames = requiresCpuFrames;
+            UpdateFrameDeliveryLocked();
+        }
+    }
+
+    void IMediaFrameLeaseSource.AttachSharedVideoOutput(IMediaVideoOutput output)
+    {
+        RuntimeCompat.NotNull(output, nameof(output));
+        ISharedPlatformVideoOutput? sharedPlatformOutput;
+        lock (_sync)
+        {
+            ThrowIfDisposed();
+            if (!_sharedVideoOutputs.Add(output))
+            {
+                return;
+            }
+
+            sharedPlatformOutput = _sharedPlatformOutput;
+        }
+
+        sharedPlatformOutput?.AttachOutput(output);
+    }
+
+    void IMediaFrameLeaseSource.DetachSharedVideoOutput(IMediaVideoOutput output)
+    {
+        RuntimeCompat.NotNull(output, nameof(output));
+        ISharedPlatformVideoOutput? sharedPlatformOutput;
+        lock (_sync)
+        {
+            if (!_sharedVideoOutputs.Remove(output))
+            {
+                return;
+            }
+
+            sharedPlatformOutput = _sharedPlatformOutput;
+        }
+
+        sharedPlatformOutput?.DetachOutput(output);
+    }
+
     public ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        FfmpegPlaybackClient client;
+        ISharedPlatformVideoOutput? sharedPlatformOutput = null;
+        IMediaVideoOutput[] attachedOutputs;
         lock (_sync)
         {
             ThrowIfDisposed();
             if (_client is not null)
             {
-                return ValueTask.CompletedTask;
+                return default(ValueTask);
             }
 
-            var client = new FfmpegPlaybackClient(
-                Source.Uri.IsFile ? Source.Uri.LocalPath : Source.Uri.ToString(),
-                CreateEngineOptions(),
-                _videoOutput);
-            client.SetPlaybackRate(_playbackRate);
-            client.ConnectionStateChanged += OnConnectionStateChanged;
-            client.StreamError += OnStreamError;
-            client.HardwareVideoDecodingChanged += OnHardwareVideoDecodingChanged;
-            client.PerformanceUpdated += OnPerformanceUpdated;
-            client.OnFrameLeaseReceived += OnFrameLeaseReceived;
-            client.OnSnapshotFrameLeaseReceived += OnSnapshotFrameLeaseReceived;
-            _client = client;
-            _activity = FfmpegTelemetry.Activities.StartActivity("media.session", ActivityKind.Client);
-            _activity?.SetTag("media.source", Source.Uri.GetLeftPart(UriPartial.Authority));
-            _activity?.SetTag("media.transport", Options.Network.Transport.ToString());
-            UpdateFrameDeliveryLocked();
-            client.Start();
+            var engineOptions = CreateEngineOptions();
+            if (_isSharedPhysicalSession && _videoOutput is null)
+            {
+                sharedPlatformOutput = PlatformVideoDecoderRegistry.TryCreateSharedOutput(engineOptions);
+                _sharedPlatformOutput = sharedPlatformOutput;
+            }
+
+            attachedOutputs = sharedPlatformOutput is not null
+                ? [.. _sharedVideoOutputs]
+                : [];
+
+            try
+            {
+                client = new FfmpegPlaybackClient(
+                    Source.Uri.IsFile ? Source.Uri.LocalPath : Source.Uri.ToString(),
+                    engineOptions,
+                    (IMediaVideoOutput?)sharedPlatformOutput ?? _videoOutput);
+                client.SetPlaybackRate(_playbackRate);
+                client.ConnectionStateChanged += OnConnectionStateChanged;
+                client.StreamError += OnStreamError;
+                client.HardwareVideoDecodingChanged += OnHardwareVideoDecodingChanged;
+                client.PerformanceUpdated += OnPerformanceUpdated;
+                client.OnFrameLeaseReceived += OnFrameLeaseReceived;
+                client.OnSnapshotFrameLeaseReceived += OnSnapshotFrameLeaseReceived;
+                _client = client;
+                _activity = FfmpegTelemetry.Activities.StartActivity("media.session", ActivityKind.Client);
+                _activity?.SetTag("media.source", Source.Uri.GetLeftPart(UriPartial.Authority));
+                _activity?.SetTag("media.transport", Options.Network.Transport.ToString());
+                UpdateFrameDeliveryLocked();
+            }
+            catch
+            {
+                _sharedPlatformOutput = null;
+                sharedPlatformOutput?.Dispose();
+                throw;
+            }
         }
 
+        foreach (var attachedOutput in attachedOutputs)
+        {
+            sharedPlatformOutput!.AttachOutput(attachedOutput);
+        }
+
+        client.Start();
         FfmpegTelemetry.SessionsStarted.Add(1);
         _logger.LogInformation("Started media session for {Host}", Source.Uri.Host);
-        return ValueTask.CompletedTask;
+        return default(ValueTask);
     }
 
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)
@@ -351,7 +496,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             : _client?.IsBuffering == true
                 ? MediaPlaybackState.Buffering
                 : MediaPlaybackState.Playing);
-        return ValueTask.CompletedTask;
+        return default(ValueTask);
     }
 
     public ValueTask SeekAsync(
@@ -374,7 +519,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         cancellationToken.ThrowIfCancellationRequested();
         lock (_sync)
         {
-            return ValueTask.FromResult(
+            return RuntimeCompat.Result(
                 _lastSnapshot is null
                     ? null
                     : _lastSnapshot with { Data = _lastSnapshot.Data.ToArray() });
@@ -413,6 +558,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             client.OnSnapshotFrameLeaseReceived -= OnSnapshotFrameLeaseReceived;
             client.Dispose();
 
+            ISharedPlatformVideoOutput? sharedPlatformOutput = null;
             lock (_sync)
             {
                 if (ReferenceEquals(_client, client))
@@ -420,8 +566,13 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
                     _client = null;
                     _stopTask = null;
                     _lastSnapshot = null;
+                    sharedPlatformOutput = _sharedPlatformOutput;
+                    _sharedPlatformOutput = null;
                 }
             }
+
+            sharedPlatformOutput?.ConfigureCpuFrameDelivery(null, null, false);
+            sharedPlatformOutput?.Dispose();
 
             _activity?.Dispose();
             _activity = null;
@@ -434,6 +585,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
     private FfmpegPlaybackOptions CreateEngineOptions() =>
         new()
         {
+            AudioOutputFactory = _audioOutputFactory,
             Transport = Options.Network.Transport switch
             {
                 MediaTransport.Udp => "udp",
@@ -443,7 +595,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             },
             VideoDecodingMode = FfmpegPlaybackConfiguration.ResolveVideoDecodingMode(
                 Options.Video.DecodingPolicy),
-            FrameDeliveryMode = ResolveFrameDeliveryMode(_videoOutput),
+            FrameDeliveryMode = ResolveSessionFrameDeliveryMode(),
             OpenTimeoutMilliseconds = ToMilliseconds(Options.Network.OpenTimeout),
             EndpointProbeTimeoutMilliseconds = ToMilliseconds(Options.Network.EndpointProbeTimeout),
             ReadTimeoutMilliseconds = ToMilliseconds(Options.Network.ReadTimeout),
@@ -476,6 +628,39 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             MediaFrameStorageKind.D3D11Texture => FfmpegFrameDeliveryMode.D3D11Texture,
             MediaFrameStorageKind.DmaBuf => FfmpegFrameDeliveryMode.DmaBuf,
             _ => FfmpegFrameDeliveryMode.CpuMemory
+        };
+
+    private FfmpegFrameDeliveryMode ResolveSessionFrameDeliveryMode()
+    {
+        if (!_isSharedPhysicalSession || _videoOutput is not null)
+        {
+            return ResolveFrameDeliveryMode(_videoOutput);
+        }
+
+        if (Options.Video.DecodingPolicy == MediaVideoDecodingPolicy.SoftwareOnly)
+        {
+            return FfmpegFrameDeliveryMode.CpuMemory;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            return FfmpegFrameDeliveryMode.D3D11Texture;
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return FfmpegFrameDeliveryMode.DmaBuf;
+        }
+
+        return FfmpegFrameDeliveryMode.CpuMemory;
+    }
+
+    private MediaFrameStorageKind ResolveNativeFrameStorageKind() =>
+        ResolveSessionFrameDeliveryMode() switch
+        {
+            FfmpegFrameDeliveryMode.D3D11Texture => MediaFrameStorageKind.D3D11Texture,
+            FfmpegFrameDeliveryMode.DmaBuf => MediaFrameStorageKind.DmaBuf,
+            _ => MediaFrameStorageKind.CpuMemory
         };
 
     private static int ToMilliseconds(TimeSpan? value) =>
@@ -601,28 +786,43 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
 
     private void OnSnapshotFrameLeaseReceived(FfmpegMediaFrameLease lease)
     {
+        var deliveredToConsumer = false;
         try
         {
-            var frame = TryCopyFrame(lease, required: true);
-            if (frame is null)
-            {
-                return;
-            }
-
+            Action<IMediaFrameLease>? supplementaryConsumer;
             EventHandler<MediaVideoFrame>? subscribers;
+            var keepLatestFrame = Options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame;
             lock (_sync)
             {
-                _lastSnapshot = new MediaSnapshot(
-                    frame.Data,
-                    frame.Width,
-                    frame.Height,
-                    frame.Stride,
-                    frame.PixelFormat,
-                    frame.CapturedAt);
                 subscribers = _frameReceived;
+                supplementaryConsumer = _supplementaryCpuFrameLeaseConsumer;
             }
 
-            PublishFrame(subscribers, frame);
+            var frame = TryCopyFrame(lease, keepLatestFrame || subscribers is not null);
+            if (frame is not null)
+            {
+                lock (_sync)
+                {
+                    if (keepLatestFrame)
+                    {
+                        _lastSnapshot = new MediaSnapshot(
+                            frame.Data,
+                            frame.Width,
+                            frame.Height,
+                            frame.Stride,
+                            frame.PixelFormat,
+                            frame.CapturedAt);
+                    }
+                }
+
+                PublishFrame(subscribers, frame);
+            }
+
+            if (supplementaryConsumer is not null)
+            {
+                supplementaryConsumer(lease);
+                deliveredToConsumer = true;
+            }
         }
         catch (Exception exception)
         {
@@ -630,7 +830,10 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         }
         finally
         {
-            lease.Dispose();
+            if (!deliveredToConsumer)
+            {
+                lease.Dispose();
+            }
         }
     }
 
@@ -652,7 +855,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             return null;
         }
 
-        var data = GC.AllocateUninitializedArray<byte>(byteCount);
+        var data = RuntimeCompat.AllocateBytes(byteCount);
         Marshal.Copy(lease.Buffer, data, 0, byteCount);
         return new MediaVideoFrame(
             data,
@@ -732,12 +935,27 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         }
     }
 
-    private void UpdateFrameDeliveryLocked() =>
-        _client?.SetFrameDeliveryEnabled(
+    private void UpdateFrameDeliveryLocked()
+    {
+        if (_client is null)
+        {
+            return;
+        }
+
+        if (_isSharedPhysicalSession)
+        {
+            _client.SetSharedFrameDeliveryRequirements(
+                _requiresNativeFrames,
+                _requiresCpuFrames || _frameReceived is not null);
+        }
+
+        _client.SetFrameDeliveryEnabled(
             Options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame ||
             _frameReceived is not null ||
             _frameLeaseConsumer is not null ||
+            _supplementaryCpuFrameLeaseConsumer is not null ||
             _videoOutput is not null);
+    }
 
-    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
+    private void ThrowIfDisposed() => RuntimeCompat.NotDisposed(_disposed, this);
 }

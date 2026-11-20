@@ -28,7 +28,7 @@ public sealed class MediaPresentationPolicyTests
     }
 
     [Fact]
-    public void Automatic_UsesSoftwareForSharedSession()
+    public void Automatic_UsesGpuCompositionForSharedSession()
     {
         var plan = MediaPresentationPolicy.Resolve(
             MediaVideoPresentationMode.Automatic,
@@ -39,7 +39,55 @@ public sealed class MediaPresentationPolicyTests
             platformGpuPresentationAvailable: true,
             hasOverlay: false);
 
+        Assert.Equal(MediaVideoPresentationMode.GpuComposition, plan.EffectiveMode);
+        Assert.True(plan.UsesGpuComposition);
+        Assert.False(plan.UsesNativeSurface);
+    }
+
+    [Fact]
+    public void Automatic_UsesSoftwareForSharedSessionWithSoftwareOnlyDecoding()
+    {
+        var plan = MediaPresentationPolicy.Resolve(
+            MediaVideoPresentationMode.Automatic,
+            new MediaOpenOptions
+            {
+                SessionSharing = MediaSessionSharingMode.Shared,
+                Video = new MediaVideoOptions
+                {
+                    DecodingPolicy = MediaVideoDecodingPolicy.SoftwareOnly
+                }
+            },
+            platformGpuPresentationAvailable: true,
+            hasOverlay: false);
+
         Assert.Equal(MediaVideoPresentationMode.SoftwareBitmap, plan.EffectiveMode);
+    }
+
+    [Theory]
+    [InlineData(MediaVideoPresentationMode.GpuComposition, false, true)]
+    [InlineData(MediaVideoPresentationMode.NativeSurface, true, false)]
+    [InlineData(MediaVideoPresentationMode.SoftwareBitmap, false, false)]
+    public void SharedSession_SupportsAllPresentationModes(
+        MediaVideoPresentationMode requestedMode,
+        bool expectedNativeSurface,
+        bool expectedGpuComposition)
+    {
+        var plan = MediaPresentationPolicy.Resolve(
+            requestedMode,
+            new MediaOpenOptions
+            {
+                SessionSharing = MediaSessionSharingMode.Shared,
+                Video = new MediaVideoOptions
+                {
+                    DecodingPolicy = MediaVideoDecodingPolicy.HardwarePreferred
+                }
+            },
+            platformGpuPresentationAvailable: true,
+            hasOverlay: false);
+
+        Assert.Equal(requestedMode, plan.EffectiveMode);
+        Assert.Equal(expectedNativeSurface, plan.UsesNativeSurface);
+        Assert.Equal(expectedGpuComposition, plan.UsesGpuComposition);
     }
 
     [Fact]

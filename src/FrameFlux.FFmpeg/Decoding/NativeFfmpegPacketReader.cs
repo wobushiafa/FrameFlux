@@ -119,7 +119,7 @@ internal sealed class NativeFfmpegPacketReader : IDisposable
 
     internal void Seek(TimeSpan position)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        RuntimeCompat.NotDisposed(_disposed, this);
         var timestamp = FfmpegDecoder.GetSeekTimestamp(position, _streamInfo);
         if (FrameFluxFFmpegNative.Seek(_session, timestamp) < 0)
         {
@@ -132,7 +132,7 @@ internal sealed class NativeFfmpegPacketReader : IDisposable
 
     internal bool TryReadPacket(out NativeEncodedPacket? packet)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        RuntimeCompat.NotDisposed(_disposed, this);
         var result = FrameFluxFFmpegNative.ReadPacket(_session, out var handle);
         if (result != NativeReadResult.Ok || handle.IsInvalid)
         {

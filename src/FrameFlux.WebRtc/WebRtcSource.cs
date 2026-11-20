@@ -10,7 +10,7 @@ public static class WebRtcSource
     /// </summary>
     public static MediaSource FromSdp(string sdp)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(sdp);
+        RuntimeCompat.NotBlank(sdp, nameof(sdp));
         return MediaSource.FromUri(new Uri("data:application/sdp;utf-8," + Uri.EscapeDataString(sdp)));
     }
 
@@ -19,7 +19,7 @@ public static class WebRtcSource
     /// </summary>
     public static MediaSource FromJson(string json)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(json);
+        RuntimeCompat.NotBlank(json, nameof(json));
         return MediaSource.FromUri(new Uri("data:application/json;utf-8," + Uri.EscapeDataString(json)));
     }
 
@@ -28,7 +28,7 @@ public static class WebRtcSource
     /// </summary>
     public static MediaSource FromWhep(string url)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(url);
+        RuntimeCompat.NotBlank(url, nameof(url));
         return MediaSource.Parse(url);
     }
 
@@ -37,7 +37,7 @@ public static class WebRtcSource
     /// </summary>
     public static MediaSource FromWhep(Uri uri)
     {
-        ArgumentNullException.ThrowIfNull(uri);
+        RuntimeCompat.NotNull(uri, nameof(uri));
         return MediaSource.FromUri(uri);
     }
 
@@ -46,7 +46,7 @@ public static class WebRtcSource
     /// </summary>
     public static MediaSource FromFile(string filePath)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        RuntimeCompat.NotBlank(filePath, nameof(filePath));
         return MediaSource.FromFile(filePath);
     }
 }

@@ -52,7 +52,7 @@ internal sealed class SharedMediaSessionPool
             }
         }
 
-        return dispose ? entry.DisposeAsync() : ValueTask.CompletedTask;
+        return dispose ? entry.DisposeAsync() : default(ValueTask);
     }
 
     private sealed record SharedMediaSessionKey(string Source, MediaOpenOptions Options)
@@ -114,7 +114,7 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            RuntimeCompat.NotDisposed(_disposed, this);
             var leaseAdded = false;
             var startPhysicalSession = false;
             var physicalStartAttempted = false;
@@ -129,6 +129,10 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
 
                     leaseAdded = true;
                     startPhysicalSession = _activeLeases.Count == 1;
+                    if (lease.VideoOutput is { } videoOutput)
+                    {
+                        _frameLeaseSource?.AttachSharedVideoOutput(videoOutput);
+                    }
                     RefreshFrameSubscriptionsLocked();
                 }
 
@@ -151,6 +155,16 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
                     lock (_sync)
                     {
                         _activeLeases.Remove(lease);
+                        if (lease.VideoOutput is { } videoOutput)
+                        {
+                            try
+                            {
+                                _frameLeaseSource?.DetachSharedVideoOutput(videoOutput);
+                            }
+                            catch
+                            {
+                            }
+                        }
                         try
                         {
                             RefreshFrameSubscriptionsLocked();
@@ -197,6 +211,10 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
                 }
 
                 stopPhysicalSession = _activeLeases.Count == 0;
+                if (lease.VideoOutput is { } videoOutput)
+                {
+                    _frameLeaseSource?.DetachSharedVideoOutput(videoOutput);
+                }
                 RefreshFrameSubscriptionsLocked();
             }
 
@@ -240,7 +258,15 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
             _session.Error -= OnError;
             lock (_sync)
             {
+                var activeLeases = _activeLeases.ToArray();
                 _activeLeases.Clear();
+                foreach (var activeLease in activeLeases)
+                {
+                    if (activeLease.VideoOutput is { } videoOutput)
+                    {
+                        _frameLeaseSource?.DetachSharedVideoOutput(videoOutput);
+                    }
+                }
                 RefreshFrameSubscriptionsLocked();
                 if (_managedFrameSubscriptionAttached)
                 {
@@ -293,7 +319,7 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
     private void OnFrameLeaseReceived(IMediaFrameLease frame)
     {
         var leases = SnapshotActiveLeases()
-            .Where(static lease => lease.HasVideoOutput)
+            .Where(lease => lease.SupportsFrame(frame.StorageKind, frame.PixelFormat))
             .ToArray();
         if (leases.Length == 0)
         {
@@ -301,6 +327,29 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
             return;
         }
 
+        DeliverSharedFrameLease(leases, frame);
+    }
+
+    private void OnSupplementaryCpuFrameLeaseReceived(IMediaFrameLease frame)
+    {
+        var leases = SnapshotActiveLeases()
+            .Where(lease =>
+                !IsNativeLeaseOutput(lease) &&
+                lease.SupportsFrame(frame.StorageKind, frame.PixelFormat))
+            .ToArray();
+        if (leases.Length == 0)
+        {
+            frame.Dispose();
+            return;
+        }
+
+        DeliverSharedFrameLease(leases, frame);
+    }
+
+    private static void DeliverSharedFrameLease(
+        SharedMediaSessionLease[] leases,
+        IMediaFrameLease frame)
+    {
         var owner = new ReferenceCountedMediaFrameLeaseOwner(frame);
         try
         {
@@ -323,6 +372,10 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
         }
     }
 
+    private bool IsNativeLeaseOutput(SharedMediaSessionLease lease) =>
+        lease.VideoOutput is { } output &&
+        _frameLeaseSource?.HandlesOutputNatively(output) == true;
+
     private SharedMediaSessionLease[] SnapshotActiveLeases()
     {
         lock (_sync)
@@ -344,8 +397,21 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
         {
             _frameLeaseSource.SetFrameLeaseConsumer(
                 needsFrameLeaseConsumer ? OnFrameLeaseReceived : null);
+            _frameLeaseSource.SetSupplementaryCpuFrameLeaseConsumer(
+                needsFrameLeaseConsumer ? OnSupplementaryCpuFrameLeaseReceived : null);
             _frameLeaseConsumerAttached = needsFrameLeaseConsumer;
         }
+
+        var requiresNativeFrames = _activeLeases.Any(IsNativeLeaseOutput);
+        var requiresCpuFrames = _activeLeases.Any(lease =>
+            lease.HasFrameSubscribers ||
+            lease.Options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame ||
+            (lease.HasVideoOutput &&
+             !IsNativeLeaseOutput(lease) &&
+             lease.SupportsFrame(MediaFrameStorageKind.CpuMemory, MediaPixelFormat.Bgra32)));
+        _frameLeaseSource.UpdateSharedFrameRequirements(
+            requiresNativeFrames,
+            requiresCpuFrames);
 
         var needsManagedFrames = _activeLeases.Any(
             static lease => lease.HasFrameSubscribers);
@@ -407,9 +473,14 @@ internal sealed class SharedMediaSessionLease : IFfmpegMediaSession
 
     public MediaDiagnostics Diagnostics => _entry.Diagnostics;
 
+    internal IMediaVideoOutput? VideoOutput => _videoOutput;
+
     internal bool HasVideoOutput => _videoOutput is not null;
 
     internal bool HasFrameSubscribers => Volatile.Read(ref _hasFrameSubscribers) != 0;
+
+    internal bool SupportsFrame(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
+        _videoOutput?.Supports(storageKind, pixelFormat) == true;
 
     public double Volume
     {
@@ -531,7 +602,7 @@ internal sealed class SharedMediaSessionLease : IFfmpegMediaSession
         ThrowIfDisposed();
         return Volatile.Read(ref _started) == 1
             ? _entry.CaptureSnapshotAsync(cancellationToken)
-            : ValueTask.FromResult<MediaSnapshot?>(null);
+            : RuntimeCompat.Result<MediaSnapshot?>(null);
     }
 
     public async ValueTask DisposeAsync()
@@ -709,7 +780,7 @@ internal sealed class SharedMediaSessionLease : IFfmpegMediaSession
     }
 
     private void ThrowIfDisposed() =>
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
+        RuntimeCompat.NotDisposed(Volatile.Read(ref _disposed) == 1, this);
 }
 
 internal sealed class ManagedMediaFrameLease : IMediaFrameLease

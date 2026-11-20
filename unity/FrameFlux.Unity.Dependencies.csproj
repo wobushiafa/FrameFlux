@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../src/FrameFlux.Abstractions/FrameFlux.Abstractions.csproj" />
+    <ProjectReference Include="../src/FrameFlux.Presentation/FrameFlux.Presentation.csproj" />
+    <ProjectReference Include="../src/FrameFlux.FFmpeg/FrameFlux.FFmpeg.csproj" />
+    <ProjectReference Include="../src/FrameFlux.WebRtc/FrameFlux.WebRtc.csproj" />
+  </ItemGroup>
+</Project>

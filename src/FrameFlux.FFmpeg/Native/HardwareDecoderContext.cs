@@ -56,7 +56,9 @@ internal sealed class FFmpegHardwareDecoderContext : IHardwareDecoderContext
     private readonly FFmpegApi _api;
     private readonly FFmpegHardwareApi _hardwareApi;
     private readonly HardwareDecoderBackend _backend;
-    private readonly FFmpegApi.GetFormatDelegate _getFormat;
+    private static readonly FFmpegApi.GetFormatDelegate GetFormat = SelectHardwareFormat;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr, int> Formats = new();
+    private IntPtr _codecContext;
     private IntPtr _deviceContext;
     private IntPtr _transferFrame;
     private int _hardwarePixelFormat = -1;
@@ -69,7 +71,6 @@ internal sealed class FFmpegHardwareDecoderContext : IHardwareDecoderContext
         _api = api;
         _hardwareApi = hardwareApi;
         _backend = backend;
-        _getFormat = SelectHardwareFormat;
     }
 
     public string BackendName => _backend.DisplayName;
@@ -145,10 +146,12 @@ internal sealed class FFmpegHardwareDecoderContext : IHardwareDecoderContext
                 return false;
             }
 
+            candidate._codecContext = codecContext;
+            Formats[codecContext] = candidate._hardwarePixelFormat;
             FFmpegAbi.ConfigureHardwareDecoderCodecContext(
                 codecContext,
                 codecDeviceReference,
-                Marshal.GetFunctionPointerForDelegate(candidate._getFormat),
+                Marshal.GetFunctionPointerForDelegate(GetFormat),
                 api.CodecMajorVersion);
             context = candidate;
             error = string.Empty;
@@ -210,16 +213,19 @@ internal sealed class FFmpegHardwareDecoderContext : IHardwareDecoderContext
 
     public void Dispose()
     {
+        if (_codecContext != IntPtr.Zero) Formats.TryRemove(_codecContext, out _);
         if (_transferFrame != IntPtr.Zero) _api.AvFrameFree(ref _transferFrame);
         if (_deviceContext != IntPtr.Zero) _hardwareApi.AvBufferUnreference(ref _deviceContext);
     }
 
-    private int SelectHardwareFormat(IntPtr codecContext, IntPtr formats)
+    [AOT.MonoPInvokeCallback(typeof(FFmpegApi.GetFormatDelegate))]
+    private static int SelectHardwareFormat(IntPtr codecContext, IntPtr formats)
     {
+        if (formats == IntPtr.Zero || !Formats.TryGetValue(codecContext, out var hardwarePixelFormat)) return -1;
         for (var offset = 0; ; offset += sizeof(int))
         {
             var format = Marshal.ReadInt32(formats, offset);
-            if (format == -1 || format == _hardwarePixelFormat) return format;
+            if (format == -1 || format == hardwarePixelFormat) return format;
         }
     }
 

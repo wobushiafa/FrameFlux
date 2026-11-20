@@ -72,7 +72,7 @@ internal sealed class FFmpegAudioResampler : IDisposable
                 throw new ApplicationException($"swr_convert: {_api.FormatError(converted)} ({converted})");
             }
 
-            var data = GC.AllocateUninitializedArray<byte>(
+            var data = RuntimeCompat.AllocateBytes(
                 checked(converted * AudioOutputFactory.Channels * sizeof(short)));
             Marshal.Copy(_outputBuffer.Pointer, data, 0, data.Length);
             return new NativeAudioFrame(

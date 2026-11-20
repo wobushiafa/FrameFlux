@@ -333,6 +333,7 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
         }
 
         MakeCurrent();
+        _ = EglSwapInterval(_eglDisplay, 0);
         _gl = new NativeGl(GetProcAddress);
         InitializeGlResources();
         _dmaBufInterop = new LinuxDmaBufEglInterop(this);
@@ -470,6 +471,9 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
 
     [DllImport("libEGL.so.1", EntryPoint = "eglSwapBuffers")]
     private static extern int EglSwapBuffers(IntPtr display, IntPtr surface);
+
+    [DllImport("libEGL.so.1", EntryPoint = "eglSwapInterval")]
+    private static extern int EglSwapInterval(IntPtr display, int interval);
 
     [DllImport("libEGL.so.1", EntryPoint = "eglDestroySurface")]
     private static extern int EglDestroySurface(IntPtr display, IntPtr surface);

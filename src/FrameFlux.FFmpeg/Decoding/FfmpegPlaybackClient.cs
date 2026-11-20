@@ -62,6 +62,18 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
 
     internal void SetFrameDeliveryEnabled(bool enabled) => _frameDispatcher.IsEnabled = enabled;
 
+    internal void SetSharedFrameDeliveryRequirements(bool deliverNativeFrames, bool deliverCpuFrames)
+    {
+        _frameDispatcher.SetSharedDeliveryRequirements(deliverNativeFrames, deliverCpuFrames);
+        if (_videoOutput is ISharedPlatformVideoOutput sharedOutput)
+        {
+            sharedOutput.ConfigureCpuFrameDelivery(
+                _frameDispatcher.RentCpuFrameLease,
+                OnSnapshotFrameLeaseReceived,
+                deliverCpuFrames || _options.CreateSnapshotFrames);
+        }
+    }
+
     internal void SetVolume(double volume)
     {
         Volatile.Write(ref _volume, volume);
@@ -296,6 +308,9 @@ internal sealed partial class FfmpegPlaybackClient : IDisposable
                             Volatile.Read(ref _muted),
                             _options.AudioGainDecibels,
                             _options.AudioOutputDeviceId,
+                            output: _options.AudioOutputFactory is { } createOutput
+                                ? new InjectedAudioOutput(createOutput(AudioOutputFactory.SampleRate, AudioOutputFactory.Channels))
+                                : null,
                             bufferDuration: TimeSpan.FromMilliseconds(
                                 GetAudioBufferDurationMilliseconds(
                                     _options.AudioBufferDurationMilliseconds,

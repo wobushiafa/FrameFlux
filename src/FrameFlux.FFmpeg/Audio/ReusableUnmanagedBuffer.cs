@@ -14,8 +14,8 @@ internal sealed class ReusableUnmanagedBuffer : IDisposable
 
     internal void EnsureCapacity(int requiredCapacity)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        ArgumentOutOfRangeException.ThrowIfLessThan(requiredCapacity, 1);
+        RuntimeCompat.NotDisposed(_disposed, this);
+        RuntimeCompat.AtLeast(requiredCapacity, 1, nameof(requiredCapacity));
         if (requiredCapacity <= _capacity)
         {
             return;

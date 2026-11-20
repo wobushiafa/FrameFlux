@@ -10,7 +10,17 @@ namespace FrameFlux.WebRtc;
 /// </summary>
 public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
 {
-    private static readonly Lazy<bool> NativeAvailable = new(ProbeNativeLibraries);
+    private static readonly object NativeConfigurationSync = new();
+    private static string? _nativeLibraryDirectory;
+    private static bool _nativeProbeStarted;
+    private static readonly Lazy<bool> NativeAvailable = new(() =>
+    {
+        lock (NativeConfigurationSync)
+        {
+            _nativeProbeStarted = true;
+            return ProbeNativeLibraries();
+        }
+    });
     private static IntPtr _avUtilHandle;
     private static IntPtr _avCodecHandle;
 
@@ -42,7 +52,8 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
     private IntPtr _frame;
     private IntPtr _transferFrame;
     private int _currentHwPixelFormat = -1;
-    private AvCodecGetFormat? _getFormatHandler;
+    private static readonly AvCodecGetFormat GetFormatHandler = SelectHardwareFormat;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr, int> HardwareFormats = new();
     private IntPtr _getFormatPointer;
     private VideoCodecsEnum? _currentCodec;
     private bool _disposed;
@@ -51,6 +62,20 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
     /// Gets a value indicating whether native FFmpeg libraries are available on this system.
     /// </summary>
     public static bool IsSupported => NativeAvailable.Value;
+
+    /// <summary>Sets the native library directory before the first decoder is created or probed.</summary>
+    public static void ConfigureNativeLibraryDirectory(string directory)
+    {
+        RuntimeCompat.NotBlank(directory, nameof(directory));
+        var path = System.IO.Path.GetFullPath(directory);
+        lock (NativeConfigurationSync)
+        {
+            if (_nativeProbeStarted && !string.Equals(path, _nativeLibraryDirectory,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                throw new InvalidOperationException("FFmpeg decoder libraries have already been probed.");
+            _nativeLibraryDirectory = path;
+        }
+    }
 
     /// <summary>
     /// Gets or sets the decoding policy (SoftwareOnly, HardwarePreferred, HardwareRequired).
@@ -372,7 +397,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
 
         if (_codecContext != IntPtr.Zero)
         {
-            _freeContext!(ref _codecContext);
+            FreeCodecContext(ref _codecContext);
             _codecContext = IntPtr.Zero;
         }
 
@@ -433,8 +458,8 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                         if (devRef != IntPtr.Zero)
                         {
                             _currentHwPixelFormat = hwPixFmt;
-                            _getFormatHandler = SelectHardwareFormat;
-                            _getFormatPointer = Marshal.GetFunctionPointerForDelegate(_getFormatHandler);
+                            HardwareFormats[ctx] = _currentHwPixelFormat;
+                            _getFormatPointer = Marshal.GetFunctionPointerForDelegate(GetFormatHandler);
 
                             // FFmpeg 7/8 x64: offset 192 = get_format, offset 560 = hw_device_ctx
                             Marshal.WriteIntPtr(ctx, 192, _getFormatPointer);
@@ -453,14 +478,14 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
 
         if (!IsHardwareAccelerated && DecodingPolicy == MediaVideoDecodingPolicy.HardwareRequired)
         {
-            _freeContext!(ref ctx);
+            FreeCodecContext(ref ctx);
             throw new InvalidOperationException("Hardware decoding (D3D11VA) is required by policy, but failed to initialize.");
         }
 
         var openResult = _open2!(ctx, pCodec, IntPtr.Zero);
         if (openResult < 0)
         {
-            _freeContext!(ref ctx);
+            FreeCodecContext(ref ctx);
             if (IsHardwareAccelerated && DecodingPolicy == MediaVideoDecodingPolicy.HardwarePreferred)
             {
                 // Fallback to pure software decoding
@@ -474,7 +499,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                 }
                 if (ctx != IntPtr.Zero)
                 {
-                    _freeContext!(ref ctx);
+                    FreeCodecContext(ref ctx);
                 }
             }
             return false;
@@ -494,7 +519,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
 
         if (_codecContext != IntPtr.Zero)
         {
-            _freeContext!(ref _codecContext);
+            FreeCodecContext(ref _codecContext);
             _codecContext = IntPtr.Zero;
         }
 
@@ -535,13 +560,21 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
         }
         else
         {
-            _freeContext!(ref ctx);
+            FreeCodecContext(ref ctx);
         }
     }
 
-    private int SelectHardwareFormat(IntPtr avctx, IntPtr formats)
+    private static void FreeCodecContext(ref IntPtr context)
     {
-        if (formats == IntPtr.Zero)
+        var previous = context;
+        try { _freeContext!(ref context); }
+        finally { HardwareFormats.TryRemove(previous, out _); }
+    }
+
+    [AOT.MonoPInvokeCallback(typeof(AvCodecGetFormat))]
+    private static int SelectHardwareFormat(IntPtr avctx, IntPtr formats)
+    {
+        if (formats == IntPtr.Zero || !HardwareFormats.TryGetValue(avctx, out var hardwarePixelFormat))
         {
             return -1;
         }
@@ -551,7 +584,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
             var p = (int*)formats;
             while (*p != -1)
             {
-                if (*p == _currentHwPixelFormat)
+                if (*p == hardwarePixelFormat)
                 {
                     return *p;
                 }
@@ -627,7 +660,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
 
             if (_codecContext != IntPtr.Zero)
             {
-                _freeContext!(ref _codecContext);
+                FreeCodecContext(ref _codecContext);
                 _codecContext = IntPtr.Zero;
             }
 
@@ -667,11 +700,12 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
             var searchDirs = new List<string>
             {
                 AppContext.BaseDirectory,
-                Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native"),
+                Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeCompat.RuntimeIdentifier, "native"),
                 Path.Combine(AppContext.BaseDirectory, "runtimes", "win-x64", "native"),
                 Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\..\..\..\native\artifacts\runtimes\win-x64\native")),
                 Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, @"..\..\native\artifacts\runtimes\win-x64\native"))
             };
+            if (_nativeLibraryDirectory is not null) searchDirs.Insert(0, _nativeLibraryDirectory);
 
             // Some Android FFmpeg builds reference libandroid symbols from avutil
             // without declaring libandroid as a direct dependency. Loading avcodec

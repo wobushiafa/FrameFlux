@@ -1,0 +1,12 @@
+{
+  "name": "com.frameflux.player",
+  "version": "0.1.0",
+  "displayName": "FrameFlux Player",
+  "description": "Unity MediaView with shared FrameFlux contracts, FFmpeg/WebRTC backends, textures and AudioSource output for Windows x64. Preview; IL2CPP Player acceptance pending.",
+  "unity": "2022.3",
+  "dependencies": { "com.unity.ugui": "1.0.0" },
+  "samples": [
+    { "displayName": "MediaView Controls", "description": "Generic MediaView controls for RawImage or scene materials.", "path": "Samples~/MediaViewControls" },
+    { "displayName": "NativeAOT Prototype", "description": "Legacy bridge sample; requires a package built with IncludeNativeAotPrototype.", "path": "Samples~/RawImagePlayer" }
+  ]
+}

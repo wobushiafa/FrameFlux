@@ -71,10 +71,10 @@ public sealed record MediaOpenOptions
 
     public void Validate()
     {
-        ArgumentNullException.ThrowIfNull(Network);
-        ArgumentNullException.ThrowIfNull(Video);
-        ArgumentNullException.ThrowIfNull(Audio);
-        if (!Enum.IsDefined(SessionSharing))
+        RuntimeCompat.NotNull(Network, nameof(Network));
+        RuntimeCompat.NotNull(Video, nameof(Video));
+        RuntimeCompat.NotNull(Audio, nameof(Audio));
+        if (!RuntimeCompat.IsDefined(SessionSharing))
         {
             throw new ArgumentOutOfRangeException(
                 nameof(SessionSharing),
@@ -110,7 +110,7 @@ public sealed record MediaNetworkOptions
         ValidatePositiveTimeout(ReadTimeout, nameof(ReadTimeout));
         ValidateBufferDuration(InitialBufferDuration, nameof(InitialBufferDuration));
         ValidateBufferDuration(RebufferDuration, nameof(RebufferDuration));
-        ArgumentNullException.ThrowIfNull(Reconnect);
+        RuntimeCompat.NotNull(Reconnect, nameof(Reconnect));
         Reconnect.Validate();
     }
 
@@ -129,7 +129,7 @@ public sealed record MediaNetworkOptions
 
     private static void ValidateEnum<TEnum>(TEnum value, string parameterName) where TEnum : struct, Enum
     {
-        if (!Enum.IsDefined(value))
+        if (!RuntimeCompat.IsDefined(value))
             throw new ArgumentOutOfRangeException(parameterName, value, "Unsupported enum value.");
     }
 }
@@ -179,7 +179,7 @@ public sealed record MediaVideoOptions
 
     private static void ValidateEnum<TEnum>(TEnum value, string parameterName) where TEnum : struct, Enum
     {
-        if (!Enum.IsDefined(value))
+        if (!RuntimeCompat.IsDefined(value))
             throw new ArgumentOutOfRangeException(parameterName, value, "Unsupported enum value.");
     }
 }

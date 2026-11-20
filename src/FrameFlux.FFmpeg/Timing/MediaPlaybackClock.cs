@@ -52,7 +52,7 @@ internal sealed class MediaPlaybackClock
             }
 
             var mediaElapsed = mediaPositionSeconds - _mediaOriginSeconds.Value;
-            var wallElapsed = Stopwatch.GetElapsedTime(_wallOriginTimestamp).TotalSeconds;
+            var wallElapsed = RuntimeCompat.Elapsed(_wallOriginTimestamp).TotalSeconds;
             if (lateFrameRebaseThreshold is { } threshold &&
                 wallElapsed - mediaElapsed / _rate > threshold.TotalSeconds)
             {

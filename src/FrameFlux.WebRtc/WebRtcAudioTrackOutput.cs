@@ -33,9 +33,9 @@ public sealed class WebRtcAudioTrackOutput : IWebRtcAudioOutput
 
     public void EnsureFormat(int sampleRate, int channels)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(sampleRate, 4000);
-        ArgumentOutOfRangeException.ThrowIfLessThan(channels, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(channels, 2);
+        RuntimeCompat.AtLeast(sampleRate, 4000, nameof(sampleRate));
+        RuntimeCompat.AtLeast(channels, 1, nameof(channels));
+        RuntimeCompat.AtMost(channels, 2, nameof(channels));
         lock (_sync)
         {
             if (_disposed || _track is not null && _sampleRate == sampleRate && _channels == channels) return;

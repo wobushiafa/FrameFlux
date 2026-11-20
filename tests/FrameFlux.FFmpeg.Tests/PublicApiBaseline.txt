@@ -1,4 +1,12 @@
 [FrameFlux.Abstractions]
+interface FrameFlux.IMediaAudioOutput : System.IDisposable
+  property System.Int32 Channels { get; }
+  property FrameFlux.MediaAudioDiagnostics Diagnostics { get; }
+  property System.Boolean IsOperational { get; }
+  property System.Int64 PlayedFrames { get; }
+  property System.Int32 SampleRate { get; }
+  method System.Void Reset()
+  method System.Void Write(System.ReadOnlySpan<System.Byte> pcm)
 interface FrameFlux.IMediaFrameLease : System.IDisposable
   property System.Int32 Height { get; }
   property FrameFlux.MediaPixelFormat PixelFormat { get; }
@@ -271,4 +279,5 @@ class FrameFlux.FFmpeg.FfmpegMediaPlayerFactory : FrameFlux.IMediaPlayerFactory
   method FrameFlux.IMediaPlayer Create()
 class FrameFlux.FFmpeg.FfmpegMediaPlayerFactoryOptions : System.IEquatable<FrameFlux.FFmpeg.FfmpegMediaPlayerFactoryOptions>
   constructor FfmpegMediaPlayerFactoryOptions()
+  property System.Func<System.Int32, System.Int32, FrameFlux.IMediaAudioOutput>? AudioOutputFactory { get; init; }
   property System.Int32? MaximumConcurrentOpenOperations { get; init; }

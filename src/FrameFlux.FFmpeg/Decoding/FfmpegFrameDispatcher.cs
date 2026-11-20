@@ -12,6 +12,8 @@ internal sealed class FfmpegFrameDispatcher
 {
     private readonly UnmanagedFrameBufferPool _frameBufferPool = new();
     private volatile bool _isEnabled = true;
+    private volatile bool _deliverNativeFrames = true;
+    private volatile bool _deliverCpuFrames;
     private IntPtr _bgraBuffer;
     private int _bufferSize;
 
@@ -20,6 +22,15 @@ internal sealed class FfmpegFrameDispatcher
         get => _isEnabled;
         set => _isEnabled = value;
     }
+
+    internal void SetSharedDeliveryRequirements(bool deliverNativeFrames, bool deliverCpuFrames)
+    {
+        _deliverNativeFrames = deliverNativeFrames;
+        _deliverCpuFrames = deliverCpuFrames;
+    }
+
+    internal FfmpegMediaFrameLease RentCpuFrameLease(int requiredSize) =>
+        RentFrameLease(requiredSize);
 
     internal void BeginSession() => _frameBufferPool.StartAcceptingReturns();
 
@@ -58,6 +69,7 @@ internal sealed class FfmpegFrameDispatcher
         try
         {
             if (useLeasedFrameDelivery &&
+                _deliverNativeFrames &&
                 (options.FrameDeliveryMode is FfmpegFrameDeliveryMode.D3D11Texture or
                     FfmpegFrameDeliveryMode.DmaBuf) &&
                 decoder.TryGetNativePixelFormat(frame, out var nativePixelFormat) &&
@@ -143,7 +155,8 @@ internal sealed class FfmpegFrameDispatcher
         ref FfmpegMediaFrameLease? frameLease)
     {
         var convertStart = Stopwatch.GetTimestamp();
-        if (options.CreateSnapshotFrames && snapshotFrameLeaseReceived is not null)
+        if ((options.CreateSnapshotFrames || _deliverCpuFrames) &&
+            snapshotFrameLeaseReceived is not null)
         {
             DispatchSnapshot(
                 frame,

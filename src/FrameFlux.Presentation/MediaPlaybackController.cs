@@ -123,14 +123,14 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
         IMediaVideoOutput videoOutput,
         CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(videoOutput);
+        RuntimeCompat.NotDisposed(_disposed, this);
+        RuntimeCompat.NotNull(options, nameof(options));
+        RuntimeCompat.NotNull(videoOutput, nameof(videoOutput));
 
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            RuntimeCompat.NotDisposed(_disposed, this);
             await StopPlayerCoreAsync(
                 setStoppedState: false,
                 cancellationToken).ConfigureAwait(false);
@@ -222,10 +222,10 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
     }
 
     public ValueTask PauseAsync(CancellationToken cancellationToken = default) =>
-        _player?.PauseAsync(cancellationToken) ?? ValueTask.CompletedTask;
+        _player?.PauseAsync(cancellationToken) ?? default(ValueTask);
 
     public ValueTask ResumeAsync(CancellationToken cancellationToken = default) =>
-        _player?.PlayAsync(cancellationToken) ?? ValueTask.CompletedTask;
+        _player?.PlayAsync(cancellationToken) ?? default(ValueTask);
 
     public ValueTask SeekAsync(
         TimeSpan position,
@@ -242,7 +242,7 @@ internal sealed class MediaPlaybackController : IAsyncDisposable
 
     public ValueTask<MediaSnapshot?> CaptureSnapshotAsync(CancellationToken cancellationToken = default) =>
         _player?.CaptureSnapshotAsync(cancellationToken) ??
-        ValueTask.FromResult<MediaSnapshot?>(null);
+        RuntimeCompat.Result<MediaSnapshot?>(null);
 
     public ValueTask DisposeAsync()
     {

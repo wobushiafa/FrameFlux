@@ -32,9 +32,9 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
         string offerSdp,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(wsUri);
-        ArgumentNullException.ThrowIfNull(pc);
-        ArgumentException.ThrowIfNullOrWhiteSpace(offerSdp);
+        RuntimeCompat.NotNull(wsUri, nameof(wsUri));
+        RuntimeCompat.NotNull(pc, nameof(pc));
+        RuntimeCompat.NotBlank(offerSdp, nameof(offerSdp));
 
         var signaling = new Go2RtcWebSocketSignaling();
         try
@@ -246,7 +246,7 @@ public sealed class Go2RtcWebSocketSignaling : IAsyncDisposable
         await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            RuntimeCompat.NotDisposed(_disposed, this);
             await _ws.SendAsync(
                 new ArraySegment<byte>(bytes),
                 WebSocketMessageType.Text,

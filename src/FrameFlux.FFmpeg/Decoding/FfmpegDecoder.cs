@@ -47,7 +47,7 @@ internal sealed class FfmpegDecoder : IDisposable
         CancellationToken cancellationToken = default,
         Action<bool>? bufferingChanged = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(url);
+        RuntimeCompat.NotBlank(url, nameof(url));
         _options = options ?? throw new ArgumentNullException(nameof(options));
 
         using var nativeUrl = new NativeUtf8String(url);
@@ -137,7 +137,7 @@ internal sealed class FfmpegDecoder : IDisposable
 
     internal bool TryDecodeNextFrame(out NativeDecodedFrame? frame)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        RuntimeCompat.NotDisposed(_disposed, this);
         var startedAt = Stopwatch.GetTimestamp();
         var result = FrameFluxFFmpegNative.ReadFrame(_session, out var handle);
         LastReadTicks = Stopwatch.GetTimestamp() - startedAt;
@@ -175,7 +175,7 @@ internal sealed class FfmpegDecoder : IDisposable
 
     internal void Seek(TimeSpan position)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        RuntimeCompat.NotDisposed(_disposed, this);
         if (position < TimeSpan.Zero || Duration is { } duration && position > duration)
         {
             throw new ArgumentOutOfRangeException(nameof(position));
@@ -193,7 +193,7 @@ internal sealed class FfmpegDecoder : IDisposable
 
     internal void SetPlaybackRate(double playbackRate)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        RuntimeCompat.NotDisposed(_disposed, this);
         FrameFluxFFmpegNative.SetPlaybackRate(_session, playbackRate);
     }
 

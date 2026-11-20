@@ -2,7 +2,19 @@ namespace FrameFlux.FFmpeg;
 
 internal interface IMediaFrameLeaseSource
 {
+    MediaFrameStorageKind NativeFrameStorageKind => MediaFrameStorageKind.CpuMemory;
+
+    bool HandlesOutputNatively(IMediaVideoOutput output) => false;
+
     void SetFrameLeaseConsumer(Action<IMediaFrameLease>? consumer);
+
+    void SetSupplementaryCpuFrameLeaseConsumer(Action<IMediaFrameLease>? consumer) { }
+
+    void UpdateSharedFrameRequirements(bool requiresNativeFrames, bool requiresCpuFrames) { }
+
+    void AttachSharedVideoOutput(IMediaVideoOutput output) { }
+
+    void DetachSharedVideoOutput(IMediaVideoOutput output) { }
 }
 
 internal sealed class ReferenceCountedMediaFrameLeaseOwner
@@ -12,7 +24,7 @@ internal sealed class ReferenceCountedMediaFrameLeaseOwner
 
     internal ReferenceCountedMediaFrameLeaseOwner(IMediaFrameLease frame)
     {
-        ArgumentNullException.ThrowIfNull(frame);
+        RuntimeCompat.NotNull(frame, nameof(frame));
         _frame = frame;
     }
 
@@ -29,6 +41,9 @@ internal sealed class ReferenceCountedMediaFrameLeaseOwner
 
     internal bool TryGetD3D11Texture(out MediaD3D11TextureBuffer texture) =>
         _frame.TryGetD3D11Texture(out texture);
+
+    internal bool TryGetDmaBuf(out MediaDmaBufFrameBuffer dmaBuf) =>
+        _frame.TryGetDmaBuf(out dmaBuf);
 
     internal ReferenceCountedMediaFrameLease CreateLease()
     {
@@ -87,6 +102,17 @@ internal sealed class ReferenceCountedMediaFrameLease(
         }
 
         return _owner.TryGetD3D11Texture(out texture);
+    }
+
+    public bool TryGetDmaBuf(out MediaDmaBufFrameBuffer dmaBuf)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            dmaBuf = default;
+            return false;
+        }
+
+        return _owner.TryGetDmaBuf(out dmaBuf);
     }
 
     public void Dispose()

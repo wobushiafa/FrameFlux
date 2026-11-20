@@ -2,6 +2,7 @@ namespace FrameFlux.FFmpeg;
 
 internal sealed class FfmpegPlaybackOptions
 {
+    public Func<int, int, IMediaAudioOutput>? AudioOutputFactory { get; init; }
     public FfmpegVideoDecodingMode VideoDecodingMode { get; init; } = FfmpegVideoDecodingMode.HardwarePreferred;
 
     public FfmpegFrameDeliveryMode FrameDeliveryMode { get; init; } = FfmpegFrameDeliveryMode.CpuMemory;

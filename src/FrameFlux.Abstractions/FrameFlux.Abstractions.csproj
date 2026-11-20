@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <IsAotCompatible>true</IsAotCompatible>
+    <LangVersion>latest</LangVersion>
+    <TargetFrameworks>net8.0;netstandard2.1</TargetFrameworks>
+    <IsAotCompatible Condition="'$(TargetFramework)' != 'netstandard2.1'">true</IsAotCompatible>
     <IsPackable>true</IsPackable>
     <PackageId>FrameFlux.Abstractions</PackageId>
     <Description>Platform-neutral media playback contracts for FrameFlux.</Description>
@@ -12,5 +13,8 @@
   </PropertyGroup>
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\FrameFlux.Compatibility\*.cs" Link="Compatibility\%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

@@ -36,7 +36,7 @@ internal sealed class CompositorMediaFrameQueue : IDisposable
 
     internal bool TrySubmit(IMediaFrameLease frame, out bool schedule)
     {
-        ArgumentNullException.ThrowIfNull(frame);
+        RuntimeCompat.NotNull(frame, nameof(frame));
         IMediaFrameLease? replaced = null;
         lock (_sync)
         {

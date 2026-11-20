@@ -5,10 +5,26 @@ using Java.Nio;
 
 namespace FrameFlux.FFmpeg.Android;
 
+internal interface IAndroidSharedSurfacePresenter : IAndroidVideoSurfaceOutput
+{
+    void OnDecoderFrameRendered(CancellationToken cancellationToken);
+
+    void OnDecoderDisposed();
+}
+
 internal sealed class AndroidMediaCodecDecoderFactory : IPlatformVideoDecoderFactory
 {
     public bool CanCreate(IMediaVideoOutput? output, FfmpegPlaybackOptions options) =>
-        !options.CreateSnapshotFrames && ResolveSurfaceOutput(output) is not null;
+        output is IAndroidSharedSurfacePresenter ||
+        (!options.CreateSnapshotFrames && ResolveSurfaceOutput(output) is not null);
+
+    public bool HandlesSharedOutputNatively(
+        IMediaVideoOutput output,
+        FfmpegPlaybackOptions options) =>
+        ResolveSurfaceOutput(output) is not null;
+
+    public ISharedPlatformVideoOutput? TryCreateSharedOutput(FfmpegPlaybackOptions options) =>
+        new AndroidSharedSurfaceMediaOutput();
 
     public IPlatformVideoDecoder Create(
         string url,
@@ -16,7 +32,8 @@ internal sealed class AndroidMediaCodecDecoderFactory : IPlatformVideoDecoderFac
         IMediaVideoOutput output,
         CancellationToken cancellationToken)
     {
-        var surfaceOutput = ResolveSurfaceOutput(output) ??
+        var surfaceOutput = output as IAndroidSharedSurfacePresenter ??
+            ResolveSurfaceOutput(output) ??
             throw new InvalidOperationException(
                 "The Android MediaCodec backend requires an IAndroidVideoSurfaceOutput.");
         try
@@ -36,7 +53,7 @@ internal sealed class AndroidMediaCodecDecoderFactory : IPlatformVideoDecoderFac
         }
     }
 
-    private static IAndroidVideoSurfaceOutput? ResolveSurfaceOutput(IMediaVideoOutput? output)
+    internal static IAndroidVideoSurfaceOutput? ResolveSurfaceOutput(IMediaVideoOutput? output)
     {
         if (output is IAndroidVideoSurfaceOutput direct) return direct;
         return (output as IMediaVideoOutputFeatureProvider)?.GetVideoOutputFeature(
@@ -49,6 +66,8 @@ internal sealed class AndroidMediaCodecDecoder : ISeekablePlatformVideoDecoder
     private const int OutputFormatChanged = -2;
     private const long CodecTimeoutMicroseconds = 10_000;
     private readonly IAndroidVideoSurfaceOutput _output;
+    private readonly IAndroidSharedSurfacePresenter? _sharedPresenter;
+    private readonly CancellationToken _cancellationToken;
     private readonly NativeFfmpegPacketReader _reader;
     private readonly MediaCodec _codec;
     private readonly MediaCodec.BufferInfo _bufferInfo = new();
@@ -104,6 +123,8 @@ internal sealed class AndroidMediaCodecDecoder : ISeekablePlatformVideoDecoder
             codec.Start();
 
             _output = output;
+            _sharedPresenter = output as IAndroidSharedSurfacePresenter;
+            _cancellationToken = cancellationToken;
             _outputWidth = reader.Width;
             _outputHeight = reader.Height;
             _reader = reader;
@@ -116,6 +137,10 @@ internal sealed class AndroidMediaCodecDecoder : ISeekablePlatformVideoDecoder
             if (codec is not null)
             {
                 TryStopAndRelease(codec);
+            }
+            if (output is IAndroidSharedSurfacePresenter sharedPresenter)
+            {
+                sharedPresenter.OnDecoderDisposed();
             }
             throw;
         }
@@ -161,7 +186,9 @@ internal sealed class AndroidMediaCodecDecoder : ISeekablePlatformVideoDecoder
                         outputIndex,
                         _bufferInfo.PresentationTimeUs / 1_000_000d,
                         _outputWidth,
-                        _outputHeight);
+                        _outputHeight,
+                        _sharedPresenter,
+                        _cancellationToken);
                     return true;
                 }
 
@@ -211,6 +238,7 @@ internal sealed class AndroidMediaCodecDecoder : ISeekablePlatformVideoDecoder
         // Cancelling/closing packet input precedes codec shutdown. The Surface is output-owned.
         _reader.Dispose();
         TryStopAndRelease(_codec);
+        _sharedPresenter?.OnDecoderDisposed();
         _bufferInfo.Dispose();
     }
 
@@ -307,7 +335,9 @@ internal sealed class AndroidMediaCodecFrame(
     int outputIndex,
     double presentationSeconds,
     int width,
-    int height) : IPlatformDecodedVideoFrame
+    int height,
+    IAndroidSharedSurfacePresenter? sharedPresenter = null,
+    CancellationToken cancellationToken = default) : IPlatformDecodedVideoFrame
 {
     private int _outputIndex = outputIndex;
 
@@ -320,7 +350,11 @@ internal sealed class AndroidMediaCodecFrame(
     public void Present()
     {
         var index = Interlocked.Exchange(ref _outputIndex, -1);
-        if (index >= 0) codec.ReleaseOutputBuffer(index, render: true);
+        if (index >= 0)
+        {
+            codec.ReleaseOutputBuffer(index, render: true);
+            sharedPresenter?.OnDecoderFrameRendered(cancellationToken);
+        }
     }
 
     public void Dispose()

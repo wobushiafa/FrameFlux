@@ -9,7 +9,7 @@ internal sealed class BoundedAudioFrameQueue
 
     internal BoundedAudioFrameQueue(int capacity = DefaultCapacity)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
+        RuntimeCompat.AtLeast(capacity, 1, nameof(capacity));
         _capacity = capacity;
         _frames = new Queue<NativeAudioFrame>(capacity);
     }
@@ -20,7 +20,7 @@ internal sealed class BoundedAudioFrameQueue
 
     internal void Enqueue(NativeAudioFrame frame)
     {
-        ArgumentNullException.ThrowIfNull(frame);
+        RuntimeCompat.NotNull(frame, nameof(frame));
         if (_frames.Count == _capacity)
         {
             _frames.Dequeue();

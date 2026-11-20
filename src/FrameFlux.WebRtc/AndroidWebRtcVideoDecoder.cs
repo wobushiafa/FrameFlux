@@ -89,7 +89,7 @@ internal sealed class AndroidWebRtcVideoDecoder : IWebRtcVideoDecoder
                     DrainOutput();
                     inputIndex = _codec.DequeueInputBuffer(CodecTimeoutMicroseconds);
                 }
-                var inputWait = System.Diagnostics.Stopwatch.GetElapsedTime(inputWaitStart).TotalMilliseconds;
+                var inputWait = RuntimeCompat.Elapsed(inputWaitStart).TotalMilliseconds;
                 if (inputWait > 15)
                 {
                     global::Android.Util.Log.Warn("FrameFluxTiming", $"MediaCodec input wait {inputWait:F0} ms, index {inputIndex}");
@@ -258,10 +258,10 @@ internal sealed class AndroidWebRtcVideoDecoder : IWebRtcVideoDecoder
                 var now = System.Diagnostics.Stopwatch.GetTimestamp();
                 var previous = _lastOutputTime;
                 _lastOutputTime = now;
-                if (previous != 0 && System.Diagnostics.Stopwatch.GetElapsedTime(previous, now).TotalMilliseconds > 500)
+                if (previous != 0 && RuntimeCompat.Elapsed(previous, now).TotalMilliseconds > 500)
                 {
                     global::Android.Util.Log.Warn("FrameFluxTiming",
-                        $"MediaCodec output gap {System.Diagnostics.Stopwatch.GetElapsedTime(previous, now).TotalMilliseconds:F0} ms");
+                        $"MediaCodec output gap {RuntimeCompat.Elapsed(previous, now).TotalMilliseconds:F0} ms");
                 }
                 _codec.ReleaseOutputBuffer(outputIndex, render: true);
                 continue;
@@ -299,7 +299,7 @@ internal sealed class AndroidWebRtcVideoDecoder : IWebRtcVideoDecoder
     {
         if (buffer.Length < payload.Length + 4)
         {
-            buffer = GC.AllocateUninitializedArray<byte>(payload.Length + 4);
+            buffer = RuntimeCompat.AllocateBytes(payload.Length + 4);
         }
         if (payload.Length >= 4 && payload[0] == 0 && payload[1] == 0 &&
             (payload[2] == 1 || payload[2] == 0 && payload[3] == 1))

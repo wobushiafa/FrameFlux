@@ -1,0 +1,8 @@
+{
+  "name": "FrameFlux.Unity",
+  "rootNamespace": "FrameFlux.Unity",
+  "references": ["UnityEngine.UI"],
+  "includePlatforms": ["Editor", "WindowsStandalone64"],
+  "allowUnsafeCode": false,
+  "autoReferenced": true
+}

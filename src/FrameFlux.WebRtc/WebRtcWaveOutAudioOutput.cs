@@ -29,8 +29,8 @@ public sealed class WebRtcWaveOutAudioOutput : IWebRtcAudioOutput
             return;
         }
 
-        ArgumentOutOfRangeException.ThrowIfLessThan(sampleRate, 4000);
-        ArgumentOutOfRangeException.ThrowIfLessThan(channels, 1);
+        RuntimeCompat.AtLeast(sampleRate, 4000, nameof(sampleRate));
+        RuntimeCompat.AtLeast(channels, 1, nameof(channels));
 
         lock (_sync)
         {

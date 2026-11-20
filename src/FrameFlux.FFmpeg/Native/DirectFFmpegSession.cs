@@ -409,7 +409,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
         bool forceOpaqueAlpha)
     {
         var sourceFrame = frame.Pointer;
-        if (frame.IsDmaBuf)
+        if (frame.IsD3D11Texture || frame.IsDmaBuf)
         {
             var transferResult = _hardwareDecoder!.Transfer(frame.Pointer, out sourceFrame);
             if (transferResult < 0)
@@ -589,6 +589,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
         }
     }
 
+    [AOT.MonoPInvokeCallback(typeof(InterruptCallbackDelegate))]
     private static int HandleInterrupt(IntPtr opaque)
     {
         try
@@ -716,7 +717,21 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
             return result < 0 ? Fail(result, "avcodec_open2") : 0;
         }
 
-        result = _api.AvCodecOpen2(_codecContext, decoder, IntPtr.Zero);
+        var codecOptions = IntPtr.Zero;
+        try
+        {
+            SetDictionary(ref codecOptions, "extra_hw_frames", "8");
+            unsafe
+            {
+                var dict = codecOptions;
+                result = _api.AvCodecOpen2(_codecContext, decoder, (IntPtr)(&dict));
+                codecOptions = dict;
+            }
+        }
+        finally
+        {
+            _api.AvDictFree(ref codecOptions);
+        }
         if (result >= 0)
         {
             VideoDecoderDiagnostics =
@@ -981,6 +996,7 @@ internal sealed class DirectVideoFrame(
 {
     private readonly FFmpegApi _api = api;
     internal IntPtr Pointer { get; private set; } = pointer;
+    internal bool IsD3D11Texture => isD3D11Texture;
     internal bool IsDmaBuf => isDmaBuf;
 
     internal NativeFrameInfo GetInfo()

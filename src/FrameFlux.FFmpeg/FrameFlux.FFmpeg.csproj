@@ -1,9 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFrameworks>net8.0;net10.0-android</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <TargetFrameworks>net8.0;netstandard2.1;net10.0-android</TargetFrameworks>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <IsTrimmable>true</IsTrimmable>
-    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable Condition="'$(TargetFramework)' != 'netstandard2.1'">true</IsTrimmable>
+    <IsAotCompatible Condition="'$(TargetFramework)' != 'netstandard2.1'">true</IsAotCompatible>
     <IsPackable>true</IsPackable>
     <PackageId>FrameFlux.FFmpeg</PackageId>
     <Description>Cross-platform FFmpeg media engine for network and local media playback.</Description>
@@ -30,4 +31,13 @@
              Pack="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\FrameFlux.Compatibility\*.cs" Link="Compatibility\%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.1'">
+    <PackageReference Include="NAudio.Core" />
+    <PackageReference Include="NAudio.Wasapi" />
+    <PackageReference Include="System.Threading.Channels" />
+    <PackageReference Include="System.Text.Json" />
+  </ItemGroup>
 </Project>

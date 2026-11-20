@@ -29,6 +29,7 @@ internal static class FfmpegPlaybackPolicy
         FfmpegPlaybackOptions options) =>
         new()
         {
+            AudioOutputFactory = options.AudioOutputFactory,
             VideoDecodingMode = FfmpegVideoDecodingMode.SoftwareOnly,
             FrameDeliveryMode = options.FrameDeliveryMode,
             Transport = options.Transport,
@@ -79,7 +80,7 @@ internal static class FfmpegPlaybackPolicy
             return true;
         }
 
-        var elapsed = Stopwatch.GetElapsedTime(lastFrameAt, now);
+        var elapsed = RuntimeCompat.Elapsed(lastFrameAt, now);
         if (elapsed < frameInterval)
         {
             return false;
