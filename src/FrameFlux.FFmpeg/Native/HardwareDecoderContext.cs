@@ -62,6 +62,7 @@ internal sealed class FFmpegHardwareDecoderContext : IHardwareDecoderContext
     private IntPtr _deviceContext;
     private IntPtr _transferFrame;
     private int _hardwarePixelFormat = -1;
+    private int _drmPrimePixelFormat = -1;
 
     private FFmpegHardwareDecoderContext(
         FFmpegApi api,
@@ -188,12 +189,18 @@ internal sealed class FFmpegHardwareDecoderContext : IHardwareDecoderContext
             return -12;
         }
 
-        using var name = new NativeUtf8String("drm_prime");
-        var drmPrimeFormat = _hardwareApi.AvGetPixelFormat(name.Pointer);
+        var drmPrimeFormat = _drmPrimePixelFormat;
         if (drmPrimeFormat < 0)
         {
-            _api.AvFrameFree(ref destination);
-            return -22;
+            using var name = new NativeUtf8String("drm_prime");
+            drmPrimeFormat = _hardwareApi.AvGetPixelFormat(name.Pointer);
+            if (drmPrimeFormat < 0)
+            {
+                _api.AvFrameFree(ref destination);
+                return -22;
+            }
+
+            _drmPrimePixelFormat = drmPrimeFormat;
         }
 
         FFmpegAbi.WriteFrameFormat(destination, _api.UtilMajorVersion, drmPrimeFormat);

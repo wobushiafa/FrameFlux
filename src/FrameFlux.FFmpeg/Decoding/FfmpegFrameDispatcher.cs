@@ -11,11 +11,17 @@ internal readonly record struct FfmpegFrameDispatchMetrics(
 internal sealed class FfmpegFrameDispatcher
 {
     private readonly UnmanagedFrameBufferPool _frameBufferPool = new();
+    private readonly Action<FfmpegMediaFrameLease> _returnFrameLease;
     private volatile bool _isEnabled = true;
     private volatile bool _deliverNativeFrames = true;
     private volatile bool _deliverCpuFrames;
     private IntPtr _bgraBuffer;
     private int _bufferSize;
+
+    internal FfmpegFrameDispatcher()
+    {
+        _returnFrameLease = ReturnFrameLease;
+    }
 
     internal bool IsEnabled
     {
@@ -229,7 +235,7 @@ internal sealed class FfmpegFrameDispatcher
     private FfmpegMediaFrameLease RentFrameLease(int requiredSize)
     {
         var buffer = _frameBufferPool.Rent(requiredSize);
-        return new FfmpegMediaFrameLease(buffer, requiredSize, ReturnFrameLease);
+        return new FfmpegMediaFrameLease(buffer, requiredSize, _returnFrameLease);
     }
 
     private void ReturnFrameLease(FfmpegMediaFrameLease lease)

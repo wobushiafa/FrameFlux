@@ -14,6 +14,11 @@ internal interface IAudioOutput : IDisposable
     void Write(byte[] pcm);
 }
 
+internal interface ISlicedAudioOutput
+{
+    void Write(byte[] pcm, int offset, int count);
+}
+
 internal interface IInterruptibleAudioOutput
 {
     void RequestStop();
@@ -96,16 +101,28 @@ internal sealed class AudioPlaybackController : IDisposable
         _gainMultiplier = DecibelsToAmplitude(gainDecibels);
         _volume = volume;
         _muted = muted;
+        var channelOptions = new BoundedChannelOptions(CalculateQueueCapacity(
+            bufferDuration ?? TimeSpan.FromMilliseconds(100)))
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = false,
+            SingleWriter = false,
+            AllowSynchronousContinuations = false
+        };
+#if NET8_0_OR_GREATER
         _frames = Channel.CreateBounded<QueuedAudioFrame>(
-            new BoundedChannelOptions(CalculateQueueCapacity(
-                bufferDuration ?? TimeSpan.FromMilliseconds(100)))
-            {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = false,
-                SingleWriter = false,
-                AllowSynchronousContinuations = false
-            });
-        _outputWorker = Task.Run(ProcessFramesAsync);
+            channelOptions,
+            static dropped => dropped.Frame.Dispose());
+#else
+        _frames = Channel.CreateBounded<QueuedAudioFrame>(channelOptions);
+#endif
+        _outputWorker = _output is IInterruptibleAudioOutput
+            ? Task.Factory.StartNew(
+                ProcessFramesBlocking,
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default)
+            : Task.Run(ProcessFramesAsync);
     }
 
     internal bool IsOperational => _output.IsOperational;
@@ -152,8 +169,9 @@ internal sealed class AudioPlaybackController : IDisposable
 
     internal void Reset()
     {
-        while (_frames.Reader.TryRead(out _))
+        while (_frames.Reader.TryRead(out var dropped))
         {
+            dropped.Frame.Dispose();
         }
 
         lock (_clockSync)
@@ -168,17 +186,21 @@ internal sealed class AudioPlaybackController : IDisposable
 
     internal void Write(NativeAudioFrame frame)
     {
-        if (frame.Data.Length == 0 ||
+        if (frame.Length == 0 ||
             Volatile.Read(ref _disposed) != 0)
         {
+            frame.Dispose();
             return;
         }
 
-        _frames.Writer.TryWrite(new QueuedAudioFrame(
+        if (!_frames.Writer.TryWrite(new QueuedAudioFrame(
             frame,
             Volatile.Read(ref _volume),
             Volatile.Read(ref _muted),
-            Volatile.Read(ref _playbackRate)));
+            Volatile.Read(ref _playbackRate))))
+        {
+            frame.Dispose();
+        }
     }
 
     public void Dispose()
@@ -189,8 +211,9 @@ internal sealed class AudioPlaybackController : IDisposable
         }
 
         _frames.Writer.TryComplete();
-        while (_frames.Reader.TryRead(out _))
+        while (_frames.Reader.TryRead(out var dropped))
         {
+            dropped.Frame.Dispose();
         }
 
         if (_output is IInterruptibleAudioOutput interruptibleOutput)
@@ -220,8 +243,9 @@ internal sealed class AudioPlaybackController : IDisposable
         }
         finally
         {
-            while (_frames.Reader.TryRead(out _))
+            while (_frames.Reader.TryRead(out var dropped))
             {
+                dropped.Frame.Dispose();
             }
         }
     }
@@ -234,6 +258,35 @@ internal sealed class AudioPlaybackController : IDisposable
         return (int)Math.Clamp(estimatedFrames, 2d, 64d);
     }
 
+    private void ProcessFramesBlocking()
+    {
+        while (_frames.Reader.WaitToReadAsync().AsTask().GetAwaiter().GetResult())
+        {
+            while (_frames.Reader.TryRead(out var queuedFrame))
+            {
+                if (Volatile.Read(ref _disposed) != 0)
+                {
+                    queuedFrame.Frame.Dispose();
+                    return;
+                }
+
+                try
+                {
+                    ProcessFrame(queuedFrame);
+                }
+                catch (Exception exception)
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"Failed to write an audio frame: {exception}");
+                }
+                finally
+                {
+                    queuedFrame.Frame.Dispose();
+                }
+            }
+        }
+    }
+
     private async Task ProcessFramesAsync()
     {
         await foreach (var queuedFrame in
@@ -241,6 +294,7 @@ internal sealed class AudioPlaybackController : IDisposable
         {
             if (Volatile.Read(ref _disposed) != 0)
             {
+                queuedFrame.Frame.Dispose();
                 return;
             }
 
@@ -252,6 +306,10 @@ internal sealed class AudioPlaybackController : IDisposable
             {
                 System.Diagnostics.Debug.WriteLine(
                     $"Failed to write an audio frame: {exception}");
+            }
+            finally
+            {
+                queuedFrame.Frame.Dispose();
             }
         }
     }
@@ -311,6 +369,12 @@ internal sealed class AudioPlaybackController : IDisposable
         }
 
         var frame = queuedFrame.Frame;
+        var byteLength = frame.Length;
+        if (byteLength <= 0)
+        {
+            return;
+        }
+
         if (frame.PresentationSeconds is { } presentation)
         {
             lock (_clockSync)
@@ -330,7 +394,7 @@ internal sealed class AudioPlaybackController : IDisposable
                 }
 
                 var frameDuration = frame.SampleRate > 0 && frame.Channels > 0
-                    ? (double)frame.Data.Length /
+                    ? (double)byteLength /
                         (frame.SampleRate * frame.Channels * sizeof(short))
                     : 0d;
                 _lastSubmittedEndSeconds =
@@ -338,14 +402,36 @@ internal sealed class AudioPlaybackController : IDisposable
             }
         }
 
-        ApplyGainMultiplier(frame.Data, _gainMultiplier);
-        ApplyVolume(frame.Data, queuedFrame.Volume, queuedFrame.Muted);
+        var pcmSpan = frame.Data.AsSpan(0, byteLength);
+        if (queuedFrame.Muted || queuedFrame.Volume <= 0d)
+        {
+            pcmSpan.Clear();
+        }
+        else
+        {
+            var effectiveScale = _gainMultiplier * (queuedFrame.Volume < 1d ? queuedFrame.Volume : 1d);
+            ApplyGainMultiplier(pcmSpan, effectiveScale);
+        }
+
         if (queuedFrame.PlaybackRate != Volatile.Read(ref _playbackRate))
         {
             return;
         }
 
-        _output.Write(frame.Data);
+        if (_output is ISlicedAudioOutput slicedOutput)
+        {
+            slicedOutput.Write(frame.Data, 0, byteLength);
+        }
+        else if (byteLength == frame.Data.Length)
+        {
+            _output.Write(frame.Data);
+        }
+        else
+        {
+            var exact = RuntimeCompat.AllocateBytes(byteLength);
+            Buffer.BlockCopy(frame.Data, 0, exact, 0, byteLength);
+            _output.Write(exact);
+        }
     }
 
     internal static void ApplyGain(Span<byte> pcm, double gainDecibels) =>
@@ -364,14 +450,7 @@ internal sealed class AudioPlaybackController : IDisposable
             return;
         }
 
-        var samples = MemoryMarshal.Cast<byte, short>(pcm);
-        for (var index = 0; index < samples.Length; index++)
-        {
-            samples[index] = (short)Math.Clamp(
-                (int)Math.Round(samples[index] * volume),
-                short.MinValue,
-                short.MaxValue);
-        }
+        ApplyGainMultiplier(pcm, volume);
     }
 
     private static void ApplyGainMultiplier(Span<byte> pcm, double multiplier)
@@ -401,7 +480,7 @@ internal sealed class AudioPlaybackController : IDisposable
         double PlaybackRate);
 }
 
-internal sealed class NullAudioOutput : IAudioOutput
+internal sealed class NullAudioOutput : IAudioOutput, ISlicedAudioOutput
 {
     private readonly AudioOutputConfiguration? _configuration;
     private readonly string? _lastError;
@@ -435,5 +514,6 @@ internal sealed class NullAudioOutput : IAudioOutput
         _lastError);
     public void Reset() { }
     public void Write(byte[] pcm) { }
+    public void Write(byte[] pcm, int offset, int count) { }
     public void Dispose() { }
 }

@@ -5,6 +5,7 @@ namespace FrameFlux.FFmpeg;
 internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
 {
     private readonly Action<FfmpegMediaFrameLease>? _returnAction;
+    private IDisposable? _ownedResource;
     private int _disposed;
 
     internal FfmpegMediaFrameLease(IntPtr buffer, int size, Action<FfmpegMediaFrameLease> returnAction)
@@ -12,6 +13,11 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
         Buffer = buffer;
         Size = size;
         _returnAction = returnAction;
+    }
+
+    internal FfmpegMediaFrameLease(IDisposable ownedResource)
+    {
+        _ownedResource = ownedResource;
     }
 
     public IntPtr Buffer { get; }
@@ -126,6 +132,8 @@ internal sealed class FfmpegMediaFrameLease : IMediaFrameLease
             return;
         }
 
+        var owned = Interlocked.Exchange(ref _ownedResource, null);
+        owned?.Dispose();
         _returnAction?.Invoke(this);
     }
 

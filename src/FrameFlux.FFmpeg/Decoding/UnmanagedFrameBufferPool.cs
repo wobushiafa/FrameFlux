@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace FrameFlux.FFmpeg;
 
-internal sealed class UnmanagedFrameBufferPool : IDisposable
+internal sealed unsafe class UnmanagedFrameBufferPool : IDisposable
 {
     internal const int DefaultMaximumBufferCount = 4;
     internal const long DefaultMaximumRetainedBytes = 64L * 1024 * 1024;
@@ -59,16 +59,11 @@ internal sealed class UnmanagedFrameBufferPool : IDisposable
             {
                 _retainedBufferCount--;
                 _retainedBytes -= requiredSize;
-                if (buffers.Count == 0)
-                {
-                    _buffersBySize.Remove(requiredSize);
-                }
-
                 return buffer;
             }
         }
 
-        return Marshal.AllocHGlobal(requiredSize);
+        return AllocateNative(requiredSize);
     }
 
     internal void Return(IntPtr buffer, int size)
@@ -81,12 +76,15 @@ internal sealed class UnmanagedFrameBufferPool : IDisposable
         var release = false;
         lock (_sync)
         {
+            var effectiveMaxBytes = _maximumRetainedBytes >= DefaultMaximumRetainedBytes
+                ? Math.Max(_maximumRetainedBytes, (long)size * 2)
+                : _maximumRetainedBytes;
             if (_disposed ||
                 !_acceptingReturns ||
                 _retainedBufferCount >= _maximumBufferCount ||
                 size <= 0 ||
-                size > _maximumRetainedBytes ||
-                _retainedBytes > _maximumRetainedBytes - size)
+                size > effectiveMaxBytes ||
+                _retainedBytes > effectiveMaxBytes - size)
             {
                 release = true;
             }
@@ -94,6 +92,11 @@ internal sealed class UnmanagedFrameBufferPool : IDisposable
             {
                 if (!_buffersBySize.TryGetValue(size, out var buffers))
                 {
+                    if (_buffersBySize.Count >= 8)
+                    {
+                        PruneEmptyBucketsLocked();
+                    }
+
                     buffers = new Stack<IntPtr>();
                     _buffersBySize.Add(size, buffers);
                 }
@@ -106,7 +109,7 @@ internal sealed class UnmanagedFrameBufferPool : IDisposable
 
         if (release)
         {
-            Marshal.FreeHGlobal(buffer);
+            FreeNative(buffer);
         }
     }
 
@@ -148,7 +151,46 @@ internal sealed class UnmanagedFrameBufferPool : IDisposable
 
         foreach (var buffer in buffers)
         {
-            Marshal.FreeHGlobal(buffer);
+            FreeNative(buffer);
         }
+    }
+
+    private void PruneEmptyBucketsLocked()
+    {
+        List<int>? emptyKeys = null;
+        foreach (var entry in _buffersBySize)
+        {
+            if (entry.Value.Count == 0)
+            {
+                emptyKeys ??= [];
+                emptyKeys.Add(entry.Key);
+            }
+        }
+
+        if (emptyKeys is not null)
+        {
+            foreach (var key in emptyKeys)
+            {
+                _buffersBySize.Remove(key);
+            }
+        }
+    }
+
+    private static IntPtr AllocateNative(int size)
+    {
+#if NET8_0_OR_GREATER
+        return (IntPtr)NativeMemory.AlignedAlloc(checked((nuint)size), 64);
+#else
+        return Marshal.AllocHGlobal(size);
+#endif
+    }
+
+    private static void FreeNative(IntPtr buffer)
+    {
+#if NET8_0_OR_GREATER
+        NativeMemory.AlignedFree((void*)buffer);
+#else
+        Marshal.FreeHGlobal(buffer);
+#endif
     }
 }

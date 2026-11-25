@@ -1,5 +1,8 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
+#if NET8_0_OR_GREATER
+using System.Runtime.Intrinsics;
+#endif
 
 namespace FrameFlux.FFmpeg;
 
@@ -16,6 +19,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
 
     private readonly FFmpegApi _api = api;
     private readonly bool _packetReader = packetReader;
+    private Action<IntPtr, FrameLayout>? _enqueueFilteredAudioFrame;
     private GCHandle _interruptHandle;
     private IntPtr _formatContext;
     private IntPtr _codecContext;
@@ -440,16 +444,22 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
         int* sourceStride = stackalloc int[4];
         IntPtr* destinationData = stackalloc IntPtr[4];
         int* destinationStrides = stackalloc int[4];
-        for (var index = 0; index < 4; index++)
-        {
-            sourceData[index] = layout.Data[index];
-            sourceStride[index] = layout.LineSize[index];
-            destinationData[index] = IntPtr.Zero;
-            destinationStrides[index] = 0;
-        }
-
+        sourceData[0] = layout.Data0;
+        sourceData[1] = layout.Data1;
+        sourceData[2] = layout.Data2;
+        sourceData[3] = layout.Data3;
+        sourceStride[0] = layout.LineSize0;
+        sourceStride[1] = layout.LineSize1;
+        sourceStride[2] = layout.LineSize2;
+        sourceStride[3] = layout.LineSize3;
         destinationData[0] = destination;
+        destinationData[1] = IntPtr.Zero;
+        destinationData[2] = IntPtr.Zero;
+        destinationData[3] = IntPtr.Zero;
         destinationStrides[0] = destinationStride;
+        destinationStrides[1] = 0;
+        destinationStrides[2] = 0;
+        destinationStrides[3] = 0;
         var result = _api.SwsScale(
             _scaleContext,
             (IntPtr)sourceData,
@@ -463,20 +473,59 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
             return result;
         }
 
-        if (forceOpaqueAlpha)
+        // Opaque YUV sources already produce 0xFF alpha from libswscale when converting to BGRA.
+        // Skip the redundant full-frame pass for those formats and use SIMD for alpha-capable sources.
+        if (forceOpaqueAlpha && !IsGuaranteedOpaquePixelFormat(layout.Format))
         {
-            var pixels = (byte*)destination;
-            for (var y = 0; y < destinationHeight; y++)
-            {
-                var row = pixels + y * destinationStride;
-                for (var x = 0; x < destinationWidth; x++)
-                {
-                    row[x * 4 + 3] = 255;
-                }
-            }
+            FillOpaqueAlpha(destination, destinationWidth, destinationHeight, destinationStride);
         }
 
         return 0;
+    }
+
+    private bool IsGuaranteedOpaquePixelFormat(int pixelFormat) =>
+        pixelFormat == _api.PixelFormatYuv420P ||
+        pixelFormat == _api.PixelFormatNv12 ||
+        pixelFormat == _api.PixelFormatNv21;
+
+    private static unsafe void FillOpaqueAlpha(
+        IntPtr destination,
+        int width,
+        int height,
+        int stride)
+    {
+        var pixels = (byte*)destination;
+#if NET8_0_OR_GREATER
+        var alpha256 = Vector256.Create(0xFF000000u);
+        var alpha128 = Vector128.Create(0xFF000000u);
+#endif
+        for (var y = 0; y < height; y++)
+        {
+            var row = (uint*)(pixels + ((long)y * stride));
+            var x = 0;
+#if NET8_0_OR_GREATER
+            if (Vector256.IsHardwareAccelerated)
+            {
+                var limit = width & ~7;
+                for (; x < limit; x += 8)
+                {
+                    Vector256.Store(Vector256.Load(row + x) | alpha256, row + x);
+                }
+            }
+            else if (Vector128.IsHardwareAccelerated)
+            {
+                var limit = width & ~3;
+                for (; x < limit; x += 4)
+                {
+                    Vector128.Store(Vector128.Load(row + x) | alpha128, row + x);
+                }
+            }
+#endif
+            for (; x < width; x++)
+            {
+                row[x] |= 0xFF000000u;
+            }
+        }
     }
 
     public void Dispose()
@@ -693,7 +742,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
 
         if (options.UseHardwareAcceleration == 0)
         {
-            result = _api.AvCodecOpen2(_codecContext, decoder, IntPtr.Zero);
+            result = OpenSoftwareVideoCodec(decoder, options.LowLatency != 0);
             return result < 0 ? Fail(result, "avcodec_open2") : 0;
         }
 
@@ -713,18 +762,21 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
 
             VideoDecoderDiagnostics =
                 $"{backendName} unavailable: {hardwareError}; software fallback";
-            result = _api.AvCodecOpen2(_codecContext, decoder, IntPtr.Zero);
+            result = OpenSoftwareVideoCodec(decoder, options.LowLatency != 0);
             return result < 0 ? Fail(result, "avcodec_open2") : 0;
         }
 
         var codecOptions = IntPtr.Zero;
         try
         {
-            SetDictionary(ref codecOptions, "extra_hw_frames", "8");
+            if (_preserveHardwareFrames && _hardwareDecoder!.SupportsDirectFrameOutput)
+            {
+                SetDictionary(ref codecOptions, "extra_hw_frames", "8");
+            }
             unsafe
             {
                 var dict = codecOptions;
-                result = _api.AvCodecOpen2(_codecContext, decoder, (IntPtr)(&dict));
+                result = _api.AvCodecOpen2(_codecContext, decoder, dict != IntPtr.Zero ? (IntPtr)(&dict) : IntPtr.Zero);
                 codecOptions = dict;
             }
         }
@@ -757,8 +809,36 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
 
         result = AllocateVideoDecoder(decoder);
         if (result < 0) return result;
-        result = _api.AvCodecOpen2(_codecContext, decoder, IntPtr.Zero);
+        result = OpenSoftwareVideoCodec(decoder, options.LowLatency != 0);
         return result < 0 ? Fail(result, "avcodec_open2 software fallback") : 0;
+    }
+
+    private int OpenSoftwareVideoCodec(IntPtr decoder, bool lowLatency)
+    {
+        var codecOptions = IntPtr.Zero;
+        try
+        {
+            var threadCount = lowLatency
+                ? Math.Clamp(Environment.ProcessorCount, 2, 4)
+                : Math.Clamp(Environment.ProcessorCount, 2, 8);
+            SetDictionary(ref codecOptions, "threads", threadCount.ToString(CultureInfo.InvariantCulture));
+            if (lowLatency)
+            {
+                SetDictionary(ref codecOptions, "thread_type", "slice");
+            }
+
+            unsafe
+            {
+                var dict = codecOptions;
+                var result = _api.AvCodecOpen2(_codecContext, decoder, (IntPtr)(&dict));
+                codecOptions = dict;
+                return result;
+            }
+        }
+        finally
+        {
+            _api.AvDictFree(ref codecOptions);
+        }
     }
 
     private int AllocateVideoDecoder(IntPtr decoder)
@@ -880,7 +960,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
                         _audioDecodeFrame,
                         layout,
                         _audioPlaybackRate,
-                        EnqueueFilteredAudioFrame);
+                        _enqueueFilteredAudioFrame ??= EnqueueFilteredAudioFrame);
                 }
             }
             finally
@@ -914,7 +994,7 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
         if (result >= 0 || result == ErrorEof)
         {
             DrainAudioFrames();
-            _audioTempoFilter?.Flush(EnqueueFilteredAudioFrame);
+            _audioTempoFilter?.Flush(_enqueueFilteredAudioFrame ??= EnqueueFilteredAudioFrame);
         }
     }
 
@@ -943,11 +1023,16 @@ internal sealed class DirectFfmpegSession(FFmpegApi api, bool packetReader) : ID
             outputLayout,
             _audioTimeBaseNumerator,
             _audioTimeBaseDenominator);
+        if (output is null)
+        {
+            return;
+        }
+
         _audioFrames.Enqueue(output);
         if (_audioPlaybackRate != 1d &&
             _nextAudioPresentationSeconds is not null)
         {
-            var sampleFrames = output.Data.Length /
+            var sampleFrames = output.Length /
                 (Math.Max(1, output.Channels) * sizeof(short));
             _nextAudioPresentationSeconds +=
                 sampleFrames * _audioPlaybackRate /
@@ -1009,8 +1094,8 @@ internal sealed class DirectVideoFrame(
                 Width = frame.Width,
                 Height = frame.Height,
                 PixelFormat = NativePixelFormat.D3D11Texture,
-                Plane0 = frame.Data[0],
-                Plane1 = frame.Data[1],
+                Plane0 = frame.Data0,
+                Plane1 = frame.Data1,
                 PresentationTimestamp = frame.PresentationTimestamp,
                 TimeBaseNumerator = timeBaseNumerator,
                 TimeBaseDenominator = timeBaseDenominator
@@ -1024,7 +1109,7 @@ internal sealed class DirectVideoFrame(
                 Width = frame.Width,
                 Height = frame.Height,
                 PixelFormat = NativePixelFormat.DmaBuf,
-                DmaBufDescriptor = frame.Data[0],
+                DmaBufDescriptor = frame.Data0,
                 PresentationTimestamp = frame.PresentationTimestamp,
                 TimeBaseNumerator = timeBaseNumerator,
                 TimeBaseDenominator = timeBaseDenominator
@@ -1036,12 +1121,12 @@ internal sealed class DirectVideoFrame(
             Width = frame.Width,
             Height = frame.Height,
             PixelFormat = FFmpegAbi.MapPixelFormat(frame.Format),
-            Plane0 = frame.Data[0],
-            Plane1 = frame.Data[1],
-            Plane2 = frame.Data[2],
-            Stride0 = frame.LineSize[0],
-            Stride1 = frame.LineSize[1],
-            Stride2 = frame.LineSize[2],
+            Plane0 = frame.Data0,
+            Plane1 = frame.Data1,
+            Plane2 = frame.Data2,
+            Stride0 = frame.LineSize0,
+            Stride1 = frame.LineSize1,
+            Stride2 = frame.LineSize2,
             PresentationTimestamp = frame.PresentationTimestamp,
             TimeBaseNumerator = timeBaseNumerator,
             TimeBaseDenominator = timeBaseDenominator
@@ -1059,9 +1144,13 @@ internal sealed class DirectVideoFrame(
     }
 }
 
-internal sealed class DirectVideoPacket(FFmpegApi api, IntPtr pointer) : IDisposable
+internal sealed class DirectVideoPacket(
+    FFmpegApi api,
+    IntPtr pointer,
+    Action<IntPtr>? releaseAction = null) : IDisposable
 {
     private readonly FFmpegApi _api = api;
+    private readonly Action<IntPtr>? _releaseAction = releaseAction;
     internal IntPtr Pointer { get; private set; } = pointer;
 
     public void Dispose()
@@ -1069,8 +1158,15 @@ internal sealed class DirectVideoPacket(FFmpegApi api, IntPtr pointer) : IDispos
         if (Pointer != IntPtr.Zero)
         {
             var packet = Pointer;
-            _api.AvPacketFree(ref packet);
             Pointer = IntPtr.Zero;
+            if (_releaseAction is not null)
+            {
+                _releaseAction(packet);
+            }
+            else
+            {
+                _api.AvPacketFree(ref packet);
+            }
         }
     }
 }
@@ -1197,14 +1293,15 @@ internal static class FFmpegAbi
 
     internal static FrameLayout ReadFrame(IntPtr frame, int utilMajorVersion)
     {
-        var data = new IntPtr[4];
-        var lineSize = new int[4];
         var lineSizeOffset = IntPtr.Size * 8;
-        for (var index = 0; index < 4; index++)
-        {
-            data[index] = Marshal.ReadIntPtr(frame, index * IntPtr.Size);
-            lineSize[index] = Marshal.ReadInt32(frame, lineSizeOffset + index * sizeof(int));
-        }
+        var data0 = Marshal.ReadIntPtr(frame, 0);
+        var data1 = Marshal.ReadIntPtr(frame, IntPtr.Size);
+        var data2 = Marshal.ReadIntPtr(frame, IntPtr.Size * 2);
+        var data3 = Marshal.ReadIntPtr(frame, IntPtr.Size * 3);
+        var lineSize0 = Marshal.ReadInt32(frame, lineSizeOffset);
+        var lineSize1 = Marshal.ReadInt32(frame, lineSizeOffset + sizeof(int));
+        var lineSize2 = Marshal.ReadInt32(frame, lineSizeOffset + sizeof(int) * 2);
+        var lineSize3 = Marshal.ReadInt32(frame, lineSizeOffset + sizeof(int) * 3);
 
         var extendedDataOffset = lineSizeOffset + sizeof(int) * 8;
         var widthOffset = extendedDataOffset + IntPtr.Size;
@@ -1223,8 +1320,14 @@ internal static class FFmpegAbi
             Marshal.ReadInt32(frame, widthOffset + sizeof(int) * 2),
             Marshal.ReadIntPtr(frame, extendedDataOffset),
             Marshal.ReadInt64(frame, ptsOffset),
-            data,
-            lineSize);
+            data0,
+            data1,
+            data2,
+            data3,
+            lineSize0,
+            lineSize1,
+            lineSize2,
+            lineSize3);
     }
 
     internal static void WriteFrameFormat(IntPtr frame, int utilMajorVersion, int format)
@@ -1326,12 +1429,18 @@ internal static class FFmpegAbi
         (value + alignment - 1) & ~(alignment - 1);
 }
 
-internal sealed record FrameLayout(
+internal readonly record struct FrameLayout(
     int Width,
     int Height,
     int Format,
     int SampleCount,
     IntPtr ExtendedData,
     long PresentationTimestamp,
-    IntPtr[] Data,
-    int[] LineSize);
+    IntPtr Data0,
+    IntPtr Data1,
+    IntPtr Data2,
+    IntPtr Data3,
+    int LineSize0,
+    int LineSize1,
+    int LineSize2,
+    int LineSize3);

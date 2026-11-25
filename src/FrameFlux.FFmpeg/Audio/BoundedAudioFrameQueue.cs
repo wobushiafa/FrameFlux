@@ -23,14 +23,20 @@ internal sealed class BoundedAudioFrameQueue
         RuntimeCompat.NotNull(frame, nameof(frame));
         if (_frames.Count == _capacity)
         {
-            _frames.Dequeue();
+            _frames.Dequeue().Dispose();
             DroppedCount++;
         }
 
         _frames.Enqueue(frame);
     }
 
-    internal void Clear() => _frames.Clear();
+    internal void Clear()
+    {
+        while (_frames.TryDequeue(out var dropped))
+        {
+            dropped.Dispose();
+        }
+    }
 
     internal bool TryDequeue(out NativeAudioFrame? frame) =>
         _frames.TryDequeue(out frame);

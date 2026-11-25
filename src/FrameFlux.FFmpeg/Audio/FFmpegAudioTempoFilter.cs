@@ -70,13 +70,16 @@ internal sealed class FFmpegAudioTempoFilter : IDisposable
         RuntimeCompat.NotNull(output, nameof(output));
         if (playbackRate == 1d)
         {
-            ResetGraph();
+            if (_graph != IntPtr.Zero)
+            {
+                ResetGraph();
+            }
             output(frame, layout);
             return;
         }
 
         EnsureGraph(playbackRate, layout.Format);
-        var result = _api.AvBufferSourceAddFrameFlags(_source, frame, KeepFrameReference);
+        var result = _api.AvBufferSourceAddFrameFlags(_source, frame, 0);
         if (result < 0)
         {
             throw CreateException("av_buffersrc_add_frame_flags", result);

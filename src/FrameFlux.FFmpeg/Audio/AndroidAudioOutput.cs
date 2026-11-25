@@ -1,13 +1,19 @@
 #if ANDROID
 using Android.Media;
+using Android.Runtime;
+using Java.Nio;
 
 namespace FrameFlux.FFmpeg;
 
-internal sealed class AndroidAudioOutput : IAudioOutput, IInterruptibleAudioOutput
+internal sealed class AndroidAudioOutput : IAudioOutput, IInterruptibleAudioOutput, ISlicedAudioOutput
 {
+    private readonly object _headSync = new();
     private AudioTrack? _track;
     private readonly AudioOutputConfiguration _configuration;
     private readonly int _bufferSizeBytes;
+    private ByteBuffer? _directBuffer;
+    private IntPtr _directBufferAddress;
+    private int _directBufferCapacity;
     private long _submittedFrames;
     private string? _lastError;
     private uint _lastHead;
@@ -45,6 +51,7 @@ internal sealed class AndroidAudioOutput : IAudioOutput, IInterruptibleAudioOutp
     public int SampleRate { get; }
     public int Channels { get; }
     public bool IsOperational => _track is not null;
+
     public MediaAudioDiagnostics Diagnostics
     {
         get
@@ -63,6 +70,7 @@ internal sealed class AndroidAudioOutput : IAudioOutput, IInterruptibleAudioOutp
                 _lastError);
         }
     }
+
     public long PlayedFrames
     {
         get
@@ -70,30 +78,104 @@ internal sealed class AndroidAudioOutput : IAudioOutput, IInterruptibleAudioOutp
             var track = _track;
             if (track is null) return 0;
             var head = unchecked((uint)track.PlaybackHeadPosition);
-            if (head < _lastHead) _headWraps += 1L << 32;
-            _lastHead = head;
-            return _headWraps + head;
+            lock (_headSync)
+            {
+                if (head < _lastHead) _headWraps += 1L << 32;
+                _lastHead = head;
+                return _headWraps + head;
+            }
         }
     }
 
-    public void Write(byte[] pcm)
+    public void Write(byte[] pcm) => Write(pcm, 0, pcm.Length);
+
+    public unsafe void Write(byte[] pcm, int offset, int count)
     {
         var track = _track;
-        if (track is null || pcm.Length == 0 || Volatile.Read(ref _stopping) != 0) return;
-        var written = OperatingSystem.IsAndroidVersionAtLeast(23)
-            ? track.Write(pcm, 0, pcm.Length, WriteMode.Blocking)
-            : track.Write(pcm, 0, pcm.Length);
-        if (written < 0)
+        if (track is null || count <= 0 || Volatile.Read(ref _stopping) != 0)
+        {
+            return;
+        }
+
+        var frameBytes = Channels * sizeof(short);
+        if (OperatingSystem.IsAndroidVersionAtLeast(23))
+        {
+            EnsureDirectBuffer(count);
+            if (_directBuffer is not null && _directBufferAddress != IntPtr.Zero)
+            {
+                fixed (byte* src = &pcm[offset])
+                {
+                    System.Buffer.MemoryCopy(src, (void*)_directBufferAddress, _directBufferCapacity, count);
+                }
+
+                var totalWritten = 0;
+                while (totalWritten < count)
+                {
+                    if (Volatile.Read(ref _stopping) != 0)
+                    {
+                        return;
+                    }
+
+                    _directBuffer.Position(totalWritten);
+                    _directBuffer.Limit(count);
+                    var remaining = count - totalWritten;
+                    var written = track.Write(_directBuffer, remaining, WriteMode.Blocking);
+                    if (written < 0)
+                    {
+                        if (Volatile.Read(ref _stopping) != 0)
+                        {
+                            return;
+                        }
+
+                        _lastError = $"AudioTrack.Write failed with code {written}.";
+                        throw new InvalidOperationException(_lastError);
+                    }
+
+                    if (written == 0)
+                    {
+                        break;
+                    }
+
+                    totalWritten += written;
+                    Interlocked.Add(ref _submittedFrames, written / frameBytes);
+                }
+
+                return;
+            }
+        }
+
+        var currentOffset = offset;
+        var remainingBytes = count;
+        while (remainingBytes > 0)
         {
             if (Volatile.Read(ref _stopping) != 0)
             {
                 return;
             }
 
-            _lastError = $"AudioTrack.Write failed with code {written}.";
-            throw new InvalidOperationException(_lastError);
+            var written = OperatingSystem.IsAndroidVersionAtLeast(23)
+                ? track.Write(pcm, currentOffset, remainingBytes, WriteMode.Blocking)
+                : track.Write(pcm, currentOffset, remainingBytes);
+            if (written < 0)
+            {
+                if (Volatile.Read(ref _stopping) != 0)
+                {
+                    return;
+                }
+
+                _lastError = $"AudioTrack.Write failed with code {written}.";
+                throw new InvalidOperationException(_lastError);
+            }
+
+            if (written == 0)
+            {
+                break;
+            }
+
+            currentOffset += written;
+            remainingBytes -= written;
+            Interlocked.Add(ref _submittedFrames, written / frameBytes);
         }
-        Interlocked.Add(ref _submittedFrames, written / (Channels * sizeof(short)));
     }
 
     public void Reset()
@@ -107,8 +189,11 @@ internal sealed class AndroidAudioOutput : IAudioOutput, IInterruptibleAudioOutp
         track.Pause();
         track.Flush();
         Interlocked.Exchange(ref _submittedFrames, 0);
-        _lastHead = 0;
-        _headWraps = 0;
+        lock (_headSync)
+        {
+            _lastHead = 0;
+            _headWraps = 0;
+        }
         track.Play();
     }
 
@@ -146,9 +231,33 @@ internal sealed class AndroidAudioOutput : IAudioOutput, IInterruptibleAudioOutp
     {
         RequestStop();
         var track = Interlocked.Exchange(ref _track, null);
-        if (track is null) return;
-        track.Release();
-        track.Dispose();
+        if (track is not null)
+        {
+            track.Release();
+            track.Dispose();
+        }
+
+        var directBuffer = Interlocked.Exchange(ref _directBuffer, null);
+        _directBufferAddress = IntPtr.Zero;
+        _directBufferCapacity = 0;
+        directBuffer?.Dispose();
+    }
+
+    private void EnsureDirectBuffer(int requiredBytes)
+    {
+        if (_directBuffer is not null && requiredBytes <= _directBufferCapacity)
+        {
+            return;
+        }
+
+        var newCapacity = Math.Max(requiredBytes, Math.Max(8192, _directBufferCapacity * 2));
+        var oldBuffer = _directBuffer;
+        _directBuffer = ByteBuffer.AllocateDirect(newCapacity);
+        _directBufferAddress = _directBuffer is not null
+            ? JNIEnv.GetDirectBufferAddress(_directBuffer.Handle)
+            : IntPtr.Zero;
+        _directBufferCapacity = _directBuffer is not null ? newCapacity : 0;
+        oldBuffer?.Dispose();
     }
 }
 #endif

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 
 namespace FrameFlux.FFmpeg;
@@ -10,7 +11,6 @@ internal sealed class FFmpegAudioResampler : IDisposable
     private IntPtr _inputLayout;
     private IntPtr _outputLayout;
     private IntPtr _context;
-    private readonly ReusableUnmanagedBuffer _outputBuffer = new();
     private int _inputFormat = int.MinValue;
 
     internal FFmpegAudioResampler(FFmpegApi api, IntPtr codecContext)
@@ -44,7 +44,7 @@ internal sealed class FFmpegAudioResampler : IDisposable
         }
     }
 
-    internal NativeAudioFrame Convert(
+    internal NativeAudioFrame? Convert(
         IntPtr frame,
         FrameLayout layout,
         int timeBaseNumerator,
@@ -55,40 +55,64 @@ internal sealed class FFmpegAudioResampler : IDisposable
         var outputSamples = checked((int)Math.Ceiling(
             (delayed + layout.SampleCount) * (double)AudioOutputFactory.SampleRate / _inputRate));
         outputSamples = Math.Max(outputSamples, layout.SampleCount);
-        var byteCount = checked(outputSamples * AudioOutputFactory.Channels * sizeof(short));
-        _outputBuffer.EnsureCapacity(byteCount);
-        unsafe
+        var maxBytes = checked(outputSamples * AudioOutputFactory.Channels * sizeof(short));
+        if (maxBytes <= 0)
         {
-            IntPtr* outputs = stackalloc IntPtr[1];
-            outputs[0] = _outputBuffer.Pointer;
-            var converted = _api.SwrConvert(
-                _context,
-                (IntPtr)outputs,
-                outputSamples,
-                layout.ExtendedData,
-                layout.SampleCount);
+            return null;
+        }
+
+        var rented = ArrayPool<byte>.Shared.Rent(maxBytes);
+        try
+        {
+            int converted;
+            unsafe
+            {
+                fixed (byte* dst = rented)
+                {
+                    IntPtr* outputs = stackalloc IntPtr[1];
+                    outputs[0] = (IntPtr)dst;
+                    converted = _api.SwrConvert(
+                        _context,
+                        (IntPtr)outputs,
+                        outputSamples,
+                        layout.ExtendedData,
+                        layout.SampleCount);
+                }
+            }
+
             if (converted < 0)
             {
+                ArrayPool<byte>.Shared.Return(rented);
                 throw new ApplicationException($"swr_convert: {_api.FormatError(converted)} ({converted})");
             }
 
-            var data = RuntimeCompat.AllocateBytes(
-                checked(converted * AudioOutputFactory.Channels * sizeof(short)));
-            Marshal.Copy(_outputBuffer.Pointer, data, 0, data.Length);
+            if (converted == 0)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+                return null;
+            }
+
+            var actualBytes = checked(converted * AudioOutputFactory.Channels * sizeof(short));
             return new NativeAudioFrame(
-                data,
+                rented,
+                actualBytes,
                 AudioOutputFactory.SampleRate,
                 AudioOutputFactory.Channels,
                 layout.PresentationTimestamp,
                 timeBaseNumerator,
-                timeBaseDenominator);
+                timeBaseDenominator,
+                isPooled: true);
+        }
+        catch
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+            throw;
         }
     }
 
     public void Dispose()
     {
         if (_context != IntPtr.Zero) _api.SwrFree(ref _context);
-        _outputBuffer.Dispose();
         ReleaseLayouts();
     }
 

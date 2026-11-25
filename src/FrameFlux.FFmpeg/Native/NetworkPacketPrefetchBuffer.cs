@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-
 namespace FrameFlux.FFmpeg;
 
 internal sealed class NetworkPacketPrefetchBuffer : IDisposable
@@ -12,8 +10,10 @@ internal sealed class NetworkPacketPrefetchBuffer : IDisposable
     private readonly FFmpegApi _api;
     private readonly IntPtr _formatContext;
     private readonly IntPtr _readPacket;
-    private readonly BlockingCollection<BufferedPacket> _packets = new(PacketCapacity);
-    private readonly Queue<double> _videoTimestamps = new();
+    private readonly Queue<BufferedPacket> _packets = new(PacketCapacity);
+    private readonly Queue<double> _videoTimestamps = new(256);
+    private readonly Stack<IntPtr> _packetPool = new(PacketCapacity + 1);
+    private readonly Action<IntPtr> _returnPacketToPool;
     private readonly object _queueSync = new();
     private readonly int _videoStreamIndex;
     private readonly double _videoTimeBase;
@@ -24,7 +24,7 @@ internal sealed class NetworkPacketPrefetchBuffer : IDisposable
     private readonly CancellationTokenSource _cancellation = new();
     private readonly Thread _readerThread;
     private readonly object _ioSync = new();
-    private readonly AutoResetEvent _wakeReader = new(false);
+    private double _lastVideoTimestamp;
     private bool _isEof;
     private bool _isFlushing;
     private int _terminalResult = ErrorEof;
@@ -55,6 +55,7 @@ internal sealed class NetworkPacketPrefetchBuffer : IDisposable
         _bufferingChanged = bufferingChanged;
         _initialBufferSeconds = initialBufferDurationMilliseconds / 1000d;
         _rebufferSeconds = rebufferDurationMilliseconds / 1000d;
+        _returnPacketToPool = ReturnPacketToPool;
         _readerThread = new Thread(ReadPackets)
         {
             IsBackground = true,
@@ -71,16 +72,20 @@ internal sealed class NetworkPacketPrefetchBuffer : IDisposable
             BufferedPacket? nextPacket = null;
             bool? notifyBuffering = null;
             int? terminalResult = null;
+            var shouldWait = false;
+
             lock (_queueSync)
             {
                 if (!_bufferBeforePlayback || !_isPriming || IsReadyToPlay())
                 {
-                    if (_packets.TryTake(out var bufferedPacket))
+                    if (_packets.Count > 0)
                     {
-                        if (bufferedPacket.VideoTimestamp is not null)
+                        var bufferedPacket = _packets.Dequeue();
+                        if (bufferedPacket.VideoTimestamp is not null && _videoTimestamps.Count > 0)
                         {
                             _videoTimestamps.Dequeue();
                         }
+
                         _isPriming = _bufferBeforePlayback && _packets.Count == 0;
                         nextPacket = bufferedPacket;
                         if (_bufferBeforePlayback && (!_hasStarted || _bufferingNotified))
@@ -88,18 +93,29 @@ internal sealed class NetworkPacketPrefetchBuffer : IDisposable
                             _bufferingNotified = false;
                             notifyBuffering = false;
                         }
+
                         _hasStarted = true;
+                        // Wake producer immediately if it was waiting on a full queue.
+                        Monitor.PulseAll(_queueSync);
                     }
                 }
 
-                if (nextPacket is null && Volatile.Read(ref _isEof) && _packets.Count == 0)
+                if (nextPacket is null)
                 {
-                    terminalResult = Volatile.Read(ref _terminalResult);
-                }
-                else if (nextPacket is null && _bufferBeforePlayback && !_bufferingNotified)
-                {
-                    _bufferingNotified = true;
-                    notifyBuffering = true;
+                    if (Volatile.Read(ref _isEof) && _packets.Count == 0)
+                    {
+                        terminalResult = Volatile.Read(ref _terminalResult);
+                    }
+                    else
+                    {
+                        if (_bufferBeforePlayback && !_bufferingNotified)
+                        {
+                            _bufferingNotified = true;
+                            notifyBuffering = true;
+                        }
+
+                        shouldWait = true;
+                    }
                 }
             }
 
@@ -107,18 +123,31 @@ internal sealed class NetworkPacketPrefetchBuffer : IDisposable
             {
                 _bufferingChanged?.Invoke(isBuffering);
             }
+
             if (nextPacket is { } buffered)
             {
                 packet = buffered.Packet;
                 return 0;
             }
+
             if (terminalResult is { } result)
             {
                 packet = null;
                 return result;
             }
 
-            _cancellation.Token.WaitHandle.WaitOne(25);
+            if (shouldWait)
+            {
+                lock (_queueSync)
+                {
+                    if (!_cancellation.IsCancellationRequested &&
+                        !Volatile.Read(ref _isEof) &&
+                        (_packets.Count == 0 || (_bufferBeforePlayback && _isPriming && !IsReadyToPlay())))
+                    {
+                        Monitor.Wait(_queueSync, 25);
+                    }
+                }
+            }
         }
 
         packet = null;
@@ -128,18 +157,25 @@ internal sealed class NetworkPacketPrefetchBuffer : IDisposable
     internal int Seek(Func<int> seekAction)
     {
         Volatile.Write(ref _isFlushing, true);
+        lock (_queueSync)
+        {
+            Monitor.PulseAll(_queueSync);
+        }
+
         lock (_ioSync)
         {
             try
             {
-                _generation++;
+                Interlocked.Increment(ref _generation);
                 lock (_queueSync)
                 {
-                    while (_packets.TryTake(out var oldPacket))
+                    while (_packets.Count > 0)
                     {
-                        oldPacket.Packet.Dispose();
+                        _packets.Dequeue().Packet.Dispose();
                     }
+
                     _videoTimestamps.Clear();
+                    _lastVideoTimestamp = 0d;
                     _isPriming = true;
                     _hasStarted = false;
                 }
@@ -147,17 +183,32 @@ internal sealed class NetworkPacketPrefetchBuffer : IDisposable
                 var result = seekAction();
                 Volatile.Write(ref _terminalResult, ErrorEof);
                 Volatile.Write(ref _isEof, false);
-                _wakeReader.Set();
+                lock (_queueSync)
+                {
+                    Monitor.PulseAll(_queueSync);
+                }
+
                 return result;
             }
             finally
             {
                 Volatile.Write(ref _isFlushing, false);
+                lock (_queueSync)
+                {
+                    Monitor.PulseAll(_queueSync);
+                }
             }
         }
     }
 
-    internal void Cancel() => _cancellation.Cancel();
+    internal void Cancel()
+    {
+        _cancellation.Cancel();
+        lock (_queueSync)
+        {
+            Monitor.PulseAll(_queueSync);
+        }
+    }
 
     public void Dispose()
     {
@@ -166,20 +217,67 @@ internal sealed class NetworkPacketPrefetchBuffer : IDisposable
             return;
         }
 
-        _cancellation.Cancel();
-        _wakeReader.Set();
+        Cancel();
         if (Thread.CurrentThread != _readerThread)
         {
             _readerThread.Join();
         }
 
-        while (_packets.TryTake(out var packet))
+        lock (_queueSync)
         {
-            packet.Packet.Dispose();
+            while (_packets.Count > 0)
+            {
+                _packets.Dequeue().Packet.Dispose();
+            }
+
+            while (_packetPool.Count > 0)
+            {
+                var pooled = _packetPool.Pop();
+                _api.AvPacketFree(ref pooled);
+            }
         }
-        _packets.Dispose();
-        _wakeReader.Dispose();
+
         _cancellation.Dispose();
+    }
+
+    private IntPtr RentNativePacket()
+    {
+        lock (_queueSync)
+        {
+            if (_packetPool.Count > 0)
+            {
+                return _packetPool.Pop();
+            }
+        }
+
+        return _api.AvPacketAlloc();
+    }
+
+    private void ReturnPacketToPool(IntPtr nativePacket)
+    {
+        if (nativePacket == IntPtr.Zero)
+        {
+            return;
+        }
+
+        _api.AvPacketUnref(nativePacket);
+        var freePacket = false;
+        lock (_queueSync)
+        {
+            if (Volatile.Read(ref _disposed) != 0 || _packetPool.Count >= PacketCapacity + 2)
+            {
+                freePacket = true;
+            }
+            else
+            {
+                _packetPool.Push(nativePacket);
+            }
+        }
+
+        if (freePacket)
+        {
+            _api.AvPacketFree(ref nativePacket);
+        }
     }
 
     private void ReadPackets()
@@ -190,56 +288,93 @@ internal sealed class NetworkPacketPrefetchBuffer : IDisposable
             {
                 if (Volatile.Read(ref _isEof))
                 {
-                    WaitHandle.WaitAny([_cancellation.Token.WaitHandle, _wakeReader]);
-                    if (_cancellation.IsCancellationRequested) break;
+                    lock (_queueSync)
+                    {
+                        while (!_cancellation.IsCancellationRequested && Volatile.Read(ref _isEof))
+                        {
+                            Monitor.Wait(_queueSync, 50);
+                        }
+                    }
+
+                    if (_cancellation.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                }
+
+                // Wait until the queue has capacity before blocking on av_read_frame.
+                lock (_queueSync)
+                {
+                    while (!_cancellation.IsCancellationRequested &&
+                           !Volatile.Read(ref _isFlushing) &&
+                           !Volatile.Read(ref _isEof) &&
+                           _packets.Count >= PacketCapacity)
+                    {
+                        Monitor.Wait(_queueSync, 50);
+                    }
+                }
+
+                if (_cancellation.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                var nativePacket = RentNativePacket();
+                if (nativePacket == IntPtr.Zero)
+                {
+                    Volatile.Write(ref _terminalResult, ErrorNoMemory);
+                    Volatile.Write(ref _isEof, true);
+                    lock (_queueSync)
+                    {
+                        Monitor.PulseAll(_queueSync);
+                    }
+
+                    continue;
                 }
 
                 int result;
                 int generation;
-                IntPtr clone = IntPtr.Zero;
                 lock (_ioSync)
                 {
-                    if (_cancellation.IsCancellationRequested) break;
-                    if (Volatile.Read(ref _isEof)) continue;
-
-                    generation = _generation;
-                    result = _api.AvReadFrame(_formatContext, _readPacket);
-                    if (result >= 0)
+                    if (_cancellation.IsCancellationRequested)
                     {
-                        clone = _api.AvPacketClone(_readPacket);
-                        _api.AvPacketUnref(_readPacket);
+                        ReturnPacketToPool(nativePacket);
+                        break;
                     }
+
+                    if (Volatile.Read(ref _isEof))
+                    {
+                        ReturnPacketToPool(nativePacket);
+                        continue;
+                    }
+
+                    generation = Volatile.Read(ref _generation);
+                    result = _api.AvReadFrame(_formatContext, nativePacket);
                 }
 
                 if (result < 0)
                 {
-                    lock (_ioSync)
+                    ReturnPacketToPool(nativePacket);
+                    if (generation == Volatile.Read(ref _generation))
                     {
-                        if (generation != _generation) continue;
                         Volatile.Write(ref _terminalResult, result);
                         Volatile.Write(ref _isEof, true);
+                        lock (_queueSync)
+                        {
+                            Monitor.PulseAll(_queueSync);
+                        }
                     }
+
                     continue;
                 }
 
-                if (clone == IntPtr.Zero)
-                {
-                    lock (_ioSync)
-                    {
-                        if (generation != _generation) continue;
-                        Volatile.Write(ref _terminalResult, ErrorNoMemory);
-                        Volatile.Write(ref _isEof, true);
-                    }
-                    continue;
-                }
-
-                DirectVideoPacket? packet = new(_api, clone);
+                DirectVideoPacket? packet = new(_api, nativePacket, _returnPacketToPool);
                 try
                 {
                     double? videoTimestamp = null;
-                    if (FFmpegAbi.GetPacketStreamIndex(clone) == _videoStreamIndex)
+                    if (FFmpegAbi.GetPacketStreamIndex(nativePacket) == _videoStreamIndex)
                     {
-                        var info = FFmpegAbi.ReadPacket(clone);
+                        var info = FFmpegAbi.ReadPacket(nativePacket);
                         var timestamp = info.DecodeTimestamp != long.MinValue
                             ? info.DecodeTimestamp
                             : info.PresentationTimestamp;
@@ -249,30 +384,31 @@ internal sealed class NetworkPacketPrefetchBuffer : IDisposable
                         }
                     }
 
-                    while (!_cancellation.IsCancellationRequested && !Volatile.Read(ref _isFlushing))
+                    lock (_queueSync)
                     {
-                        lock (_ioSync)
+                        while (!_cancellation.IsCancellationRequested &&
+                               !Volatile.Read(ref _isFlushing) &&
+                               generation == Volatile.Read(ref _generation) &&
+                               _packets.Count >= PacketCapacity)
                         {
-                            if (generation != _generation)
-                            {
-                                break;
-                            }
-
-                            lock (_queueSync)
-                            {
-                                if (_packets.TryAdd(new BufferedPacket(packet, videoTimestamp)))
-                                {
-                                    if (videoTimestamp is { } time)
-                                    {
-                                        _videoTimestamps.Enqueue(time);
-                                    }
-                                    packet = null;
-                                    break;
-                                }
-                            }
+                            Monitor.Wait(_queueSync, 50);
                         }
 
-                        Thread.Sleep(10);
+                        if (!_cancellation.IsCancellationRequested &&
+                            !Volatile.Read(ref _isFlushing) &&
+                            generation == Volatile.Read(ref _generation) &&
+                            _packets.Count < PacketCapacity)
+                        {
+                            _packets.Enqueue(new BufferedPacket(packet, videoTimestamp));
+                            if (videoTimestamp is { } time)
+                            {
+                                _videoTimestamps.Enqueue(time);
+                                _lastVideoTimestamp = time;
+                            }
+
+                            packet = null;
+                            Monitor.PulseAll(_queueSync);
+                        }
                     }
                 }
                 finally
@@ -284,17 +420,22 @@ internal sealed class NetworkPacketPrefetchBuffer : IDisposable
         catch (OperationCanceledException)
         {
             Volatile.Write(ref _terminalResult, ErrorExit);
+            lock (_queueSync)
+            {
+                Monitor.PulseAll(_queueSync);
+            }
         }
     }
 
     private bool IsReadyToPlay()
     {
         var targetSeconds = _hasStarted ? _rebufferSeconds : _initialBufferSeconds;
+        var hasVideoTimestamps = _videoTimestamps.Count > 0;
         return NetworkPacketBufferingPolicy.IsReady(
             _packets.Count,
             PacketCapacity,
-            _videoTimestamps.Count > 0 ? _videoTimestamps.Peek() : null,
-            _videoTimestamps.Count > 0 ? _videoTimestamps.Last() : null,
+            hasVideoTimestamps ? _videoTimestamps.Peek() : null,
+            hasVideoTimestamps ? _lastVideoTimestamp : null,
             targetSeconds,
             Volatile.Read(ref _isEof));
     }

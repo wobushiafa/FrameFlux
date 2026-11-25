@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
@@ -104,11 +105,40 @@ internal sealed record NativeAudioFrame(
     int Channels,
     long PresentationTimestamp,
     int TimeBaseNumerator,
-    int TimeBaseDenominator)
+    int TimeBaseDenominator) : IDisposable
 {
+    private byte[]? _pooledBuffer;
+    private readonly int _length = Data.Length;
+
+    internal NativeAudioFrame(
+        byte[] data,
+        int length,
+        int sampleRate,
+        int channels,
+        long presentationTimestamp,
+        int timeBaseNumerator,
+        int timeBaseDenominator,
+        bool isPooled)
+        : this(data, sampleRate, channels, presentationTimestamp, timeBaseNumerator, timeBaseDenominator)
+    {
+        _length = length;
+        _pooledBuffer = isPooled ? data : null;
+    }
+
+    internal int Length => _length;
+
     internal double? PresentationSeconds => PresentationTimestamp == long.MinValue
         ? null
         : PresentationTimestamp * (double)TimeBaseNumerator / TimeBaseDenominator;
+
+    public void Dispose()
+    {
+        var pooled = Interlocked.Exchange(ref _pooledBuffer, null);
+        if (pooled is not null)
+        {
+            ArrayPool<byte>.Shared.Return(pooled);
+        }
+    }
 }
 
 internal sealed class NativeFfmpegSessionHandle : SafeHandleZeroOrMinusOneIsInvalid

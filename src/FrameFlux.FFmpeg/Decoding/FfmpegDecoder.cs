@@ -4,30 +4,30 @@ namespace FrameFlux.FFmpeg;
 
 internal sealed class NativeDecodedFrame : IDisposable
 {
-    private NativeVideoFrameHandle? _handle;
+    private DirectVideoFrame? _frame;
 
-    internal NativeDecodedFrame(NativeVideoFrameHandle handle, NativeFrameInfo info)
+    internal NativeDecodedFrame(DirectVideoFrame frame, NativeFrameInfo info)
     {
-        _handle = handle;
+        _frame = frame;
         Info = info;
     }
 
     internal NativeFrameInfo Info { get; }
 
-    internal NativeVideoFrameHandle Handle =>
-        _handle ?? throw new ObjectDisposedException(nameof(NativeDecodedFrame));
+    internal DirectVideoFrame Frame =>
+        _frame ?? throw new ObjectDisposedException(nameof(NativeDecodedFrame));
 
-    internal NativeVideoFrameHandle DetachHandle()
+    internal DirectVideoFrame DetachFrame()
     {
-        var handle = Handle;
-        _handle = null;
-        return handle;
+        var frame = Frame;
+        _frame = null;
+        return frame;
     }
 
     public void Dispose()
     {
-        _handle?.Dispose();
-        _handle = null;
+        _frame?.Dispose();
+        _frame = null;
     }
 }
 
@@ -139,12 +139,12 @@ internal sealed class FfmpegDecoder : IDisposable
     {
         RuntimeCompat.NotDisposed(_disposed, this);
         var startedAt = Stopwatch.GetTimestamp();
-        var result = FrameFluxFFmpegNative.ReadFrame(_session, out var handle);
+        var result = FrameFluxFFmpegNative.ReadDirectFrame(_session, out var directFrame);
         LastReadTicks = Stopwatch.GetTimestamp() - startedAt;
         LastCodecTicks = LastReadTicks;
-        if (result != NativeReadResult.Ok || handle.IsInvalid)
+        if (result != NativeReadResult.Ok || directFrame is null)
         {
-            handle.Dispose();
+            directFrame?.Dispose();
             frame = null;
             if (result == NativeReadResult.Error)
             {
@@ -154,9 +154,10 @@ internal sealed class FfmpegDecoder : IDisposable
             return false;
         }
 
-        if (FrameFluxFFmpegNative.GetFrameInfo(handle, out var info) < 0)
+        var info = directFrame.GetInfo();
+        if (info.Width <= 0 || info.Height <= 0)
         {
-            handle.Dispose();
+            directFrame.Dispose();
             throw CreateRuntimeException(
                 "The native FFmpeg decoder returned an invalid video frame.");
         }
@@ -169,7 +170,7 @@ internal sealed class FfmpegDecoder : IDisposable
             _fallbackFrameDuration);
         _hasPlaybackPosition = true;
 
-        frame = new NativeDecodedFrame(handle, info);
+        frame = new NativeDecodedFrame(directFrame, info);
         return true;
     }
 
@@ -265,9 +266,9 @@ internal sealed class FfmpegDecoder : IDisposable
         int destinationHeight,
         int destinationStride)
     {
-        var result = FrameFluxFFmpegNative.CopyFrameToBgra(
+        var result = FrameFluxFFmpegNative.CopyDirectFrameToBgra(
             _session,
-            frame.Handle,
+            frame.Frame,
             destination,
             destinationWidth,
             destinationHeight,
@@ -308,8 +309,8 @@ internal sealed class FfmpegDecoder : IDisposable
         FfmpegNativePixelFormat pixelFormat)
     {
         var info = frame.Info;
-        var handle = frame.DetachHandle();
-        var lease = new FfmpegMediaFrameLease(IntPtr.Zero, 0, _ => handle.Dispose());
+        var directFrame = frame.DetachFrame();
+        var lease = new FfmpegMediaFrameLease(directFrame);
         if (pixelFormat == FfmpegNativePixelFormat.D3D11Texture)
         {
             lease.ResetD3D11(info.Width, info.Height, info.Plane0, checked((int)info.Plane1));

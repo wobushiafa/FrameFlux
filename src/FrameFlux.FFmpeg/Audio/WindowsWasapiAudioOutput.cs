@@ -4,9 +4,11 @@ using NAudio.Wave;
 
 namespace FrameFlux.FFmpeg;
 
-internal sealed class WindowsWasapiAudioOutput : IAudioOutput
+internal sealed class WindowsWasapiAudioOutput : IAudioOutput, ISlicedAudioOutput
 {
+    private const int MaxWasapiEndpointLatencyMilliseconds = 50;
     private readonly object _sync = new();
+    private readonly object _recoverySync = new();
     private readonly AudioOutputConfiguration _configuration;
     private MMDeviceEnumerator? _enumerator;
     private MMDevice? _device;
@@ -19,6 +21,7 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
     private int _recoveryCount;
     private bool _needsRecovery;
     private bool _disposed;
+    private volatile bool _isOperational;
 
     internal WindowsWasapiAudioOutput(
         int sampleRate,
@@ -28,7 +31,8 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
         SampleRate = sampleRate;
         Channels = channels;
         _configuration = configuration;
-        Initialize();
+        var backend = CreateBackend();
+        AttachBackendLocked(backend);
     }
 
     public int SampleRate { get; }
@@ -39,25 +43,14 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
     {
         get
         {
-            lock (_sync)
-            {
-                var bufferedFrames = (_provider?.BufferedBytes ?? 0) /
-                    Math.Max(1, Channels * sizeof(short));
-                return Math.Max(0, Interlocked.Read(ref _submittedFrames) - bufferedFrames);
-            }
+            var provider = Volatile.Read(ref _provider);
+            var bufferedFrames = (provider?.BufferedBytes ?? 0) /
+                Math.Max(1, Channels * sizeof(short));
+            return Math.Max(0, Interlocked.Read(ref _submittedFrames) - bufferedFrames);
         }
     }
 
-    public bool IsOperational
-    {
-        get
-        {
-            lock (_sync)
-            {
-                return !_disposed && _output is not null && !_needsRecovery;
-            }
-        }
-    }
+    public bool IsOperational => _isOperational;
 
     public MediaAudioDiagnostics Diagnostics
     {
@@ -73,17 +66,67 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
                     Channels,
                     _configuration.BufferDuration,
                     _provider?.BufferedDuration ?? TimeSpan.Zero,
-                    !_disposed && _output is not null && !_needsRecovery,
+                    _isOperational,
                     _recoveryCount,
                     _lastError);
             }
         }
     }
 
-    public void Write(byte[] pcm)
+    public void Write(byte[] pcm) => Write(pcm, 0, pcm.Length);
+
+    public void Write(byte[] pcm, int offset, int count)
     {
-        if (pcm.Length == 0)
+        if (count <= 0)
         {
+            return;
+        }
+
+        if (NeedsRecovery())
+        {
+            Recover();
+        }
+
+        lock (_sync)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            var provider = _provider;
+            if (_needsRecovery || _output is null || provider is null)
+            {
+                return;
+            }
+
+            try
+            {
+                var availableBytes = Math.Max(0, provider.BufferLength - provider.BufferedBytes);
+                var acceptedBytes = Math.Min(count, availableBytes);
+                provider.AddSamples(pcm, offset, count);
+                if (acceptedBytes > 0)
+                {
+                    Interlocked.Add(
+                        ref _submittedFrames,
+                        acceptedBytes / (Channels * sizeof(short)));
+                }
+            }
+            catch (Exception exception)
+            {
+                _lastError = exception.Message;
+                _needsRecovery = true;
+                _isOperational = false;
+                throw;
+            }
+        }
+    }
+
+    public void Reset()
+    {
+        if (NeedsRecovery())
+        {
+            Recover();
             return;
         }
 
@@ -94,41 +137,7 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
                 return;
             }
 
-            if (_needsRecovery || _output is null || _provider is null)
-            {
-                Recover();
-            }
-
-            try
-            {
-                _provider!.AddSamples(pcm, 0, pcm.Length);
-                Interlocked.Add(
-                    ref _submittedFrames,
-                    pcm.Length / (Channels * sizeof(short)));
-            }
-            catch (Exception exception)
-            {
-                _lastError = exception.Message;
-                _needsRecovery = true;
-                throw;
-            }
-        }
-    }
-
-    public void Reset()
-    {
-        lock (_sync)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            if (_needsRecovery || _output is null || _provider is null)
-            {
-                Recover();
-            }
-            else
+            if (_provider is not null && !_needsRecovery && _output is not null)
             {
                 _provider.ClearBuffer();
                 Interlocked.Exchange(ref _submittedFrames, 0);
@@ -138,6 +147,7 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
 
     public void Dispose()
     {
+        BackendResources detached;
         lock (_sync)
         {
             if (_disposed)
@@ -146,73 +156,178 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
             }
 
             _disposed = true;
-            ReleaseBackend();
+            _isOperational = false;
+            detached = DetachBackendLocked();
         }
+
+        DisposeBackendResources(detached);
     }
 
-    private void Initialize()
+    private bool NeedsRecovery()
     {
-        _enumerator = new MMDeviceEnumerator();
-        _device = _configuration.OutputDeviceId is { } deviceId
-            ? _enumerator.GetDevice(deviceId)
-            : _enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-        _deviceId = _device.ID;
-        _deviceName = _device.FriendlyName;
-
-        var latency = Math.Max(10, checked((int)Math.Ceiling(
-            _configuration.BufferDuration.TotalMilliseconds)));
-        var provider = new BufferedWaveProvider(new WaveFormat(SampleRate, 16, Channels))
+        lock (_sync)
         {
-            BufferDuration = TimeSpan.FromMilliseconds(Math.Max(latency * 4, 500)),
-            DiscardOnBufferOverflow = true,
-            ReadFully = true
-        };
-        var output = new WasapiOut(
-            _device,
-            AudioClientShareMode.Shared,
-            useEventSync: true,
-            latency);
-        output.PlaybackStopped += OnPlaybackStopped;
-        output.Init(provider);
-        RestoreApplicationSessionVolume();
-        output.Play();
-        _provider = provider;
-        _output = output;
-        _needsRecovery = false;
-    }
-
-    private void RestoreApplicationSessionVolume()
-    {
-        AudioSessionManager? sessionManager = null;
-        try
-        {
-            sessionManager = _device!.AudioSessionManager;
-            sessionManager.SimpleAudioVolume.Volume = 1f;
-        }
-        catch (Exception exception)
-        {
-            _lastError = $"Unable to restore the application audio session volume: {exception.Message}";
-            System.Diagnostics.Debug.WriteLine(_lastError);
-        }
-        finally
-        {
-            sessionManager?.Dispose();
+            return !_disposed && (_needsRecovery || _output is null || _provider is null);
         }
     }
 
     private void Recover()
     {
-        ReleaseBackend();
+        lock (_recoverySync)
+        {
+            BackendResources oldBackend;
+            lock (_sync)
+            {
+                if (_disposed || (!_needsRecovery && _output is not null && _provider is not null))
+                {
+                    return;
+                }
+
+                oldBackend = DetachBackendLocked();
+                _isOperational = false;
+            }
+
+            DisposeBackendResources(oldBackend);
+
+            BackendResources newBackend;
+            try
+            {
+                newBackend = CreateBackend();
+            }
+            catch (Exception exception)
+            {
+                lock (_sync)
+                {
+                    _lastError = exception.Message;
+                    _needsRecovery = true;
+                    _isOperational = false;
+                }
+                throw new InvalidOperationException("WASAPI audio output recovery failed.", exception);
+            }
+
+            var disposedMeanwhile = false;
+            lock (_sync)
+            {
+                if (_disposed)
+                {
+                    disposedMeanwhile = true;
+                }
+                else
+                {
+                    AttachBackendLocked(newBackend);
+                    _recoveryCount++;
+                }
+            }
+
+            if (disposedMeanwhile)
+            {
+                DisposeBackendResources(newBackend);
+            }
+        }
+    }
+
+    private BackendResources CreateBackend()
+    {
+        MMDeviceEnumerator? enumerator = null;
+        MMDevice? device = null;
+        WasapiOut? output = null;
         try
         {
-            Initialize();
-            _recoveryCount++;
+            enumerator = new MMDeviceEnumerator();
+            device = _configuration.OutputDeviceId is { } deviceId
+                ? enumerator.GetDevice(deviceId)
+                : enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+            var resolvedId = device.ID;
+            var resolvedName = device.FriendlyName;
+
+            var requestedMs = Math.Max(10, checked((int)Math.Ceiling(
+                _configuration.BufferDuration.TotalMilliseconds)));
+            var wasapiLatency = Math.Min(requestedMs, MaxWasapiEndpointLatencyMilliseconds);
+            var provider = new BufferedWaveProvider(new WaveFormat(SampleRate, 16, Channels))
+            {
+                BufferDuration = TimeSpan.FromMilliseconds(Math.Max(requestedMs * 4, 500)),
+                DiscardOnBufferOverflow = true,
+                ReadFully = true
+            };
+            output = new WasapiOut(
+                device,
+                AudioClientShareMode.Shared,
+                useEventSync: true,
+                wasapiLatency);
+            output.PlaybackStopped += OnPlaybackStopped;
+            output.Init(provider);
+            RestoreApplicationSessionVolume(device);
+            output.Play();
+            return new BackendResources(enumerator, device, output, provider, resolvedId, resolvedName);
+        }
+        catch
+        {
+            if (output is not null)
+            {
+                output.PlaybackStopped -= OnPlaybackStopped;
+                output.Dispose();
+            }
+            device?.Dispose();
+            enumerator?.Dispose();
+            throw;
+        }
+    }
+
+    private void AttachBackendLocked(BackendResources backend)
+    {
+        _enumerator = backend.Enumerator;
+        _device = backend.Device;
+        _output = backend.Output;
+        Volatile.Write(ref _provider, backend.Provider);
+        _deviceId = backend.DeviceId;
+        _deviceName = backend.DeviceName;
+        _needsRecovery = false;
+        _isOperational = !_disposed;
+        Interlocked.Exchange(ref _submittedFrames, 0);
+    }
+
+    private BackendResources DetachBackendLocked()
+    {
+        var detached = new BackendResources(_enumerator, _device, _output, _provider, _deviceId, _deviceName);
+        _output = null;
+        Volatile.Write(ref _provider, null);
+        _device = null;
+        _enumerator = null;
+        return detached;
+    }
+
+    private void DisposeBackendResources(BackendResources resources)
+    {
+        if (resources.Output is not null)
+        {
+            resources.Output.PlaybackStopped -= OnPlaybackStopped;
+            resources.Output.Dispose();
+        }
+
+        resources.Device?.Dispose();
+        resources.Enumerator?.Dispose();
+    }
+
+    private void RestoreApplicationSessionVolume(MMDevice device)
+    {
+        AudioSessionManager? sessionManager = null;
+        try
+        {
+            sessionManager = device.AudioSessionManager;
+            sessionManager.SimpleAudioVolume.Volume = 1f;
         }
         catch (Exception exception)
         {
-            _lastError = exception.Message;
-            _needsRecovery = true;
-            throw new InvalidOperationException("WASAPI audio output recovery failed.", exception);
+            var message = $"Unable to restore the application audio session volume: {exception.Message}";
+            lock (_sync)
+            {
+                _lastError = message;
+            }
+            System.Diagnostics.Debug.WriteLine(message);
+        }
+        finally
+        {
+            sessionManager?.Dispose();
         }
     }
 
@@ -227,24 +342,16 @@ internal sealed class WindowsWasapiAudioOutput : IAudioOutput
         {
             _lastError = args.Exception.Message;
             _needsRecovery = true;
+            _isOperational = false;
         }
     }
 
-    private void ReleaseBackend()
-    {
-        var output = _output;
-        _output = null;
-        _provider = null;
-        if (output is not null)
-        {
-            output.PlaybackStopped -= OnPlaybackStopped;
-            output.Dispose();
-        }
-
-        _device?.Dispose();
-        _device = null;
-        _enumerator?.Dispose();
-        _enumerator = null;
-    }
+    private readonly record struct BackendResources(
+        MMDeviceEnumerator? Enumerator,
+        MMDevice? Device,
+        WasapiOut? Output,
+        BufferedWaveProvider? Provider,
+        string? DeviceId,
+        string? DeviceName);
 }
 #endif

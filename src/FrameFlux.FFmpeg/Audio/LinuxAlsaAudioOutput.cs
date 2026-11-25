@@ -1,13 +1,18 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace FrameFlux.FFmpeg;
 
-internal sealed class LinuxAlsaAudioOutput : IAudioOutput, IInterruptibleAudioOutput
+internal sealed class LinuxAlsaAudioOutput : IAudioOutput, IInterruptibleAudioOutput, ISlicedAudioOutput
 {
-    private IntPtr _handle;
-    private long _submittedFrames;
+    private readonly object _clockSync = new();
     private readonly AudioOutputConfiguration _configuration;
     private readonly string _deviceName;
+    private IntPtr _handle;
+    private long _submittedFrames;
+    private long _anchorPlayedFrames;
+    private long _anchorTimestamp;
+    private long _lastQueuedFrames;
     private string? _lastError;
     private int _stopping;
 
@@ -49,11 +54,17 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput, IInterruptibleAudioOu
     public int SampleRate { get; }
     public int Channels { get; }
     public bool IsOperational => _handle != IntPtr.Zero;
+
     public MediaAudioDiagnostics Diagnostics
     {
         get
         {
-            var queuedFrames = GetQueuedFrames();
+            long queuedFrames;
+            lock (_clockSync)
+            {
+                queuedFrames = _lastQueuedFrames;
+            }
+
             return new MediaAudioDiagnostics(
                 "ALSA",
                 _configuration.OutputDeviceId,
@@ -67,26 +78,50 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput, IInterruptibleAudioOu
                 _lastError);
         }
     }
+
     public long PlayedFrames
     {
         get
         {
             var submitted = Interlocked.Read(ref _submittedFrames);
-            return _handle != IntPtr.Zero && snd_pcm_delay(_handle, out var delay) >= 0
-                ? Math.Max(0, submitted - Math.Max(0, delay))
-                : submitted;
+            long anchorPlayed;
+            long anchorTimestamp;
+            lock (_clockSync)
+            {
+                anchorPlayed = _anchorPlayedFrames;
+                anchorTimestamp = _anchorTimestamp;
+            }
+
+            if (anchorTimestamp == 0)
+            {
+                return submitted;
+            }
+
+            var elapsedSeconds = (double)(Stopwatch.GetTimestamp() - anchorTimestamp) / Stopwatch.Frequency;
+            if (elapsedSeconds <= 0d)
+            {
+                return Math.Clamp(anchorPlayed, 0, submitted);
+            }
+
+            var estimated = anchorPlayed + (long)(elapsedSeconds * SampleRate);
+            return Math.Clamp(estimated, anchorPlayed, submitted);
         }
     }
 
-    public void Write(byte[] pcm)
+    public void Write(byte[] pcm) => Write(pcm, 0, pcm.Length);
+
+    public unsafe void Write(byte[] pcm, int offset, int count)
     {
         var handle = _handle;
-        if (handle == IntPtr.Zero || pcm.Length == 0 || Volatile.Read(ref _stopping) != 0) return;
+        if (handle == IntPtr.Zero || count <= 0 || Volatile.Read(ref _stopping) != 0)
+        {
+            return;
+        }
+
         var frameSize = Channels * sizeof(short);
-        var remainingFrames = pcm.Length / frameSize;
-        var offset = 0;
-        var pinned = GCHandle.Alloc(pcm, GCHandleType.Pinned);
-        try
+        var remainingFrames = count / frameSize;
+        var currentOffset = offset;
+        fixed (byte* basePtr = pcm)
         {
             while (remainingFrames > 0)
             {
@@ -95,7 +130,7 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput, IInterruptibleAudioOu
                     return;
                 }
 
-                var result = snd_pcm_writei(handle, pinned.AddrOfPinnedObject() + offset, (nuint)remainingFrames);
+                var result = snd_pcm_writei(handle, (IntPtr)(basePtr + currentOffset), (nuint)remainingFrames);
                 if (Volatile.Read(ref _stopping) != 0)
                 {
                     return;
@@ -111,15 +146,13 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput, IInterruptibleAudioOu
                     }
                     continue;
                 }
+
                 var written = checked((int)result);
                 remainingFrames -= written;
-                offset += written * frameSize;
-                Interlocked.Add(ref _submittedFrames, written);
+                currentOffset += written * frameSize;
+                var submitted = Interlocked.Add(ref _submittedFrames, written);
+                SampleClockSnapshot(handle, submitted);
             }
-        }
-        finally
-        {
-            pinned.Free();
         }
     }
 
@@ -133,6 +166,12 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput, IInterruptibleAudioOu
         ThrowIfFailed(snd_pcm_drop(_handle), "snd_pcm_drop");
         ThrowIfFailed(snd_pcm_prepare(_handle), "snd_pcm_prepare");
         Interlocked.Exchange(ref _submittedFrames, 0);
+        lock (_clockSync)
+        {
+            _anchorPlayedFrames = 0;
+            _anchorTimestamp = 0;
+            _lastQueuedFrames = 0;
+        }
     }
 
     public void RequestStop()
@@ -166,13 +205,6 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput, IInterruptibleAudioOu
         }
     }
 
-    private long GetQueuedFrames()
-    {
-        return _handle != IntPtr.Zero && snd_pcm_delay(_handle, out var delay) >= 0
-            ? Math.Max(0, delay)
-            : 0;
-    }
-
     public void Dispose()
     {
         RequestStop();
@@ -180,6 +212,24 @@ internal sealed class LinuxAlsaAudioOutput : IAudioOutput, IInterruptibleAudioOu
         if (handle == IntPtr.Zero) return;
         _ = snd_pcm_drop(handle);
         _ = snd_pcm_close(handle);
+    }
+
+    private void SampleClockSnapshot(IntPtr handle, long submitted)
+    {
+        if (snd_pcm_delay(handle, out var delay) < 0)
+        {
+            return;
+        }
+
+        var queued = Math.Max(0, delay);
+        var played = Math.Max(0, submitted - queued);
+        var now = Stopwatch.GetTimestamp();
+        lock (_clockSync)
+        {
+            _anchorPlayedFrames = played;
+            _anchorTimestamp = now;
+            _lastQueuedFrames = queued;
+        }
     }
 
     private static void ThrowIfFailed(int result, string operation)

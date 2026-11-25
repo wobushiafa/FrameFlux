@@ -2,11 +2,12 @@ namespace FrameFlux.FFmpeg;
 
 internal static class MediaFrameDelivery
 {
-    internal static void Deliver(
+    internal static bool Deliver(
         IMediaVideoOutput? output,
         IMediaFrameLease frame,
-        Action<Exception>? onError = null)
+        out Exception? error)
     {
+        error = null;
         var accepted = false;
         try
         {
@@ -16,7 +17,7 @@ internal static class MediaFrameDelivery
         }
         catch (Exception exception)
         {
-            onError?.Invoke(exception);
+            error = exception;
         }
         finally
         {
@@ -24,6 +25,20 @@ internal static class MediaFrameDelivery
             {
                 frame.Dispose();
             }
+        }
+
+        return accepted;
+    }
+
+    internal static void Deliver(
+        IMediaVideoOutput? output,
+        IMediaFrameLease frame,
+        Action<Exception>? onError = null)
+    {
+        Deliver(output, frame, out var error);
+        if (error is not null)
+        {
+            onError?.Invoke(error);
         }
     }
 }

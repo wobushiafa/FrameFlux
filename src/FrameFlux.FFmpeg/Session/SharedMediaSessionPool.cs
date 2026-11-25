@@ -69,6 +69,7 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
     private readonly IFfmpegMediaSession _session;
     private readonly IMediaFrameLeaseSource? _frameLeaseSource;
     private readonly HashSet<SharedMediaSessionLease> _activeLeases = [];
+    private volatile SharedMediaSessionLease[] _activeLeasesSnapshot = [];
     private int _references;
     private bool _frameLeaseConsumerAttached;
     private bool _managedFrameSubscriptionAttached;
@@ -127,6 +128,7 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
                         return;
                     }
 
+                    _activeLeasesSnapshot = [.. _activeLeases];
                     leaseAdded = true;
                     startPhysicalSession = _activeLeases.Count == 1;
                     if (lease.VideoOutput is { } videoOutput)
@@ -155,6 +157,7 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
                     lock (_sync)
                     {
                         _activeLeases.Remove(lease);
+                        _activeLeasesSnapshot = [.. _activeLeases];
                         if (lease.VideoOutput is { } videoOutput)
                         {
                             try
@@ -210,6 +213,7 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
                     return;
                 }
 
+                _activeLeasesSnapshot = [.. _activeLeases];
                 stopPhysicalSession = _activeLeases.Count == 0;
                 if (lease.VideoOutput is { } videoOutput)
                 {
@@ -260,6 +264,7 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
             {
                 var activeLeases = _activeLeases.ToArray();
                 _activeLeases.Clear();
+                _activeLeasesSnapshot = [];
                 foreach (var activeLease in activeLeases)
                 {
                     if (activeLease.VideoOutput is { } videoOutput)
@@ -318,44 +323,104 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
 
     private void OnFrameLeaseReceived(IMediaFrameLease frame)
     {
-        var leases = SnapshotActiveLeases()
-            .Where(lease => lease.SupportsFrame(frame.StorageKind, frame.PixelFormat))
-            .ToArray();
-        if (leases.Length == 0)
+        var activeLeases = _activeLeasesSnapshot;
+        var storageKind = frame.StorageKind;
+        var pixelFormat = frame.PixelFormat;
+        var matchCount = 0;
+        SharedMediaSessionLease? singleMatch = null;
+        for (var i = 0; i < activeLeases.Length; i++)
+        {
+            var candidate = activeLeases[i];
+            if (candidate.SupportsFrame(storageKind, pixelFormat))
+            {
+                singleMatch = candidate;
+                matchCount++;
+            }
+        }
+
+        if (matchCount == 0)
         {
             frame.Dispose();
             return;
         }
 
-        DeliverSharedFrameLease(leases, frame);
+        if (matchCount == 1)
+        {
+            singleMatch!.ForwardFrameLease(frame);
+            return;
+        }
+
+        DeliverSharedFrameLease(
+            activeLeases,
+            frame,
+            storageKind,
+            pixelFormat,
+            matchCount,
+            excludeNativeOutputs: false);
     }
 
     private void OnSupplementaryCpuFrameLeaseReceived(IMediaFrameLease frame)
     {
-        var leases = SnapshotActiveLeases()
-            .Where(lease =>
-                !IsNativeLeaseOutput(lease) &&
-                lease.SupportsFrame(frame.StorageKind, frame.PixelFormat))
-            .ToArray();
-        if (leases.Length == 0)
+        var activeLeases = _activeLeasesSnapshot;
+        var storageKind = frame.StorageKind;
+        var pixelFormat = frame.PixelFormat;
+        var matchCount = 0;
+        SharedMediaSessionLease? singleMatch = null;
+        for (var i = 0; i < activeLeases.Length; i++)
+        {
+            var candidate = activeLeases[i];
+            if (!IsNativeLeaseOutput(candidate) &&
+                candidate.SupportsFrame(storageKind, pixelFormat))
+            {
+                singleMatch = candidate;
+                matchCount++;
+            }
+        }
+
+        if (matchCount == 0)
         {
             frame.Dispose();
             return;
         }
 
-        DeliverSharedFrameLease(leases, frame);
+        if (matchCount == 1)
+        {
+            singleMatch!.ForwardFrameLease(frame);
+            return;
+        }
+
+        DeliverSharedFrameLease(
+            activeLeases,
+            frame,
+            storageKind,
+            pixelFormat,
+            matchCount,
+            excludeNativeOutputs: true);
     }
 
-    private static void DeliverSharedFrameLease(
-        SharedMediaSessionLease[] leases,
-        IMediaFrameLease frame)
+    private void DeliverSharedFrameLease(
+        SharedMediaSessionLease[] activeLeases,
+        IMediaFrameLease frame,
+        MediaFrameStorageKind storageKind,
+        MediaPixelFormat pixelFormat,
+        int matchCount,
+        bool excludeNativeOutputs)
     {
-        var owner = new ReferenceCountedMediaFrameLeaseOwner(frame);
+        var owner = ReferenceCountedMediaFrameLeaseOwner.Rent(frame, matchCount);
+        var unissued = matchCount;
         try
         {
-            foreach (var lease in leases)
+            for (var i = 0; i < activeLeases.Length && unissued > 0; i++)
             {
-                var sharedLease = owner.CreateLease();
+                var lease = activeLeases[i];
+                if ((excludeNativeOutputs && IsNativeLeaseOutput(lease)) ||
+                    !lease.SupportsFrame(storageKind, pixelFormat))
+                {
+                    continue;
+                }
+
+                var sharedLease = owner.CreatePreCountedLease();
+                unissued--;
                 try
                 {
                     lease.ForwardFrameLease(sharedLease);
@@ -368,7 +433,10 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
         }
         finally
         {
-            owner.Release();
+            if (unissued > 0)
+            {
+                owner.Release(unissued);
+            }
         }
     }
 
@@ -376,13 +444,7 @@ internal sealed class SharedMediaSessionEntry : IAsyncDisposable
         lease.VideoOutput is { } output &&
         _frameLeaseSource?.HandlesOutputNatively(output) == true;
 
-    private SharedMediaSessionLease[] SnapshotActiveLeases()
-    {
-        lock (_sync)
-        {
-            return [.. _activeLeases];
-        }
-    }
+    private SharedMediaSessionLease[] SnapshotActiveLeases() => _activeLeasesSnapshot;
 
     private void RefreshFrameSubscriptionsLocked()
     {
@@ -440,6 +502,7 @@ internal sealed class SharedMediaSessionLease : IFfmpegMediaSession
     private readonly Func<ValueTask> _release;
     private readonly IMediaVideoOutput? _videoOutput;
     private EventHandler<MediaVideoFrame>? _frameReceived;
+    private volatile EventHandler<MediaVideoFrame>[] _frameReceivedSnapshot = [];
     private double _volume;
     private bool _isMuted;
     private int _hasFrameSubscribers;
@@ -539,6 +602,7 @@ internal sealed class SharedMediaSessionLease : IFfmpegMediaSession
                 }
 
                 _frameReceived += value;
+                _frameReceivedSnapshot = BuildFrameSubscribersSnapshot(_frameReceived);
             }
 
             if (changed)
@@ -558,6 +622,7 @@ internal sealed class SharedMediaSessionLease : IFfmpegMediaSession
             {
                 var hadSubscribers = _frameReceived is not null;
                 _frameReceived -= value;
+                _frameReceivedSnapshot = BuildFrameSubscribersSnapshot(_frameReceived);
                 if (hadSubscribers && _frameReceived is null)
                 {
                     Volatile.Write(ref _hasFrameSubscribers, 0);
@@ -664,7 +729,11 @@ internal sealed class SharedMediaSessionLease : IFfmpegMediaSession
         MediaFrameDelivery.Deliver(
             output,
             new ManagedMediaFrameLease(frame),
-            ReportVideoOutputError);
+            out var deliveryError);
+        if (deliveryError is not null)
+        {
+            ReportVideoOutputError(deliveryError);
+        }
     }
 
     internal void ForwardFrameLease(IMediaFrameLease frame)
@@ -678,7 +747,11 @@ internal sealed class SharedMediaSessionLease : IFfmpegMediaSession
 
         try
         {
-            MediaFrameDelivery.Deliver(output, frame, ReportVideoOutputError);
+            MediaFrameDelivery.Deliver(output, frame, out var deliveryError);
+            if (deliveryError is not null)
+            {
+                ReportVideoOutputError(deliveryError);
+            }
         }
         catch
         {
@@ -725,6 +798,7 @@ internal sealed class SharedMediaSessionLease : IFfmpegMediaSession
             if (_frameReceived is not null)
             {
                 _frameReceived = null;
+                _frameReceivedSnapshot = [];
                 Volatile.Write(ref _hasFrameSubscribers, 0);
                 changed = true;
             }
@@ -738,27 +812,40 @@ internal sealed class SharedMediaSessionLease : IFfmpegMediaSession
 
     private void PublishFrame(MediaVideoFrame frame)
     {
-        EventHandler<MediaVideoFrame>? subscribers;
-        lock (_eventSync)
-        {
-            subscribers = _frameReceived;
-        }
-
-        if (subscribers is null)
+        var subscribers = _frameReceivedSnapshot;
+        if (subscribers.Length == 0)
         {
             return;
         }
 
-        foreach (EventHandler<MediaVideoFrame> subscriber in subscribers.GetInvocationList())
+        for (var i = 0; i < subscribers.Length; i++)
         {
             try
             {
-                subscriber(this, frame);
+                subscribers[i](this, frame);
             }
             catch
             {
             }
         }
+    }
+
+    private static EventHandler<MediaVideoFrame>[] BuildFrameSubscribersSnapshot(
+        EventHandler<MediaVideoFrame>? handlers)
+    {
+        if (handlers is null)
+        {
+            return [];
+        }
+
+        var list = handlers.GetInvocationList();
+        var result = new EventHandler<MediaVideoFrame>[list.Length];
+        for (var i = 0; i < list.Length; i++)
+        {
+            result[i] = (EventHandler<MediaVideoFrame>)list[i];
+        }
+
+        return result;
     }
 
     private void ReportVideoOutputError(Exception exception)

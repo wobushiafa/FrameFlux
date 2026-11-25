@@ -68,6 +68,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
     private Task? _stopTask;
     private DiagnosticActivity? _activity;
     private EventHandler<MediaVideoFrame>? _frameReceived;
+    private volatile EventHandler<MediaVideoFrame>[] _frameReceivedSnapshot = [];
     private Action<IMediaFrameLease>? _frameLeaseConsumer;
     private Action<IMediaFrameLease>? _supplementaryCpuFrameLeaseConsumer;
     private bool _requiresNativeFrames = true;
@@ -250,6 +251,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             lock (_sync)
             {
                 _frameReceived += value;
+                _frameReceivedSnapshot = BuildFrameSubscribersSnapshot(_frameReceived);
                 UpdateFrameDeliveryLocked();
             }
         }
@@ -258,6 +260,7 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             lock (_sync)
             {
                 _frameReceived -= value;
+                _frameReceivedSnapshot = BuildFrameSubscribersSnapshot(_frameReceived);
                 UpdateFrameDeliveryLocked();
             }
         }
@@ -729,16 +732,16 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         var deliveryCompleted = false;
         try
         {
-            EventHandler<MediaVideoFrame>? subscribers;
+            EventHandler<MediaVideoFrame>[] subscribers;
             Action<IMediaFrameLease>? frameLeaseConsumer;
             lock (_sync)
             {
-                subscribers = _frameReceived;
+                subscribers = _frameReceivedSnapshot;
                 frameLeaseConsumer = _frameLeaseConsumer;
             }
 
             var keepLatestFrame = Options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame;
-            var frame = TryCopyFrame(lease, keepLatestFrame || subscribers is not null);
+            var frame = TryCopyFrame(lease, keepLatestFrame || subscribers.Length > 0);
             if (frame is not null)
             {
                 lock (_sync)
@@ -760,10 +763,11 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
 
             if (frameLeaseConsumer is null)
             {
-                MediaFrameDelivery.Deliver(
-                    _videoOutput,
-                    lease,
-                    exception => _logger.LogWarning(exception, "A media video output failed."));
+                MediaFrameDelivery.Deliver(_videoOutput, lease, out var deliveryError);
+                if (deliveryError is not null)
+                {
+                    _logger.LogWarning(deliveryError, "A media video output failed.");
+                }
             }
             else
             {
@@ -790,15 +794,15 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         try
         {
             Action<IMediaFrameLease>? supplementaryConsumer;
-            EventHandler<MediaVideoFrame>? subscribers;
+            EventHandler<MediaVideoFrame>[] subscribers;
             var keepLatestFrame = Options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame;
             lock (_sync)
             {
-                subscribers = _frameReceived;
+                subscribers = _frameReceivedSnapshot;
                 supplementaryConsumer = _supplementaryCpuFrameLeaseConsumer;
             }
 
-            var frame = TryCopyFrame(lease, keepLatestFrame || subscribers is not null);
+            var frame = TryCopyFrame(lease, keepLatestFrame || subscribers.Length > 0);
             if (frame is not null)
             {
                 lock (_sync)
@@ -867,18 +871,18 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
             DateTimeOffset.UtcNow);
     }
 
-    private void PublishFrame(EventHandler<MediaVideoFrame>? subscribers, MediaVideoFrame frame)
+    private void PublishFrame(EventHandler<MediaVideoFrame>[] subscribers, MediaVideoFrame frame)
     {
-        if (subscribers is null)
+        if (subscribers.Length == 0)
         {
             return;
         }
 
-        foreach (EventHandler<MediaVideoFrame> subscriber in subscribers.GetInvocationList())
+        for (var i = 0; i < subscribers.Length; i++)
         {
             try
             {
-                subscriber(this, frame);
+                subscribers[i](this, frame);
             }
             catch (Exception exception)
             {
@@ -887,6 +891,24 @@ internal sealed class FfmpegMediaSession : IFfmpegMediaSession, IMediaFrameLease
         }
 
         FfmpegTelemetry.FramesDelivered.Add(1);
+    }
+
+    private static EventHandler<MediaVideoFrame>[] BuildFrameSubscribersSnapshot(
+        EventHandler<MediaVideoFrame>? handlers)
+    {
+        if (handlers is null)
+        {
+            return [];
+        }
+
+        var list = handlers.GetInvocationList();
+        var result = new EventHandler<MediaVideoFrame>[list.Length];
+        for (var i = 0; i < list.Length; i++)
+        {
+            result[i] = (EventHandler<MediaVideoFrame>)list[i];
+        }
+
+        return result;
     }
 
     private void TransitionTo(MediaPlaybackState state)

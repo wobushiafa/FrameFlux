@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace FrameFlux.FFmpeg;
 
-internal static class DmaBufDescriptorReader
+internal static unsafe class DmaBufDescriptorReader
 {
     private const int MaximumObjects = 4;
     private const int MaximumLayers = 4;
@@ -15,44 +15,54 @@ internal static class DmaBufDescriptorReader
             throw new InvalidOperationException("The DRM PRIME frame has no descriptor.");
         }
 
-        var descriptor = Marshal.PtrToStructure<AvDrmFrameDescriptor>(descriptorPointer);
-        ValidateCount(descriptor.ObjectCount, MaximumObjects, "objects");
-        ValidateCount(descriptor.LayerCount, MaximumLayers, "layers");
+        // Direct blittable pointer read avoids Marshal.PtrToStructure and 5 ByValArray allocations per frame.
+        var descriptor = (AvDrmFrameDescriptor*)descriptorPointer;
+        var objectCount = descriptor->ObjectCount;
+        var layerCount = descriptor->LayerCount;
+        ValidateCount(objectCount, MaximumObjects, "objects");
+        ValidateCount(layerCount, MaximumLayers, "layers");
 
-        var objects = new MediaDmaBufObject[descriptor.ObjectCount];
-        for (var index = 0; index < objects.Length; index++)
+        var objects = new MediaDmaBufObject[objectCount];
+        var objectPtr = &descriptor->Object0;
+        for (var index = 0; index < objectCount; index++)
         {
-            var item = descriptor.Objects[index];
+            var item = objectPtr[index];
             if (item.FileDescriptor < 0)
             {
                 throw new InvalidOperationException("The DRM PRIME frame contains an invalid file descriptor.");
             }
+
             objects[index] = new MediaDmaBufObject(
                 item.FileDescriptor,
                 checked((long)item.Size),
                 item.FormatModifier);
         }
 
-        var layers = new MediaDmaBufLayer[descriptor.LayerCount];
-        for (var layerIndex = 0; layerIndex < layers.Length; layerIndex++)
+        var layers = new MediaDmaBufLayer[layerCount];
+        var layerPtr = &descriptor->Layer0;
+        for (var layerIndex = 0; layerIndex < layerCount; layerIndex++)
         {
-            var item = descriptor.Layers[layerIndex];
-            ValidateCount(item.PlaneCount, MaximumPlanes, "planes");
-            var planes = new MediaDmaBufPlane[item.PlaneCount];
-            for (var planeIndex = 0; planeIndex < planes.Length; planeIndex++)
+            var item = &layerPtr[layerIndex];
+            var planeCount = item->PlaneCount;
+            ValidateCount(planeCount, MaximumPlanes, "planes");
+            var planes = new MediaDmaBufPlane[planeCount];
+            var planePtr = &item->Plane0;
+            for (var planeIndex = 0; planeIndex < planeCount; planeIndex++)
             {
-                var plane = item.Planes[planeIndex];
-                if ((uint)plane.ObjectIndex >= (uint)objects.Length)
+                var plane = planePtr[planeIndex];
+                if ((uint)plane.ObjectIndex >= (uint)objectCount)
                 {
                     throw new InvalidOperationException(
                         "The DRM PRIME frame references an invalid object index.");
                 }
+
                 planes[planeIndex] = new MediaDmaBufPlane(
                     plane.ObjectIndex,
                     checked((int)plane.Offset),
                     checked((int)plane.Pitch));
             }
-            layers[layerIndex] = new MediaDmaBufLayer(item.Format, planes);
+
+            layers[layerIndex] = new MediaDmaBufLayer(item->Format, planes);
         }
 
         return new MediaDmaBufFrameBuffer(objects, layers);
@@ -88,22 +98,24 @@ internal static class DmaBufDescriptorReader
     {
         internal uint Format;
         internal int PlaneCount;
-
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = MaximumPlanes)]
-        internal AvDrmPlaneDescriptor[] Planes;
+        internal AvDrmPlaneDescriptor Plane0;
+        internal AvDrmPlaneDescriptor Plane1;
+        internal AvDrmPlaneDescriptor Plane2;
+        internal AvDrmPlaneDescriptor Plane3;
     }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct AvDrmFrameDescriptor
     {
         internal int ObjectCount;
-
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = MaximumObjects)]
-        internal AvDrmObjectDescriptor[] Objects;
-
+        internal AvDrmObjectDescriptor Object0;
+        internal AvDrmObjectDescriptor Object1;
+        internal AvDrmObjectDescriptor Object2;
+        internal AvDrmObjectDescriptor Object3;
         internal int LayerCount;
-
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = MaximumLayers)]
-        internal AvDrmLayerDescriptor[] Layers;
+        internal AvDrmLayerDescriptor Layer0;
+        internal AvDrmLayerDescriptor Layer1;
+        internal AvDrmLayerDescriptor Layer2;
+        internal AvDrmLayerDescriptor Layer3;
     }
 }

@@ -2,14 +2,20 @@ using System.Runtime.InteropServices;
 
 namespace FrameFlux.FFmpeg;
 
-internal sealed class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAudioOutput
+internal sealed unsafe class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAudioOutput, ISlicedAudioOutput
 {
     private const uint Mapper = uint.MaxValue;
     private const uint HeaderDone = 0x00000001;
     private const uint TimeSamples = 0x00000002;
+    private const uint CallbackEvent = 0x00050000;
     private const int MaximumQueuedBuffers = 12;
     private readonly object _sync = new();
-    private readonly Queue<PendingBuffer> _pendingBuffers = [];
+    private readonly WaveSlot[] _slots = new WaveSlot[MaximumQueuedBuffers];
+    private readonly Queue<int> _pendingSlots = new(MaximumQueuedBuffers);
+    private readonly Stack<int> _freeSlots = new(MaximumQueuedBuffers);
+    private readonly AutoResetEvent _bufferDoneEvent = new(false);
+    private readonly ManualResetEvent _stopEvent = new(false);
+    private readonly WaitHandle[] _waitHandles;
     private readonly long _startBufferFrames;
     private readonly AudioOutputConfiguration _configuration;
     private readonly string? _fallbackError;
@@ -36,6 +42,14 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAu
         _startBufferFrames = Math.Max(
             1,
             (long)Math.Ceiling(sampleRate * _configuration.BufferDuration.TotalSeconds));
+        _waitHandles = [_stopEvent, _bufferDoneEvent];
+        for (var i = 0; i < MaximumQueuedBuffers; i++)
+        {
+            _slots[i] = new WaveSlot((WaveHeader*)Marshal.AllocHGlobal(sizeof(WaveHeader)));
+            *_slots[i].Header = default;
+            _freeSlots.Push(i);
+        }
+
         var format = new WaveFormat
         {
             FormatTag = 1,
@@ -45,16 +59,35 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAu
             BlockAlign = checked((ushort)(channels * sizeof(short))),
             BitsPerSample = 16
         };
-        var result = waveOutOpen(out _handle, Mapper, ref format, IntPtr.Zero, IntPtr.Zero, 0);
+        var result = waveOutOpen(
+            out _handle,
+            Mapper,
+            ref format,
+            _bufferDoneEvent.SafeWaitHandle.DangerousGetHandle(),
+            IntPtr.Zero,
+            CallbackEvent);
         if (result != 0)
         {
+            ReleaseAllSlots();
+            _bufferDoneEvent.Dispose();
+            _stopEvent.Dispose();
             throw new InvalidOperationException($"waveOutOpen failed with code {result}.");
         }
-        ThrowIfFailed(waveOutPause(_handle), "waveOutPause");
+
+        try
+        {
+            ThrowIfFailed(waveOutPause(_handle), "waveOutPause");
+        }
+        catch
+        {
+            Dispose();
+            throw;
+        }
     }
 
     public int SampleRate { get; }
     public int Channels { get; }
+
     public long PlayedFrames
     {
         get
@@ -67,7 +100,7 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAu
                 }
 
                 var position = new MmTime { Type = TimeSamples };
-                if (waveOutGetPosition(_handle, ref position, Marshal.SizeOf<MmTime>()) == 0 &&
+                if (waveOutGetPosition(_handle, ref position, sizeof(MmTime)) == 0 &&
                     position.Type == TimeSamples)
                 {
                     if (position.Sample < _lastDevicePosition)
@@ -82,7 +115,9 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAu
             }
         }
     }
+
     public bool IsOperational => _handle != IntPtr.Zero;
+
     public MediaAudioDiagnostics Diagnostics
     {
         get
@@ -104,35 +139,45 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAu
         }
     }
 
-    public void Write(byte[] pcm)
+    public void Write(byte[] pcm) => Write(pcm, 0, pcm.Length);
+
+    public void Write(byte[] pcm, int offset, int count)
     {
-        if (pcm.Length == 0 || Volatile.Read(ref _stopping) != 0) return;
+        if (count <= 0 || Volatile.Read(ref _stopping) != 0)
+        {
+            return;
+        }
+
         while (true)
         {
             lock (_sync)
             {
-                if (_handle == IntPtr.Zero || Volatile.Read(ref _stopping) != 0) return;
-                ReclaimCompletedBuffers();
-                if (_pendingBuffers.Count < MaximumQueuedBuffers)
+                if (_handle == IntPtr.Zero || Volatile.Read(ref _stopping) != 0)
                 {
-                    var pending = CreatePendingBuffer(pcm);
+                    return;
+                }
+
+                ReclaimCompletedBuffers();
+                if (_freeSlots.Count > 0)
+                {
+                    var slotIndex = _freeSlots.Pop();
+                    var slot = _slots[slotIndex];
                     try
                     {
-                        ThrowIfFailed(
-                            waveOutWrite(_handle, pending.HeaderPointer, Marshal.SizeOf<WaveHeader>()),
-                            "waveOutWrite");
+                        PrepareAndWriteSlot(slot, pcm, offset, count);
                     }
                     catch
                     {
-                        ReleaseBuffer(pending);
+                        UnprepareSlot(_handle, slot);
+                        _freeSlots.Push(slotIndex);
                         throw;
                     }
 
-                    _pendingBuffers.Enqueue(pending);
-                    _pendingFrames += pending.Frames;
+                    _pendingSlots.Enqueue(slotIndex);
+                    _pendingFrames += slot.Frames;
                     if (!_started &&
                         (_pendingFrames >= _startBufferFrames ||
-                         _pendingBuffers.Count >= MaximumQueuedBuffers))
+                         _pendingSlots.Count >= MaximumQueuedBuffers))
                     {
                         ThrowIfFailed(waveOutRestart(_handle), "waveOutRestart");
                         _started = true;
@@ -142,7 +187,11 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAu
                 }
             }
 
-            Thread.Sleep(1);
+            var signaled = WaitHandle.WaitAny(_waitHandles, 50);
+            if (signaled == 0)
+            {
+                return;
+            }
         }
     }
 
@@ -156,10 +205,12 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAu
             }
 
             ThrowIfFailed(waveOutReset(_handle), "waveOutReset");
-            while (_pendingBuffers.TryDequeue(out var pending))
+            while (_pendingSlots.TryDequeue(out var slotIndex))
             {
-                ReleaseBuffer(pending);
+                UnprepareSlot(_handle, _slots[slotIndex]);
+                _freeSlots.Push(slotIndex);
             }
+
             _completedFrames = 0;
             _lastDevicePosition = 0;
             _devicePositionWraps = 0;
@@ -176,6 +227,7 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAu
             return;
         }
 
+        _stopEvent.Set();
         lock (_sync)
         {
             if (_handle != IntPtr.Zero)
@@ -192,79 +244,135 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAu
         {
             var handle = _handle;
             _handle = IntPtr.Zero;
-            if (handle == IntPtr.Zero) return;
-            _ = waveOutReset(handle);
-            while (_pendingBuffers.TryDequeue(out var pending))
+            if (handle != IntPtr.Zero)
             {
-                ReleaseBuffer(handle, pending);
+                _ = waveOutReset(handle);
+                while (_pendingSlots.TryDequeue(out var slotIndex))
+                {
+                    UnprepareSlot(handle, _slots[slotIndex]);
+                    _freeSlots.Push(slotIndex);
+                }
+                _pendingFrames = 0;
+                _ = waveOutClose(handle);
             }
-            _pendingFrames = 0;
-            _ = waveOutClose(handle);
+
+            ReleaseAllSlots();
         }
+
+        _bufferDoneEvent.Dispose();
+        _stopEvent.Dispose();
     }
 
-    private PendingBuffer CreatePendingBuffer(byte[] pcm)
+    private void PrepareAndWriteSlot(WaveSlot slot, byte[] pcm, int offset, int count)
     {
-        var data = GCHandle.Alloc(pcm, GCHandleType.Pinned);
-        var headerPointer = Marshal.AllocHGlobal(Marshal.SizeOf<WaveHeader>());
-        try
+        slot.EnsureCapacity(count);
+        fixed (byte* src = &pcm[offset])
         {
-            var header = new WaveHeader
-            {
-                Data = data.AddrOfPinnedObject(),
-                BufferLength = checked((uint)pcm.Length)
-            };
-            Marshal.StructureToPtr(header, headerPointer, false);
-            ThrowIfFailed(
-                waveOutPrepareHeader(_handle, headerPointer, Marshal.SizeOf<WaveHeader>()),
-                "waveOutPrepareHeader");
-            return new PendingBuffer(
-                data,
-                headerPointer,
-                pcm.Length / (Channels * sizeof(short)));
+            Buffer.MemoryCopy(src, (void*)slot.DataPtr, slot.Capacity, count);
         }
-        catch
+
+        *slot.Header = new WaveHeader
         {
-            Marshal.FreeHGlobal(headerPointer);
-            data.Free();
-            throw;
-        }
+            Data = slot.DataPtr,
+            BufferLength = checked((uint)count)
+        };
+        slot.Frames = count / (Channels * sizeof(short));
+        ThrowIfFailed(
+            waveOutPrepareHeader(_handle, (IntPtr)slot.Header, sizeof(WaveHeader)),
+            "waveOutPrepareHeader");
+        slot.Prepared = true;
+        ThrowIfFailed(
+            waveOutWrite(_handle, (IntPtr)slot.Header, sizeof(WaveHeader)),
+            "waveOutWrite");
     }
 
     private void ReclaimCompletedBuffers()
     {
-        while (_pendingBuffers.TryPeek(out var pending) &&
-               (Marshal.PtrToStructure<WaveHeader>(pending.HeaderPointer).Flags & HeaderDone) != 0)
+        while (_pendingSlots.TryPeek(out var slotIndex) &&
+               (_slots[slotIndex].Header->Flags & HeaderDone) != 0)
         {
-            _pendingBuffers.Dequeue();
-            _pendingFrames -= pending.Frames;
-            _completedFrames += pending.Frames;
-            ReleaseBuffer(pending);
+            _pendingSlots.Dequeue();
+            var slot = _slots[slotIndex];
+            _pendingFrames -= slot.Frames;
+            _completedFrames += slot.Frames;
+            UnprepareSlot(_handle, slot);
+            _freeSlots.Push(slotIndex);
         }
 
-        if (_started && _pendingBuffers.Count == 0)
+        if (_started && _pendingSlots.Count == 0)
         {
             _ = waveOutPause(_handle);
             _started = false;
         }
     }
 
-    private void ReleaseBuffer(PendingBuffer pending) =>
-        ReleaseBuffer(_handle, pending);
-
-    private static void ReleaseBuffer(IntPtr handle, PendingBuffer pending)
+    private static void UnprepareSlot(IntPtr handle, WaveSlot slot)
     {
-        if (handle != IntPtr.Zero)
+        if (slot.Prepared && handle != IntPtr.Zero)
         {
-            _ = waveOutUnprepareHeader(handle, pending.HeaderPointer, Marshal.SizeOf<WaveHeader>());
+            _ = waveOutUnprepareHeader(handle, (IntPtr)slot.Header, sizeof(WaveHeader));
         }
-        Marshal.FreeHGlobal(pending.HeaderPointer);
-        pending.Data.Free();
+        slot.Prepared = false;
+        slot.Frames = 0;
+    }
+
+    private void ReleaseAllSlots()
+    {
+        for (var i = 0; i < _slots.Length; i++)
+        {
+            var slot = _slots[i];
+            if (slot is null)
+            {
+                continue;
+            }
+
+            _slots[i] = null!;
+            slot.Dispose();
+        }
     }
 
     private static void ThrowIfFailed(uint result, string operation)
     {
         if (result != 0) throw new InvalidOperationException($"{operation} failed with code {result}.");
+    }
+
+    private sealed class WaveSlot(WaveHeader* header) : IDisposable
+    {
+        internal WaveHeader* Header { get; private set; } = header;
+        internal IntPtr DataPtr { get; private set; }
+        internal int Capacity { get; private set; }
+        internal int Frames { get; set; }
+        internal bool Prepared { get; set; }
+
+        internal void EnsureCapacity(int requiredBytes)
+        {
+            if (requiredBytes <= Capacity)
+            {
+                return;
+            }
+
+            var newCapacity = Math.Max(requiredBytes, Math.Max(4096, Capacity * 2));
+            DataPtr = DataPtr == IntPtr.Zero
+                ? Marshal.AllocHGlobal(newCapacity)
+                : Marshal.ReAllocHGlobal(DataPtr, (IntPtr)newCapacity);
+            Capacity = newCapacity;
+        }
+
+        public void Dispose()
+        {
+            if (DataPtr != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(DataPtr);
+                DataPtr = IntPtr.Zero;
+                Capacity = 0;
+            }
+
+            if (Header != null)
+            {
+                Marshal.FreeHGlobal((IntPtr)Header);
+                Header = null;
+            }
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -298,8 +406,6 @@ internal sealed class WindowsWaveOutAudioOutput : IAudioOutput, IInterruptibleAu
         [FieldOffset(0)] internal uint Type;
         [FieldOffset(4)] internal uint Sample;
     }
-
-    private sealed record PendingBuffer(GCHandle Data, IntPtr HeaderPointer, int Frames);
 
     [DllImport("winmm.dll")] private static extern uint waveOutOpen(out IntPtr handle, uint deviceId, ref WaveFormat format, IntPtr callback, IntPtr instance, uint flags);
     [DllImport("winmm.dll")] private static extern uint waveOutPause(IntPtr handle);

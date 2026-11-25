@@ -103,6 +103,38 @@ internal static class FrameFluxFFmpegNative
         }
     }
 
+    internal static NativeReadResult ReadDirectFrame(
+        NativeFfmpegSessionHandle session,
+        out DirectVideoFrame? frame) =>
+        GetTarget<DirectFfmpegSession>(session.DangerousGetHandle())
+            .ReadFrame(out frame);
+
+    internal static int CopyDirectFrameToBgra(
+        NativeFfmpegSessionHandle session,
+        DirectVideoFrame frame,
+        IntPtr destination,
+        int destinationWidth,
+        int destinationHeight,
+        int destinationStride,
+        int scaleQuality,
+        int forceOpaqueAlpha)
+    {
+        if (session.IsInvalid || frame.Pointer == IntPtr.Zero || destination == IntPtr.Zero)
+        {
+            return -1;
+        }
+
+        return GetTarget<DirectFfmpegSession>(session.DangerousGetHandle())
+            .CopyFrameToBgra(
+                frame,
+                destination,
+                destinationWidth,
+                destinationHeight,
+                destinationStride,
+                scaleQuality,
+                forceOpaqueAlpha != 0);
+    }
+
     internal static NativeReadResult ReadFrame(
         NativeFfmpegSessionHandle session,
         out NativeVideoFrameHandle frame)

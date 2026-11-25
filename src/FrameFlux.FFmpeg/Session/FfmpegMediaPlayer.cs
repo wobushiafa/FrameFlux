@@ -24,6 +24,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
     private bool _isMuted;
     private IMediaVideoOutput? _videoOutput;
     private EventHandler<MediaVideoFrame>? _frameReceived;
+    private volatile EventHandler<MediaVideoFrame>[] _frameReceivedSnapshot = [];
     private bool _disposed;
 
     public FfmpegMediaPlayer(ILoggerFactory? loggerFactory = null)
@@ -108,6 +109,7 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         set
         {
             MediaPlaybackClock.ValidateRate(value);
+            IFfmpegMediaSession? session;
             lock (_sync)
             {
                 ThrowIfDisposed();
@@ -118,10 +120,12 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
                 }
 
                 _playbackRate = value;
-                if (_session is not null)
-                {
-                    _session.PlaybackRate = value;
-                }
+                session = _session;
+            }
+
+            if (session is not null)
+            {
+                session.PlaybackRate = value;
             }
         }
     }
@@ -142,14 +146,17 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
                 throw new ArgumentOutOfRangeException(nameof(value), "Volume must be between 0.0 and 1.0.");
             }
 
+            IFfmpegMediaSession? session;
             lock (_sync)
             {
                 ThrowIfDisposed();
                 _volume = value;
-                if (_session is not null)
-                {
-                    _session.Volume = value;
-                }
+                session = _session;
+            }
+
+            if (session is not null)
+            {
+                session.Volume = value;
             }
         }
     }
@@ -165,14 +172,17 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
         }
         set
         {
+            IFfmpegMediaSession? session;
             lock (_sync)
             {
                 ThrowIfDisposed();
                 _isMuted = value;
-                if (_session is not null)
-                {
-                    _session.IsMuted = value;
-                }
+                session = _session;
+            }
+
+            if (session is not null)
+            {
+                session.IsMuted = value;
             }
         }
     }
@@ -205,10 +215,15 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
     {
         get
         {
+            IFfmpegMediaSession? session;
+            TimeSpan position;
             lock (_sync)
             {
-                return _session?.Position ?? _position;
+                session = _session;
+                position = _position;
             }
+
+            return session?.Position ?? position;
         }
     }
 
@@ -216,10 +231,15 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
     {
         get
         {
+            IFfmpegMediaSession? session;
+            TimeSpan? duration;
             lock (_sync)
             {
-                return _session?.Duration ?? _duration;
+                session = _session;
+                duration = _duration;
             }
+
+            return session?.Duration ?? duration;
         }
     }
 
@@ -231,27 +251,41 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
     {
         add
         {
+            IFfmpegMediaSession? sessionToSubscribe = null;
             lock (_sync)
             {
                 var subscribe = _frameReceived is null;
                 _frameReceived += value;
+                _frameReceivedSnapshot = BuildFrameSubscribersSnapshot(_frameReceived);
                 if (subscribe &&
                     _frameReceived is not null &&
                     _session is not null)
                 {
-                    _session.FrameReceived += OnFrameReceived;
+                    sessionToSubscribe = _session;
                 }
+            }
+
+            if (sessionToSubscribe is not null)
+            {
+                sessionToSubscribe.FrameReceived += OnFrameReceived;
             }
         }
         remove
         {
+            IFfmpegMediaSession? sessionToUnsubscribe = null;
             lock (_sync)
             {
                 _frameReceived -= value;
+                _frameReceivedSnapshot = BuildFrameSubscribersSnapshot(_frameReceived);
                 if (_frameReceived is null && _session is not null)
                 {
-                    _session.FrameReceived -= OnFrameReceived;
+                    sessionToUnsubscribe = _session;
                 }
+            }
+
+            if (sessionToUnsubscribe is not null)
+            {
+                sessionToUnsubscribe.FrameReceived -= OnFrameReceived;
             }
         }
     }
@@ -378,7 +412,16 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
 
             await StopSessionCoreAsync().ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            var session = _sessionFactory.Create(source, options, volume, muted, videoOutput);
+            // Avoid forcing per-frame GPU->CPU readback + LOH copies when snapshots are disabled on GPU output.
+            var sessionOptions =
+                !_capabilities.CanCaptureSnapshots &&
+                options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame
+                    ? options with
+                    {
+                        Video = options.Video with { SnapshotPolicy = MediaSnapshotPolicy.Disabled }
+                    }
+                    : options;
+            var session = _sessionFactory.Create(source, sessionOptions, volume, muted, videoOutput);
             session.PlaybackRate = playbackRate;
             session.StateChanged += OnSessionStateChanged;
             session.Error += OnSessionError;
@@ -674,18 +717,43 @@ public sealed class FfmpegMediaPlayer : IMediaPlayer
 
     private void OnFrameReceived(object? sender, MediaVideoFrame frame)
     {
-        EventHandler<MediaVideoFrame>? subscribers;
-        lock (_sync)
+        if (!ReferenceEquals(Volatile.Read(ref _session), sender))
         {
-            if (!ReferenceEquals(_session, sender))
-            {
-                return;
-            }
-
-            subscribers = _frameReceived;
+            return;
         }
 
-        PublishEvent(subscribers, frame, "frame");
+        var subscribers = _frameReceivedSnapshot;
+        for (var i = 0; i < subscribers.Length; i++)
+        {
+            try
+            {
+                subscribers[i](this, frame);
+            }
+            catch (Exception exception)
+            {
+                Trace.TraceWarning(
+                    "A media frame subscriber failed: {0}",
+                    exception);
+            }
+        }
+    }
+
+    private static EventHandler<MediaVideoFrame>[] BuildFrameSubscribersSnapshot(
+        EventHandler<MediaVideoFrame>? handlers)
+    {
+        if (handlers is null)
+        {
+            return [];
+        }
+
+        var list = handlers.GetInvocationList();
+        var result = new EventHandler<MediaVideoFrame>[list.Length];
+        for (var i = 0; i < list.Length; i++)
+        {
+            result[i] = (EventHandler<MediaVideoFrame>)list[i];
+        }
+
+        return result;
     }
 
     private void TransitionTo(MediaPlaybackState state)

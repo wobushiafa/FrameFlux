@@ -5,14 +5,14 @@ namespace FrameFlux.FFmpeg;
 
 internal sealed class FfmpegPlaybackSynchronizer
 {
+    private readonly object _diagnosticsSync = new();
     private readonly bool _usesPlaybackClock;
     private readonly TimeSpan? _lateFrameRebaseThreshold;
     private readonly TimeSpan? _forwardJumpRebaseThreshold;
     private readonly TimeSpan? _maximumAudioDrift;
     private readonly MediaPlaybackClock _playbackClock = new();
     private MediaClockSynchronizer _clockSynchronizer = new();
-    private MediaSynchronizationDiagnostics _diagnostics =
-        MediaSynchronizationDiagnostics.Empty;
+    private int _audioClockResetCount;
 
     internal FfmpegPlaybackSynchronizer(
         bool usesPlaybackClock,
@@ -26,7 +26,16 @@ internal sealed class FfmpegPlaybackSynchronizer
         _maximumAudioDrift = maximumAudioDrift;
     }
 
-    internal MediaSynchronizationDiagnostics Diagnostics => _diagnostics;
+    internal MediaSynchronizationDiagnostics Diagnostics
+    {
+        get
+        {
+            lock (_diagnosticsSync)
+            {
+                return _clockSynchronizer.GetDiagnostics(_audioClockResetCount);
+            }
+        }
+    }
 
     internal void ResetPlaybackClock(double positionSeconds) =>
         _playbackClock.Reset(positionSeconds);
@@ -37,8 +46,11 @@ internal sealed class FfmpegPlaybackSynchronizer
     internal void ResetSession()
     {
         _playbackClock.Reset();
-        _clockSynchronizer = new MediaClockSynchronizer();
-        _diagnostics = MediaSynchronizationDiagnostics.Empty;
+        lock (_diagnosticsSync)
+        {
+            _clockSynchronizer = new MediaClockSynchronizer();
+            _audioClockResetCount = 0;
+        }
     }
 
     internal void DrainAudio(
@@ -48,7 +60,10 @@ internal sealed class FfmpegPlaybackSynchronizer
     {
         if (audioPlayback is null)
         {
-            while (decoder.TryDequeueAudioFrame(out _)) { }
+            while (decoder.TryDequeueAudioFrame(out var dropped))
+            {
+                dropped?.Dispose();
+            }
         }
         else
         {
@@ -69,7 +84,10 @@ internal sealed class FfmpegPlaybackSynchronizer
     {
         if (audioPlayback is null)
         {
-            while (decoder.TryDequeueAudioFrame(out _)) { }
+            while (decoder.TryDequeueAudioFrame(out var dropped))
+            {
+                dropped?.Dispose();
+            }
         }
         else
         {
@@ -135,17 +153,22 @@ internal sealed class FfmpegPlaybackSynchronizer
             return shouldRender;
         }
 
-        var decision = _clockSynchronizer.EvaluateVideo(
-            videoPosition.Value,
-            audioPlayback?.PositionSeconds);
-        RefreshDiagnostics(audioPlayback);
+        MediaVideoSynchronizationDecision decision;
+        lock (_diagnosticsSync)
+        {
+            decision = _clockSynchronizer.EvaluateVideo(
+                videoPosition.Value,
+                audioPlayback?.PositionSeconds);
+            _audioClockResetCount = audioPlayback?.ClockResetCount ?? 0;
+        }
+
         if (decision.Action == MediaVideoSynchronizationAction.Drop)
         {
             return false;
         }
 
         if (decision.Action == MediaVideoSynchronizationAction.Delay &&
-            cancellationToken.WaitHandle.WaitOne(decision.Delay))
+            HighResolutionWait.Wait(decision.Delay, cancellationToken))
         {
             return false;
         }
@@ -169,7 +192,6 @@ internal sealed class FfmpegPlaybackSynchronizer
 
     internal void RefreshDiagnostics(AudioPlaybackController? audioPlayback)
     {
-        _diagnostics = _clockSynchronizer.GetDiagnostics(
-            audioPlayback?.ClockResetCount ?? 0);
+        Volatile.Write(ref _audioClockResetCount, audioPlayback?.ClockResetCount ?? 0);
     }
 }
