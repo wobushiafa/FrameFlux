@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Windows;
 using FrameFlux;
+using FrameFlux.Capture;
 using FrameFlux.FFmpeg;
 using FrameFlux.WebRtc;
 using Microsoft.Win32;
@@ -11,6 +12,17 @@ public partial class MainWindow : Window
 {
     private static readonly IMediaPlayerFactory FfmpegPlayerFactory = new FfmpegMediaPlayerFactory();
     private static readonly IMediaPlayerFactory WebRtcPlayerFactory = new WebRtcMediaPlayerFactory();
+    private static readonly IMediaPlayerFactory CapturePlayerFactory = new CaptureMediaPlayerFactory();
+
+    private sealed record CameraChoice(MediaCaptureDeviceInfo? Device, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    private sealed record AudioInputChoice(CaptureAudioMode Mode, string? DeviceId, string Label)
+    {
+        public override string ToString() => Label;
+    }
 
     private bool _configuringPlaybackModes;
     private readonly DependencyPropertyDescriptor _hardwareDiagnosticsDescriptor;
@@ -21,7 +33,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         InitializePlaybackControls();
         Player.PlayerFactory = FfmpegPlayerFactory;
-        BackendComboBox.ItemsSource = new[] { "Auto", "Media (FFmpeg)", "WebRTC" };
+        BackendComboBox.ItemsSource = new[] { "Auto", "Media (FFmpeg)", "WebRTC", "USB Capture" };
         BackendComboBox.SelectedIndex = 0;
         _hardwareDiagnosticsDescriptor = DependencyPropertyDescriptor.FromProperty(
             FrameFlux.Wpf.MediaView.IsHardwareVideoDecodingActiveProperty,
@@ -53,6 +65,65 @@ public partial class MainWindow : Window
         HardwareModeComboBox.SelectedItem = options.Video.DecodingPolicy;
         RenderModeComboBox.SelectedItem = Player.PresentationMode;
         _configuringPlaybackModes = false;
+        RefreshCaptureDevices();
+    }
+
+    private void RefreshCaptureDevices()
+    {
+        var videoDevices = MediaCaptureDevices.GetVideoDevices(includeFormats: false);
+        var cameraChoices = videoDevices.Count > 0
+            ? videoDevices.Select(d => new CameraChoice(d, d.UniqueDisplayName)).ToList()
+            : [new CameraChoice(null, "(No USB camera found)")];
+        CameraComboBox.ItemsSource = cameraChoices;
+        CameraComboBox.SelectedIndex = 0;
+
+        var audioChoices = new List<AudioInputChoice>
+        {
+            new(CaptureAudioMode.AutoPaired, null, "Auto (Paired USB)"),
+            new(CaptureAudioMode.Disabled, null, "Disabled (Video Only)"),
+            new(CaptureAudioMode.DefaultSystemInput, null, "Default Mic")
+        };
+        foreach (var audio in MediaCaptureDevices.GetAudioDevices())
+        {
+            audioChoices.Add(new AudioInputChoice(CaptureAudioMode.SpecificDevice, audio.DeviceId, audio.DisplayName));
+        }
+
+        AudioInputComboBox.ItemsSource = audioChoices;
+        AudioInputComboBox.SelectedIndex = 0;
+    }
+
+    private void RefreshCamerasButton_Click(object sender, RoutedEventArgs e) =>
+        RefreshCaptureDevices();
+
+    private async void OpenCameraButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (CameraComboBox.SelectedItem is not CameraChoice { Device: { } device })
+        {
+            StatusTextBlock.Text = "No USB camera detected. Connect a camera and click Refresh.";
+            return;
+        }
+
+        var audioChoice = AudioInputComboBox.SelectedItem as AudioInputChoice ??
+                          new AudioInputChoice(CaptureAudioMode.AutoPaired, null, "Auto");
+
+        SetSourceCommandsEnabled(false);
+        try
+        {
+            var source = CaptureSource.FromDeviceWithAudioMode(
+                device,
+                audioChoice.Mode,
+                audioChoice.DeviceId);
+            SourceTextBox.Text = source.Uri.ToString();
+            await StartSourceAsync(source);
+        }
+        catch (Exception exception)
+        {
+            StatusTextBlock.Text = exception.Message;
+        }
+        finally
+        {
+            SetSourceCommandsEnabled(true);
+        }
     }
 
     private async void StartButton_Click(object sender, RoutedEventArgs e)
@@ -115,22 +186,26 @@ public partial class MainWindow : Window
     private async Task StartSourceAsync(MediaSource source)
     {
         await Player.StopAsync();
+        var isCapture = CaptureSource.IsCaptureSource(source);
         Player.PlayerFactory = BackendComboBox.SelectedIndex switch
         {
             1 => FfmpegPlayerFactory,
             2 => WebRtcPlayerFactory,
-            _ => IsWebRtcSource(source) ? WebRtcPlayerFactory : FfmpegPlayerFactory
+            3 => CapturePlayerFactory,
+            _ => isCapture
+                ? CapturePlayerFactory
+                : IsWebRtcSource(source) ? WebRtcPlayerFactory : FfmpegPlayerFactory
         };
         Player.Source = source;
-        var isSeekable = source.Uri.IsFile ||
+        var isSeekable = !isCapture && (source.Uri.IsFile ||
             (source.Uri.Scheme is "http" or "https" &&
              ConventionalMediaExtensions.Contains(System.IO.Path.GetExtension(source.Uri.AbsolutePath)) &&
-             !source.Uri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase));
-        SourceKindTextBlock.Text = source.Uri.IsFile ? "FILE" : (isSeekable ? "VOD" : "STREAM");
+             !source.Uri.AbsolutePath.EndsWith(".m3u8", StringComparison.OrdinalIgnoreCase)));
+        SourceKindTextBlock.Text = isCapture ? "USB" : (source.Uri.IsFile ? "FILE" : (isSeekable ? "VOD" : "STREAM"));
         SourceKindIndicator.Background = isSeekable
             ? System.Windows.Media.Brushes.Gray
             : System.Windows.Media.Brushes.Red;
-        StatusTextBlock.Text = isSeekable ? "Opening media" : "Opening stream";
+        StatusTextBlock.Text = isCapture ? "Opening USB device" : (isSeekable ? "Opening media" : "Opening stream");
 
         var targetLatency = isSeekable ? MediaLatencyMode.Default : MediaLatencyMode.Low;
         if (Player.OpenOptions.Network.LatencyMode != targetLatency)
@@ -202,6 +277,8 @@ public partial class MainWindow : Window
     private void SetSourceCommandsEnabled(bool enabled)
     {
         OpenFileButton.IsEnabled = enabled;
+        OpenCameraButton.IsEnabled = enabled;
+        RefreshCamerasButton.IsEnabled = enabled;
         StartButton.IsEnabled = enabled;
     }
 

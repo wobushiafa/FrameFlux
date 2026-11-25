@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <TargetFrameworks>net8.0;netstandard2.1;net10.0-android</TargetFrameworks>
+    <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net10.0-android'">24</SupportedOSPlatformVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible Condition="'$(TargetFramework)' != 'netstandard2.1'">true</IsAotCompatible>
+    <IsPackable>true</IsPackable>
+    <PackageId>FrameFlux.Capture</PackageId>
+    <Description>Local USB camera and capture device media engine for FrameFlux (Windows Media Foundation + WASAPI).</Description>
+    <PackageTags>media;video;capture;camera;usb;uvc;mediafoundation;wasapi;d3d11;windows</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <ProjectReference Include="..\FrameFlux.Abstractions\FrameFlux.Abstractions.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <InternalsVisibleTo Include="FrameFlux.Capture.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\FrameFlux.Compatibility\*.cs" Link="Compatibility\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageReference Include="NAudio" />
+    <PackageReference Include="Vortice.Direct3D11" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.1'">
+    <PackageReference Include="NAudio.Core" />
+    <PackageReference Include="NAudio.Wasapi" />
+    <PackageReference Include="NAudio.WinMM" />
+  </ItemGroup>
+</Project>

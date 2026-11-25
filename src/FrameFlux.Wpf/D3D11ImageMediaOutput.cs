@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -22,8 +23,10 @@ internal sealed class D3D11ImageMediaOutput :
     private readonly D3DImage _image = new();
     private IDirect3D9Ex? _direct3D;
     private IDirect3DDevice9Ex? _device;
+    private IDirect3DQuery9? _completionQuery;
     private IDirect3DTexture9? _sharedTexture;
     private IDirect3DSurface9? _surface;
+    private IDirect3DSurface9? _backBufferSurface;
     private long _generation;
     private int _width;
     private int _height;
@@ -82,8 +85,7 @@ internal sealed class D3D11ImageMediaOutput :
         _failureTracker.Reset();
         _frameSlot.Clear();
         ResetPresentationResources();
-        _device?.Dispose();
-        _device = null;
+        DisposeDevice();
         _direct3D?.Dispose();
         _direct3D = null;
     }
@@ -99,8 +101,7 @@ internal sealed class D3D11ImageMediaOutput :
         _image.IsFrontBufferAvailableChanged -= OnFrontBufferAvailableChanged;
         _frameSlot.Dispose();
         ResetPresentationResources();
-        _device?.Dispose();
-        _device = null;
+        DisposeDevice();
         _direct3D?.Dispose();
         _direct3D = null;
         _texture.Dispose();
@@ -133,59 +134,46 @@ internal sealed class D3D11ImageMediaOutput :
                 ResetPresentationResources();
             }
 
-            var imageLocked = false;
-            try
+            if (!_texture.TryPresent(
+                    frame.Width,
+                    frame.Height,
+                    frame.Width,
+                    frame.Height,
+                    sourceTexture,
+                    out var compositionFrame))
             {
-                if (_backBufferAttached)
+                return;
+            }
+
+            if (_surface is null ||
+                _backBufferSurface is null ||
+                _generation != compositionFrame.Generation)
+            {
+                DetachBackBuffer();
+                ReleaseSharedSurface();
+                OpenSharedSurface(compositionFrame);
+            }
+
+            if (_image.IsFrontBufferAvailable &&
+                _device is not null &&
+                _surface is not null &&
+                _backBufferSurface is not null)
+            {
+                _image.Lock();
+                try
                 {
-                    _image.Lock();
-                    imageLocked = true;
-                }
-
-                if (!_texture.TryPresent(
-                        frame.Width,
-                        frame.Height,
-                        frame.Width,
-                        frame.Height,
-                        sourceTexture,
-                        out var compositionFrame))
-                {
-                    return;
-                }
-
-                if (_surface is null ||
-                    _generation != compositionFrame.Generation)
-                {
-                    if (imageLocked)
-                    {
-                        DetachBackBufferLocked();
-                        _image.Unlock();
-                        imageLocked = false;
-                    }
-
-                    ReleaseSharedSurface();
-                    OpenSharedSurface(compositionFrame);
-                }
-
-                if (_image.IsFrontBufferAvailable)
-                {
-                    if (!imageLocked)
-                    {
-                        _image.Lock();
-                        imageLocked = true;
-                    }
-
                     if (!_backBufferAttached)
                     {
                         AttachBackBufferLocked();
                     }
+
+                    var rect = new Vortice.Direct3D9.Rect(0, 0, _width, _height);
+                    _device.StretchRect(_surface, rect, _backBufferSurface, rect, TextureFilter.None);
+                    WaitForD3D9Completion();
                     _image.AddDirtyRect(
                         new Int32Rect(0, 0, _width, _height));
                 }
-            }
-            finally
-            {
-                if (imageLocked)
+                finally
                 {
                     _image.Unlock();
                 }
@@ -220,11 +208,11 @@ internal sealed class D3D11ImageMediaOutput :
         if (_device is not null &&
             TryOpenSharedSurface(_device, compositionFrame))
         {
+            _completionQuery ??= TryCreateCompletionQuery(_device);
             return;
         }
 
-        _device?.Dispose();
-        _device = null;
+        DisposeDevice();
         for (uint adapter = 0; adapter < _direct3D.AdapterCount; adapter++)
         {
             IDirect3DDevice9Ex? candidate = null;
@@ -234,6 +222,7 @@ internal sealed class D3D11ImageMediaOutput :
                 if (TryOpenSharedSurface(candidate, compositionFrame))
                 {
                     _device = candidate;
+                    _completionQuery = TryCreateCompletionQuery(candidate);
                     return;
                 }
             }
@@ -289,6 +278,13 @@ internal sealed class D3D11ImageMediaOutput :
                 Pool.Default,
                 ref sharedHandle);
             _surface = _sharedTexture.GetSurfaceLevel(0);
+            _backBufferSurface = device.CreateRenderTarget(
+                checked((uint)compositionFrame.Width),
+                checked((uint)compositionFrame.Height),
+                Format.A8R8G8B8,
+                MultisampleType.None,
+                0,
+                lockable: false);
             _generation = compositionFrame.Generation;
             _width = compositionFrame.Width;
             _height = compositionFrame.Height;
@@ -305,7 +301,7 @@ internal sealed class D3D11ImageMediaOutput :
         object sender,
         DependencyPropertyChangedEventArgs args)
     {
-        if (_disposed || !_image.IsFrontBufferAvailable || _surface is null)
+        if (_disposed || !_image.IsFrontBufferAvailable || _backBufferSurface is null)
         {
             return;
         }
@@ -324,14 +320,14 @@ internal sealed class D3D11ImageMediaOutput :
 
     private void AttachBackBufferLocked()
     {
-        if (_surface is null || !_image.IsFrontBufferAvailable)
+        if (_backBufferSurface is null || !_image.IsFrontBufferAvailable)
         {
             return;
         }
 
         _image.SetBackBuffer(
             D3DResourceType.IDirect3DSurface9,
-            _surface.NativePointer);
+            _backBufferSurface.NativePointer);
         _backBufferAttached = true;
     }
 
@@ -368,8 +364,68 @@ internal sealed class D3D11ImageMediaOutput :
         _texture.Reset();
     }
 
+    private static IDirect3DQuery9? TryCreateCompletionQuery(IDirect3DDevice9Ex device)
+    {
+        try
+        {
+            return device.CreateQuery(QueryType.Event);
+        }
+        catch (Exception exception)
+        {
+            Trace.TraceWarning(
+                "Unable to create D3D9 event completion query: {0}",
+                exception.Message);
+            return null;
+        }
+    }
+
+    private void WaitForD3D9Completion()
+    {
+        var query = _completionQuery;
+        if (query is null)
+        {
+            return;
+        }
+
+        query.Issue(Issue.End);
+        var start = Stopwatch.GetTimestamp();
+        var timeoutTicks = Stopwatch.Frequency / 10; // 100 ms guard
+        var iteration = 0;
+        while (true)
+        {
+            if (query.GetData(out bool completed, true) && completed)
+            {
+                return;
+            }
+
+            if (Stopwatch.GetTimestamp() - start >= timeoutTicks)
+            {
+                return;
+            }
+
+            if (iteration++ < 64)
+            {
+                Thread.SpinWait(32);
+            }
+            else
+            {
+                Thread.Yield();
+            }
+        }
+    }
+
+    private void DisposeDevice()
+    {
+        _completionQuery?.Dispose();
+        _completionQuery = null;
+        _device?.Dispose();
+        _device = null;
+    }
+
     private void ReleaseSharedSurface()
     {
+        _backBufferSurface?.Dispose();
+        _backBufferSurface = null;
         _surface?.Dispose();
         _surface = null;
         _sharedTexture?.Dispose();

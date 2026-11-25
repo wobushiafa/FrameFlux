@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using SharpGen.Runtime;
 using Vortice;
@@ -31,8 +32,11 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
     private ID3D11VideoProcessorEnumerator? _enumerator;
     private ID3D11VideoProcessor? _processor;
     private ID3D11Texture2D? _sourceTexture;
+    private Texture2DDescription _sourceDescription;
+    private ID3D11Texture2D? _videoOutputTexture;
     private ID3D11Texture2D? _outputTexture;
     private ID3D11VideoProcessorOutputView? _outputView;
+    private ID3D11Query? _completionQuery;
     private IDXGIKeyedMutex? _keyedMutex;
     private IntPtr _sharedHandle;
     private IntPtr _sourceTexturePointer;
@@ -104,12 +108,12 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         var sourceTexture = EnsureDevice(frame.Texture);
         using (_deviceSynchronizer!.EnterScope())
         {
-            EnsurePipeline(sourceWidth, sourceHeight, outputWidth, outputHeight);
+            EnsureOutputResources(sourceWidth, sourceHeight, outputWidth, outputHeight);
         }
 
         if (_keyedMutex is not null)
         {
-            _keyedMutex.AcquireSync(0, 0);
+            _keyedMutex.AcquireSync(0, 100);
         }
 
         var rendered = false;
@@ -117,22 +121,80 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         {
             using (_deviceSynchronizer.EnterScope())
             {
-                var inputView = GetOrCreateInputView(sourceTexture, frame.ArraySlice);
-                _streams[0] = new VideoProcessorStream
+                if (CanDirectCopy(
+                        sourceWidth,
+                        sourceHeight,
+                        outputWidth,
+                        outputHeight,
+                        frame.ArraySlice))
                 {
-                    Enable = true,
-                    InputSurface = inputView
-                };
-                _videoContext!.VideoProcessorBlt(
-                    _processor!,
-                    _outputView!,
-                    0,
-                    1,
-                    _streams).CheckError();
+                    var sourceSubresource = _sourceDescription.MipLevels * checked((uint)frame.ArraySlice);
+                    if (_sourceDescription.Width == (uint)sourceWidth &&
+                        _sourceDescription.Height == (uint)sourceHeight)
+                    {
+                        _deviceContext!.CopySubresourceRegion(
+                            _outputTexture!,
+                            0,
+                            0,
+                            0,
+                            0,
+                            sourceTexture,
+                            sourceSubresource);
+                    }
+                    else
+                    {
+                        _deviceContext!.CopySubresourceRegion(
+                            _outputTexture!,
+                            0,
+                            0,
+                            0,
+                            0,
+                            sourceTexture,
+                            sourceSubresource,
+                            new Vortice.Mathematics.Box(0, 0, 0, sourceWidth, sourceHeight, 1));
+                    }
+                }
+                else
+                {
+                    EnsureVideoProcessorPipeline(sourceWidth, sourceHeight, outputWidth, outputHeight);
+                    var inputView = GetOrCreateInputView(sourceTexture, frame.ArraySlice);
+                    _streams[0] = new VideoProcessorStream
+                    {
+                        Enable = true,
+                        InputSurface = inputView
+                    };
+                    _videoContext!.VideoProcessorBlt(
+                        _processor!,
+                        _outputView!,
+                        0,
+                        1,
+                        _streams).CheckError();
+                    if (_videoOutputTexture is not null)
+                    {
+                        _deviceContext!.CopySubresourceRegion(
+                            _outputTexture!,
+                            0,
+                            0,
+                            0,
+                            0,
+                            _videoOutputTexture,
+                            0);
+                    }
+                }
+
                 if (_keyedMutex is null)
                 {
+                    if (_completionQuery is not null)
+                    {
+                        _deviceContext!.End(_completionQuery);
+                    }
                     _deviceContext!.Flush();
                 }
+            }
+
+            if (_keyedMutex is null && _completionQuery is not null)
+            {
+                WaitForGpuCompletion();
             }
 
             rendered = true;
@@ -190,16 +252,19 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
             if (_device is not null &&
                 _device.NativePointer == sourceDevice.NativePointer)
             {
-                DisposeInputViews();
-                _sourceTexture?.Dispose();
+                using (_deviceSynchronizer!.EnterScope())
+                {
+                    DisposeInputViews();
+                    _sourceTexture?.Dispose();
+                }
             }
             else
             {
                 DisposePipeline();
                 _device = sourceDevice.QueryInterface<ID3D11Device>();
-                _videoDevice = _device.QueryInterface<ID3D11VideoDevice>();
+                _videoDevice = _device.QueryInterfaceOrNull<ID3D11VideoDevice>();
                 _deviceContext = _device.ImmediateContext;
-                _videoContext = _deviceContext.QueryInterface<ID3D11VideoContext>();
+                _videoContext = _deviceContext.QueryInterfaceOrNull<ID3D11VideoContext>();
                 _deviceSynchronizer = new WindowsD3D11DeviceSynchronizer(
                     _device,
                     _deviceContext);
@@ -207,6 +272,7 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
 
             _sourceTexture = sourceTexture;
             _sourceTexturePointer = sourceTexturePointer;
+            _sourceDescription = sourceTexture.Description;
             return sourceTexture;
         }
         catch
@@ -255,7 +321,22 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         _inputViews.Clear();
     }
 
-    private void EnsurePipeline(
+    private bool CanDirectCopy(
+        int sourceWidth,
+        int sourceHeight,
+        int outputWidth,
+        int outputHeight,
+        int arraySlice) =>
+        sourceWidth == outputWidth &&
+        sourceHeight == outputHeight &&
+        _sourceDescription.Format == Format.B8G8R8A8_UNorm &&
+        _sourceDescription.SampleDescription.Count == 1 &&
+        _sourceDescription.Width >= (uint)sourceWidth &&
+        _sourceDescription.Height >= (uint)sourceHeight &&
+        arraySlice >= 0 &&
+        (uint)arraySlice < _sourceDescription.ArraySize;
+
+    private void EnsureOutputResources(
         int sourceWidth,
         int sourceHeight,
         int outputWidth,
@@ -275,36 +356,6 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         _sourceHeight = sourceHeight;
         _width = outputWidth;
         _height = outputHeight;
-
-        var content = new VideoProcessorContentDescription
-        {
-            InputFrameFormat = VideoFrameFormat.Progressive,
-            InputFrameRate = new Rational(30, 1),
-            InputWidth = (uint)sourceWidth,
-            InputHeight = (uint)sourceHeight,
-            OutputFrameRate = new Rational(30, 1),
-            OutputWidth = (uint)outputWidth,
-            OutputHeight = (uint)outputHeight,
-            Usage = VideoUsage.PlaybackNormal
-        };
-        _videoDevice!.CreateVideoProcessorEnumerator(ref content, out _enumerator).CheckError();
-        _videoDevice.CreateVideoProcessor(_enumerator, 0, out _processor).CheckError();
-        var sourceBounds = new RawRect(0, 0, sourceWidth, sourceHeight);
-        var outputBounds = new RawRect(0, 0, outputWidth, outputHeight);
-        _videoContext!.VideoProcessorSetStreamSourceRect(
-            _processor,
-            0,
-            true,
-            sourceBounds);
-        _videoContext.VideoProcessorSetStreamDestRect(
-            _processor,
-            0,
-            true,
-            outputBounds);
-        _videoContext.VideoProcessorSetOutputTargetRect(
-            _processor,
-            true,
-            outputBounds);
 
         var textureDescription = new Texture2DDescription
         {
@@ -333,26 +384,147 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
             _sharedHandle = resource.SharedHandle;
         }
 
+        if (_synchronization == WindowsD3D11CompositionSynchronization.Shared)
+        {
+            _completionQuery = _device.CreateQuery(QueryType.Event, QueryFlags.None);
+        }
+        _generation++;
+    }
+
+    private void EnsureVideoProcessorPipeline(
+        int sourceWidth,
+        int sourceHeight,
+        int outputWidth,
+        int outputHeight)
+    {
+        if (_outputView is not null &&
+            _processor is not null &&
+            _enumerator is not null)
+        {
+            return;
+        }
+
+        var videoDevice = _videoDevice ??
+            throw new InvalidOperationException("D3D11 video device interface is unavailable.");
+        var videoContext = _videoContext ??
+            throw new InvalidOperationException("D3D11 video context interface is unavailable.");
+
+        var content = new VideoProcessorContentDescription
+        {
+            InputFrameFormat = VideoFrameFormat.Progressive,
+            InputFrameRate = new Rational(30, 1),
+            InputWidth = (uint)sourceWidth,
+            InputHeight = (uint)sourceHeight,
+            OutputFrameRate = new Rational(30, 1),
+            OutputWidth = (uint)outputWidth,
+            OutputHeight = (uint)outputHeight,
+            Usage = VideoUsage.PlaybackNormal
+        };
+        videoDevice.CreateVideoProcessorEnumerator(ref content, out _enumerator).CheckError();
+        videoDevice.CreateVideoProcessor(_enumerator, 0, out _processor).CheckError();
+        videoContext.VideoProcessorSetStreamAutoProcessingMode(_processor, 0, false);
+        var sourceBounds = new RawRect(0, 0, sourceWidth, sourceHeight);
+        var outputBounds = new RawRect(0, 0, outputWidth, outputHeight);
+        videoContext.VideoProcessorSetStreamSourceRect(
+            _processor,
+            0,
+            true,
+            sourceBounds);
+        videoContext.VideoProcessorSetStreamDestRect(
+            _processor,
+            0,
+            true,
+            outputBounds);
+        videoContext.VideoProcessorSetOutputTargetRect(
+            _processor,
+            true,
+            outputBounds);
+
+        ID3D11Texture2D targetTexture;
+        if (_synchronization == WindowsD3D11CompositionSynchronization.Shared)
+        {
+            var privateDescription = new Texture2DDescription
+            {
+                Width = (uint)outputWidth,
+                Height = (uint)outputHeight,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = Format.B8G8R8A8_UNorm,
+                SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Default,
+                BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
+                CPUAccessFlags = CpuAccessFlags.None,
+                MiscFlags = ResourceOptionFlags.None
+            };
+            _videoOutputTexture = _device!.CreateTexture2D(privateDescription);
+            targetTexture = _videoOutputTexture;
+        }
+        else
+        {
+            targetTexture = _outputTexture!;
+        }
+
         var outputDescription = new VideoProcessorOutputViewDescription
         {
             ViewDimension = VideoProcessorOutputViewDimension.Texture2D,
             Texture2D = new Texture2DVideoProcessorOutputView { MipSlice = 0 }
         };
-        _videoDevice.CreateVideoProcessorOutputView(
-            _outputTexture,
+        videoDevice.CreateVideoProcessorOutputView(
+            targetTexture,
             _enumerator,
             outputDescription,
             out _outputView).CheckError();
-        _generation++;
+    }
+
+    private void WaitForGpuCompletion()
+    {
+        var query = _completionQuery;
+        var context = _deviceContext;
+        var synchronizer = _deviceSynchronizer;
+        if (query is null || context is null || synchronizer is null)
+        {
+            return;
+        }
+
+        var start = Stopwatch.GetTimestamp();
+        var timeoutTicks = Stopwatch.Frequency / 10; // 100 ms guard
+        var iteration = 0;
+        while (true)
+        {
+            bool completed;
+            using (synchronizer.EnterScope())
+            {
+                completed = context.GetData(query, AsyncGetDataFlags.DoNotFlush, out int value) &&
+                            value != 0;
+            }
+
+            if (completed || Stopwatch.GetTimestamp() - start >= timeoutTicks)
+            {
+                return;
+            }
+
+            if (iteration++ < 64)
+            {
+                Thread.SpinWait(32);
+            }
+            else
+            {
+                Thread.Yield();
+            }
+        }
     }
 
     private void DisposePresentationResources()
     {
         DisposeInputViews();
+        _completionQuery?.Dispose();
+        _completionQuery = null;
         _keyedMutex?.Dispose();
         _keyedMutex = null;
         _outputView?.Dispose();
         _outputView = null;
+        _videoOutputTexture?.Dispose();
+        _videoOutputTexture = null;
         _outputTexture?.Dispose();
         _outputTexture = null;
         _processor?.Dispose();
@@ -367,6 +539,7 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         DisposePresentationResources();
         _sourceTexture?.Dispose();
         _sourceTexture = null;
+        _sourceDescription = default;
         _sourceTexturePointer = IntPtr.Zero;
         _videoContext?.Dispose();
         _videoContext = null;

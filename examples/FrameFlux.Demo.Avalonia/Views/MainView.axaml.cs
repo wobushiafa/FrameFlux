@@ -4,6 +4,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using FrameFlux.Avalonia;
+using FrameFlux.Capture;
 using FrameFlux.FFmpeg;
 using FrameFlux.WebRtc;
 
@@ -13,6 +14,7 @@ public sealed partial class MainView : UserControl
 {
     private static readonly IMediaPlayerFactory FfmpegPlayerFactory = new FfmpegMediaPlayerFactory();
     private static readonly IMediaPlayerFactory WebRtcPlayerFactory = new WebRtcMediaPlayerFactory();
+    private static readonly IMediaPlayerFactory CapturePlayerFactory = new CaptureMediaPlayerFactory();
     private static readonly IBrush IdleBrush = new SolidColorBrush(Color.Parse("#6B7280"));
     private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.Parse("#22C55E"));
     private static readonly IBrush BusyBrush = new SolidColorBrush(Color.Parse("#F59E0B"));
@@ -20,12 +22,22 @@ public sealed partial class MainView : UserControl
     private bool _configuringPlaybackModes;
     private string? _temporaryMediaPath;
 
+    private sealed record CameraChoice(MediaCaptureDeviceInfo? Device, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
+    private sealed record AudioInputChoice(CaptureAudioMode Mode, string? DeviceId, string Label)
+    {
+        public override string ToString() => Label;
+    }
+
     public MainView()
     {
         InitializeComponent();
         InitializePlaybackControls();
         Player.PlayerFactory = FfmpegPlayerFactory;
-        BackendComboBox.ItemsSource = new[] { "Auto", "Media (FFmpeg)", "WebRTC" };
+        BackendComboBox.ItemsSource = new[] { "Auto", "Media (FFmpeg)", "WebRTC", "USB Capture" };
         BackendComboBox.SelectedIndex = 0;
         Player.PropertyChanged += Player_OnPropertyChanged;
         var options = new MediaOpenOptions
@@ -57,6 +69,70 @@ public sealed partial class MainView : UserControl
         HardwareModeComboBox.SelectedItem = options.Video.DecodingPolicy;
         RenderModeComboBox.SelectedItem = Player.PresentationMode;
         _configuringPlaybackModes = false;
+
+        UsbCapturePanel.IsVisible = OperatingSystem.IsWindows();
+        if (OperatingSystem.IsWindows())
+        {
+            RefreshCaptureDevices();
+        }
+    }
+
+    private void RefreshCaptureDevices()
+    {
+        var videoDevices = MediaCaptureDevices.GetVideoDevices(includeFormats: false);
+        var cameraChoices = videoDevices.Count > 0
+            ? videoDevices.Select(d => new CameraChoice(d, d.UniqueDisplayName)).ToList()
+            : [new CameraChoice(null, "(No USB camera found)")];
+        CameraComboBox.ItemsSource = cameraChoices;
+        CameraComboBox.SelectedIndex = 0;
+
+        var audioChoices = new List<AudioInputChoice>
+        {
+            new(CaptureAudioMode.AutoPaired, null, "Auto (Paired USB)"),
+            new(CaptureAudioMode.Disabled, null, "Disabled (Video Only)"),
+            new(CaptureAudioMode.DefaultSystemInput, null, "Default Mic")
+        };
+        foreach (var audio in MediaCaptureDevices.GetAudioDevices())
+        {
+            audioChoices.Add(new AudioInputChoice(CaptureAudioMode.SpecificDevice, audio.DeviceId, audio.DisplayName));
+        }
+
+        AudioInputComboBox.ItemsSource = audioChoices;
+        AudioInputComboBox.SelectedIndex = 0;
+    }
+
+    private void RefreshCamerasButton_OnClick(object? sender, RoutedEventArgs e) =>
+        RefreshCaptureDevices();
+
+    private async void OpenCameraButton_OnClick(object? sender, RoutedEventArgs e)
+    {
+        if (CameraComboBox.SelectedItem is not CameraChoice { Device: { } device })
+        {
+            SetStatus("No USB camera detected. Connect a camera and click Refresh.", ErrorBrush);
+            return;
+        }
+
+        var audioChoice = AudioInputComboBox.SelectedItem as AudioInputChoice ??
+                          new AudioInputChoice(CaptureAudioMode.AutoPaired, null, "Auto");
+
+        SetSourceCommandsEnabled(false);
+        try
+        {
+            var source = CaptureSource.FromDeviceWithAudioMode(
+                device,
+                audioChoice.Mode,
+                audioChoice.DeviceId);
+            SourceTextBox.Text = source.Uri.ToString();
+            await StartSourceAsync(source);
+        }
+        catch (Exception exception)
+        {
+            SetStatus(exception.Message, ErrorBrush);
+        }
+        finally
+        {
+            SetSourceCommandsEnabled(true);
+        }
     }
 
     private async void StartButton_OnClick(object? sender, RoutedEventArgs e)
@@ -147,9 +223,10 @@ public sealed partial class MainView : UserControl
         DeleteSupersededTemporaryFile(source);
         _temporaryMediaPath = temporaryPath ?? _temporaryMediaPath;
         Player.Source = source;
-        SourceKindTextBlock.Text = source.Uri.IsFile ? "FILE" : "LIVE";
+        var isCapture = CaptureSource.IsCaptureSource(source);
+        SourceKindTextBlock.Text = isCapture ? "USB" : (source.Uri.IsFile ? "FILE" : "LIVE");
         SourceKindIndicator.Background = source.Uri.IsFile ? IdleBrush : ErrorBrush;
-        SetStatus(source.Uri.IsFile ? "Opening file" : "Opening stream", BusyBrush);
+        SetStatus(isCapture ? "Opening USB device" : (source.Uri.IsFile ? "Opening file" : "Opening stream"), BusyBrush);
         await Player.StartAsync();
     }
 
@@ -159,7 +236,10 @@ public sealed partial class MainView : UserControl
         {
             1 => FfmpegPlayerFactory,
             2 => WebRtcPlayerFactory,
-            _ => IsWebRtcSource(source) ? WebRtcPlayerFactory : FfmpegPlayerFactory
+            3 => CapturePlayerFactory,
+            _ => CaptureSource.IsCaptureSource(source)
+                ? CapturePlayerFactory
+                : IsWebRtcSource(source) ? WebRtcPlayerFactory : FfmpegPlayerFactory
         };
     }
 
@@ -232,6 +312,8 @@ public sealed partial class MainView : UserControl
     private void SetSourceCommandsEnabled(bool enabled)
     {
         OpenFileButton.IsEnabled = enabled;
+        OpenCameraButton.IsEnabled = enabled;
+        RefreshCamerasButton.IsEnabled = enabled;
         StartButton.IsEnabled = enabled;
     }
 

@@ -12,7 +12,7 @@
           ColumnSpacing="8">
       <TextBox x:Name="SourceTextBox"
                MinHeight="48"
-               PlaceholderText="RTSP, WHEP/WebRTC URL or local file path"
+               PlaceholderText="RTSP, WHEP/WebRTC, capture://video/0 or local file path"
                Text="rtsp://username:password@camera-host:554/stream"
                AutomationProperties.Name="Media source" />
       <Button x:Name="OpenFileButton"
@@ -61,7 +61,8 @@
                   SelectionChanged="PlaybackMode_OnSelectionChanged"
                   AutomationProperties.Name="Decode mode" />
       </StackPanel>
-      <StackPanel Orientation="Horizontal"
+      <StackPanel Margin="0,0,16,0"
+                  Orientation="Horizontal"
                   Spacing="8">
         <TextBlock VerticalAlignment="Center"
                    Text="Render" />
@@ -69,6 +70,29 @@
                   Width="150"
                   SelectionChanged="PlaybackMode_OnSelectionChanged"
                   AutomationProperties.Name="Render mode" />
+      </StackPanel>
+      <StackPanel x:Name="UsbCapturePanel"
+                  Margin="0,6,0,0"
+                  Orientation="Horizontal"
+                  Spacing="8">
+        <TextBlock VerticalAlignment="Center"
+                   Text="USB Camera" />
+        <ComboBox x:Name="CameraComboBox"
+                  Width="190"
+                  AutomationProperties.Name="USB camera device" />
+        <TextBlock VerticalAlignment="Center"
+                   Text="Audio In" />
+        <ComboBox x:Name="AudioInputComboBox"
+                  Width="170"
+                  AutomationProperties.Name="USB audio input" />
+        <Button x:Name="RefreshCamerasButton"
+                Content="Refresh"
+                Click="RefreshCamerasButton_OnClick"
+                AutomationProperties.Name="Refresh USB cameras" />
+        <Button x:Name="OpenCameraButton"
+                Content="Open USB"
+                Click="OpenCameraButton_OnClick"
+                AutomationProperties.Name="Open USB camera" />
       </StackPanel>
     </WrapPanel>
 

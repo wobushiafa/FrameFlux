@@ -80,13 +80,42 @@
                           Width="150"
                           SelectionChanged="PlaybackMode_SelectionChanged" />
             </StackPanel>
-            <StackPanel Orientation="Horizontal">
+            <StackPanel Margin="0,0,16,0"
+                        Orientation="Horizontal">
                 <TextBlock Margin="0,0,8,0"
                            VerticalAlignment="Center"
                            Text="Render" />
                 <ComboBox x:Name="RenderModeComboBox"
                           Width="150"
                           SelectionChanged="PlaybackMode_SelectionChanged" />
+            </StackPanel>
+            <StackPanel Margin="0,6,0,0"
+                        Orientation="Horizontal">
+                <TextBlock Margin="0,0,8,0"
+                           VerticalAlignment="Center"
+                           Text="USB Camera" />
+                <ComboBox x:Name="CameraComboBox"
+                          Width="190"
+                          Margin="0,0,8,0"
+                          AutomationProperties.Name="USB camera device" />
+                <TextBlock Margin="0,0,8,0"
+                           VerticalAlignment="Center"
+                           Text="Audio In" />
+                <ComboBox x:Name="AudioInputComboBox"
+                          Width="170"
+                          Margin="0,0,8,0"
+                          AutomationProperties.Name="USB audio input" />
+                <Button x:Name="RefreshCamerasButton"
+                        Margin="0,0,8,0"
+                        Padding="10,4"
+                        Click="RefreshCamerasButton_Click">
+                    Refresh
+                </Button>
+                <Button x:Name="OpenCameraButton"
+                        Padding="12,4"
+                        Click="OpenCameraButton_Click">
+                    Open USB
+                </Button>
             </StackPanel>
         </WrapPanel>
         <Border Grid.Row="2"
@@ -149,6 +178,6 @@
         <TextBlock x:Name="StatusTextBlock"
                    Grid.Row="4"
                    TextWrapping="Wrap"
-                   Text="Enter an RTSP URL or open a local media file." />
+                   Text="Enter an RTSP URL, select a USB camera, or open a local media file." />
     </Grid>
 </Window>

@@ -11,6 +11,7 @@
     <Project Path="src/FrameFlux.Avalonia.Android/FrameFlux.Avalonia.Android.csproj" />
     <Project Path="src/FrameFlux.Avalonia.Linux/FrameFlux.Avalonia.Linux.csproj" />
     <Project Path="src/FrameFlux.Avalonia.Windows/FrameFlux.Avalonia.Windows.csproj" />
+    <Project Path="src/FrameFlux.Capture/FrameFlux.Capture.csproj" />
     <Project Path="src/FrameFlux.FFmpeg/FrameFlux.FFmpeg.csproj" />
     <Project Path="src/FrameFlux.FFmpeg.Android/FrameFlux.FFmpeg.Android.csproj" />
     <Project Path="src/FrameFlux.FFmpeg.NativeAssets.Android/FrameFlux.FFmpeg.NativeAssets.Android.csproj" />
@@ -25,6 +26,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/FrameFlux.Avalonia.Android.Tests/FrameFlux.Avalonia.Android.Tests.csproj" />
     <Project Path="tests/FrameFlux.Avalonia.Linux.Tests/FrameFlux.Avalonia.Linux.Tests.csproj" />
+    <Project Path="tests/FrameFlux.Capture.Tests/FrameFlux.Capture.Tests.csproj" />
     <Project Path="tests/FrameFlux.FFmpeg.Tests/FrameFlux.FFmpeg.Tests.csproj" />
     <Project Path="tests/FrameFlux.Presentation.Api.Tests/FrameFlux.Presentation.Api.Tests.csproj" />
     <Project Path="tests/FrameFlux.Unity.Tests/FrameFlux.Unity.Tests.csproj" />
