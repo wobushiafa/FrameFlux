@@ -40,7 +40,9 @@ internal sealed class LinuxNativeSurfaceMediaOutput :
     }
 
     public bool Supports(MediaFrameStorageKind storageKind, MediaPixelFormat pixelFormat) =>
-        storageKind == MediaFrameStorageKind.DmaBuf;
+        storageKind == MediaFrameStorageKind.DmaBuf ||
+        (storageKind == MediaFrameStorageKind.CpuMemory &&
+         pixelFormat == MediaPixelFormat.Bgra32);
 
     public event EventHandler? FramePresented;
 
@@ -49,8 +51,9 @@ internal sealed class LinuxNativeSurfaceMediaOutput :
     public bool TryPresent(IMediaFrameLease frame)
     {
         if (_disposed || _failureTracker.IsExhausted ||
-            frame.StorageKind != MediaFrameStorageKind.DmaBuf ||
-            !frame.TryGetDmaBuf(out _))
+            !Supports(frame.StorageKind, frame.PixelFormat) ||
+            (frame.StorageKind == MediaFrameStorageKind.DmaBuf && !frame.TryGetDmaBuf(out _)) ||
+            (frame.StorageKind == MediaFrameStorageKind.CpuMemory && !frame.TryGetCpuBuffer(out _)))
         {
             return false;
         }
@@ -183,19 +186,51 @@ internal sealed class LinuxNativeSurfaceMediaOutput :
 
         try
         {
-            if (_disposed || !frame.TryGetDmaBuf(out var dmaBuf))
+            if (_disposed)
             {
                 return;
             }
 
             var scaling = _renderScaling;
-            _presenter.Present(
-                dmaBuf,
-                frame.Width,
-                frame.Height,
-                Math.Max(1, (int)Math.Ceiling(Bounds.Width * scaling)),
-                Math.Max(1, (int)Math.Ceiling(Bounds.Height * scaling)),
-                _stretch);
+            var targetWidth = Math.Max(1, (int)Math.Ceiling(Bounds.Width * scaling));
+            var targetHeight = Math.Max(1, (int)Math.Ceiling(Bounds.Height * scaling));
+
+            if (frame.StorageKind == MediaFrameStorageKind.DmaBuf)
+            {
+                if (!frame.TryGetDmaBuf(out var dmaBuf))
+                {
+                    return;
+                }
+
+                _presenter.Present(
+                    dmaBuf,
+                    frame.Width,
+                    frame.Height,
+                    targetWidth,
+                    targetHeight,
+                    _stretch);
+            }
+            else if (frame.StorageKind == MediaFrameStorageKind.CpuMemory &&
+                     frame.PixelFormat == MediaPixelFormat.Bgra32)
+            {
+                if (!frame.TryGetCpuBuffer(out var cpuFrame))
+                {
+                    return;
+                }
+
+                _presenter.PresentCpuBgra(
+                    cpuFrame,
+                    frame.Width,
+                    frame.Height,
+                    targetWidth,
+                    targetHeight,
+                    _stretch);
+            }
+            else
+            {
+                return;
+            }
+
             _failureTracker.ReportSuccess();
             if (!_presentationNotified)
             {

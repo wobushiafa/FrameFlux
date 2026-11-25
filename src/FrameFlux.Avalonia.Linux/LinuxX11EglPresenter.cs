@@ -24,14 +24,24 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
     private const ulong CwColormap = 1UL << 13;
     private const int GlArrayBuffer = 0x8892;
     private const int GlColorBufferBit = 0x00004000;
+    private const int GlDepthTest = 0x0B71;
     private const int GlCompileStatus = 0x8B81;
     private const int GlDynamicDraw = 0x88E8;
     private const int GlFloat = 0x1406;
     private const int GlFragmentShader = 0x8B30;
+    private const int GlLinear = 0x2601;
     private const int GlLinkStatus = 0x8B82;
+    private const int GlRgba = 0x1908;
     private const int GlTexture0 = 0x84C0;
     private const int GlTexture2D = 0x0DE1;
+    private const int GlTextureMagFilter = 0x2800;
+    private const int GlTextureMinFilter = 0x2801;
+    private const int GlTextureWrapS = 0x2802;
+    private const int GlTextureWrapT = 0x2803;
+    private const int GlClampToEdge = 0x812F;
     private const int GlTriangles = 0x0004;
+    private const int GlUnpackRowLength = 0x0CF2;
+    private const int GlUnsignedByte = 0x1401;
     private const int GlVertexShader = 0x8B31;
 
     private readonly float[] _vertices = new float[24];
@@ -44,12 +54,19 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
     private NativeGl? _gl;
     private LinuxDmaBufEglInterop? _dmaBufInterop;
     private int _program;
+    private int _cpuProgram;
     private int _vertexShader;
     private int _fragmentShader;
+    private int _cpuFragmentShader;
+    private int _cpuTexture;
+    private int _cpuTextureWidth;
+    private int _cpuTextureHeight;
+    private byte[]? _stagingBuffer;
     private int _vertexBuffer;
     private int _vertexArray;
     private int _uTextureYLocation = -1;
     private int _uTextureUvLocation = -1;
+    private int _uCpuTextureLocation = -1;
     private int _cachedSourceWidth;
     private int _cachedSourceHeight;
     private int _cachedTargetWidth;
@@ -158,7 +175,8 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         MakeCurrent();
-        _dmaBufInterop!.Import(sourceWidth, sourceHeight, dmaBuf);
+        _dmaBufInterop ??= new LinuxDmaBufEglInterop(this);
+        _dmaBufInterop.Import(sourceWidth, sourceHeight, dmaBuf);
 
         var gl = _gl!;
         var clampedTargetWidth = Math.Max(1, targetWidth);
@@ -166,6 +184,7 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
         gl.Viewport(0, 0, clampedTargetWidth, clampedTargetHeight);
         gl.ClearColor(0, 0, 0, 1);
         gl.Clear(GlColorBufferBit);
+        gl.Disable(GlDepthTest);
         gl.UseProgram(_program);
         gl.ActiveTexture(GlTexture0);
         gl.BindTexture(GlTexture2D, _dmaBufInterop.TextureY);
@@ -174,6 +193,138 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
         gl.BindTexture(GlTexture2D, _dmaBufInterop.TextureUv);
         gl.Uniform1i(_uTextureUvLocation, 1);
 
+        DrawQuadAndSwap(gl, sourceWidth, sourceHeight, clampedTargetWidth, clampedTargetHeight, stretch);
+    }
+
+    internal unsafe void PresentCpuBgra(
+        MediaCpuFrameBuffer source,
+        int sourceWidth,
+        int sourceHeight,
+        int targetWidth,
+        int targetHeight,
+        Stretch stretch)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (sourceWidth <= 0 || sourceHeight <= 0 ||
+            source.Plane0 == IntPtr.Zero ||
+            source.Plane0Stride < checked(sourceWidth * 4))
+        {
+            throw new InvalidOperationException(
+                "The Linux X11 EGL presenter received an invalid BGRA frame.");
+        }
+
+        var rowBytes = checked(sourceWidth * 4);
+        var requiredBytes = checked((long)source.Plane0Stride * (sourceHeight - 1) + rowBytes);
+        if (source.Size > 0 && source.Size < requiredBytes)
+        {
+            throw new InvalidOperationException(
+                "The Linux X11 EGL presenter received a truncated BGRA frame.");
+        }
+
+        MakeCurrent();
+        var gl = _gl!;
+        var clampedTargetWidth = Math.Max(1, targetWidth);
+        var clampedTargetHeight = Math.Max(1, targetHeight);
+        gl.Viewport(0, 0, clampedTargetWidth, clampedTargetHeight);
+        gl.ClearColor(0, 0, 0, 1);
+        gl.Clear(GlColorBufferBit);
+        gl.Disable(GlDepthTest);
+
+        gl.ActiveTexture(GlTexture0);
+        gl.BindTexture(GlTexture2D, _cpuTexture);
+        UploadCpuPixels(gl, source, sourceWidth, sourceHeight, rowBytes);
+
+        gl.UseProgram(_cpuProgram);
+        gl.Uniform1i(_uCpuTextureLocation, 0);
+        DrawQuadAndSwap(gl, sourceWidth, sourceHeight, clampedTargetWidth, clampedTargetHeight, stretch);
+    }
+
+    private unsafe void UploadCpuPixels(
+        NativeGl gl,
+        MediaCpuFrameBuffer source,
+        int width,
+        int height,
+        int rowBytes)
+    {
+        if (source.Plane0Stride == rowBytes)
+        {
+            UploadCpuTexture(gl, width, height, source.Plane0);
+            return;
+        }
+
+        if ((source.Plane0Stride & 3) == 0)
+        {
+            gl.PixelStorei(GlUnpackRowLength, source.Plane0Stride >> 2);
+            try
+            {
+                UploadCpuTexture(gl, width, height, source.Plane0);
+            }
+            finally
+            {
+                gl.PixelStorei(GlUnpackRowLength, 0);
+            }
+            return;
+        }
+
+        var packedSize = checked(rowBytes * height);
+        if (_stagingBuffer is null || _stagingBuffer.Length < packedSize)
+        {
+            _stagingBuffer = GC.AllocateUninitializedArray<byte>(packedSize);
+        }
+
+        for (var row = 0; row < height; row++)
+        {
+            var srcRow = new ReadOnlySpan<byte>(
+                (void*)(source.Plane0 + ((long)row * source.Plane0Stride)),
+                rowBytes);
+            srcRow.CopyTo(_stagingBuffer.AsSpan(row * rowBytes, rowBytes));
+        }
+
+        fixed (byte* packed = _stagingBuffer)
+        {
+            UploadCpuTexture(gl, width, height, (IntPtr)packed);
+        }
+    }
+
+    private void UploadCpuTexture(NativeGl gl, int width, int height, IntPtr pixels)
+    {
+        if (_cpuTextureWidth != width || _cpuTextureHeight != height)
+        {
+            gl.TexImage2D(
+                GlTexture2D,
+                0,
+                GlRgba,
+                width,
+                height,
+                0,
+                GlRgba,
+                GlUnsignedByte,
+                pixels);
+            _cpuTextureWidth = width;
+            _cpuTextureHeight = height;
+            return;
+        }
+
+        gl.TexSubImage2D(
+            GlTexture2D,
+            0,
+            0,
+            0,
+            width,
+            height,
+            GlRgba,
+            GlUnsignedByte,
+            pixels);
+    }
+
+    private void DrawQuadAndSwap(
+        NativeGl gl,
+        int sourceWidth,
+        int sourceHeight,
+        int clampedTargetWidth,
+        int clampedTargetHeight,
+        Stretch stretch)
+    {
         gl.BindVertexArray(_vertexArray);
         gl.BindBuffer(GlArrayBuffer, _vertexBuffer);
         if (!_verticesUploaded ||
@@ -360,7 +511,6 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
         _ = EglSwapInterval(_eglDisplay, 0);
         _gl = new NativeGl(GetProcAddress);
         InitializeGlResources();
-        _dmaBufInterop = new LinuxDmaBufEglInterop(this);
     }
 
     private void InitializeGlResources()
@@ -381,6 +531,31 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
         }
         _uTextureYLocation = gl.GetUniformLocation(_program, "uTextureY");
         _uTextureUvLocation = gl.GetUniformLocation(_program, "uTextureUv");
+
+        _cpuFragmentShader = gl.CompileShader(GlFragmentShader, CpuBgraFragmentShaderSource);
+        _cpuProgram = gl.CreateProgram();
+        gl.AttachShader(_cpuProgram, _vertexShader);
+        gl.AttachShader(_cpuProgram, _cpuFragmentShader);
+        gl.BindAttribLocation(_cpuProgram, 0, "aPosition");
+        gl.BindAttribLocation(_cpuProgram, 1, "aTextureCoordinate");
+        gl.LinkProgram(_cpuProgram);
+        if (gl.GetProgramParameter(_cpuProgram, GlLinkStatus) == 0)
+        {
+            throw new InvalidOperationException(
+                $"Unable to link the X11 native BGRA video shader: {gl.GetProgramLog(_cpuProgram)}");
+        }
+        _uCpuTextureLocation = gl.GetUniformLocation(_cpuProgram, "uTexture");
+
+        _cpuTexture = gl.GenTexture();
+        gl.ActiveTexture(GlTexture0);
+        gl.BindTexture(GlTexture2D, _cpuTexture);
+        gl.TexParameteri(GlTexture2D, GlTextureMinFilter, GlLinear);
+        gl.TexParameteri(GlTexture2D, GlTextureMagFilter, GlLinear);
+        gl.TexParameteri(GlTexture2D, GlTextureWrapS, GlClampToEdge);
+        gl.TexParameteri(GlTexture2D, GlTextureWrapT, GlClampToEdge);
+        _cpuTextureWidth = 0;
+        _cpuTextureHeight = 0;
+
         _verticesUploaded = false;
         _vertexArray = gl.GenVertexArray();
         _vertexBuffer = gl.GenBuffer();
@@ -392,14 +567,20 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
         {
             return;
         }
+        if (_cpuTexture != 0) _gl.DeleteTexture(_cpuTexture);
         if (_vertexBuffer != 0) _gl.DeleteBuffer(_vertexBuffer);
         if (_vertexArray != 0) _gl.DeleteVertexArray(_vertexArray);
+        if (_cpuProgram != 0) _gl.DeleteProgram(_cpuProgram);
         if (_program != 0) _gl.DeleteProgram(_program);
+        if (_cpuFragmentShader != 0) _gl.DeleteShader(_cpuFragmentShader);
         if (_fragmentShader != 0) _gl.DeleteShader(_fragmentShader);
         if (_vertexShader != 0) _gl.DeleteShader(_vertexShader);
-        _vertexBuffer = _vertexArray = _program = _fragmentShader = _vertexShader = 0;
+        _cpuTexture = _vertexBuffer = _vertexArray = _cpuProgram = _program = _cpuFragmentShader = _fragmentShader = _vertexShader = 0;
+        _cpuTextureWidth = 0;
+        _cpuTextureHeight = 0;
         _uTextureYLocation = -1;
         _uTextureUvLocation = -1;
+        _uCpuTextureLocation = -1;
         _verticesUploaded = false;
     }
 
@@ -434,6 +615,13 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
         "outputColor = vec4(y + 1.79274107 * uv.y, " +
         "y - 0.21324861 * uv.x - 0.53290933 * uv.y, " +
         "y + 2.11240179 * uv.x, 1.0); }\n";
+
+    private const string CpuBgraFragmentShaderSource =
+        "#version 300 es\nprecision mediump float;\n" +
+        "uniform sampler2D uTexture;\n" +
+        "in vec2 vTextureCoordinate;\n" +
+        "out vec4 outputColor;\n" +
+        "void main() { outputColor = texture(uTexture, vTextureCoordinate).bgra; }\n";
 
     [DllImport("libX11.so.6")]
     private static extern IntPtr XOpenDisplay(IntPtr displayName);
@@ -600,6 +788,10 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
             ActiveTexture = Load<IntActionDelegate>("glActiveTexture");
             BindTexture = Load<TwoIntActionDelegate>("glBindTexture");
             TexParameteri = Load<ThreeIntActionDelegate>("glTexParameteri");
+            TexImage2D = Load<TexImage2DDelegate>("glTexImage2D");
+            TexSubImage2D = Load<TexSubImage2DDelegate>("glTexSubImage2D");
+            PixelStorei = Load<TwoIntActionDelegate>("glPixelStorei");
+            Disable = Load<IntActionDelegate>("glDisable");
             _genTextures = Load<GenObjectsDelegate>("glGenTextures");
             _deleteTextures = Load<DeleteObjectsDelegate>("glDeleteTextures");
             _genBuffers = Load<GenObjectsDelegate>("glGenBuffers");
@@ -632,6 +824,10 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
         internal IntActionDelegate ActiveTexture { get; }
         internal TwoIntActionDelegate BindTexture { get; }
         internal ThreeIntActionDelegate TexParameteri { get; }
+        internal TexImage2DDelegate TexImage2D { get; }
+        internal TexSubImage2DDelegate TexSubImage2D { get; }
+        internal TwoIntActionDelegate PixelStorei { get; }
+        internal IntActionDelegate Disable { get; }
         internal TwoIntActionDelegate BindBuffer { get; }
         internal IntActionDelegate BindVertexArray { get; }
         internal IntActionDelegate EnableVertexAttribArray { get; }
@@ -738,5 +934,7 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void DeleteObjectsDelegate(int count, ref int value);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void BufferDataDelegate(int target, IntPtr size, IntPtr data, int usage);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate void VertexAttribPointerDelegate(int index, int size, int type, byte normalized, int stride, IntPtr pointer);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void TexImage2DDelegate(int target, int level, int internalFormat, int width, int height, int border, int format, int type, IntPtr pixels);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void TexSubImage2DDelegate(int target, int level, int xOffset, int yOffset, int width, int height, int format, int type, IntPtr pixels);
     }
 }
