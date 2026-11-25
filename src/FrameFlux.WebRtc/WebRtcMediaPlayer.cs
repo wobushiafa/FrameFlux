@@ -44,6 +44,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
     private volatile uint _lastVideoSsrc;
     private volatile bool _hasReceivedKeyFrame;
     private volatile bool _decoderRefreshPending;
+    private int _consecutiveD3D11Failures;
 #if ANDROID
     private long _lastVideoRtpArrival;
 #endif
@@ -81,13 +82,15 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         _lossDetector = new WebRtcRtpLossDetector(
             sendRtcpFeedback: feedback =>
             {
+                RTCPeerConnection? peerConnection;
                 lock (_sync)
                 {
-                    if (!_disposed && _peerConnection is not null && _state == MediaPlaybackState.Playing)
-                    {
-                        _peerConnection.SendRtcpFeedback(SDPMediaTypesEnum.video, feedback);
-                    }
+                    peerConnection = !_disposed && _state == MediaPlaybackState.Playing
+                        ? _peerConnection
+                        : null;
                 }
+
+                peerConnection?.SendRtcpFeedback(SDPMediaTypesEnum.video, feedback);
             },
             requestKeyFrame: RequestKeyFrame);
 
@@ -252,18 +255,13 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
 
     public IMediaVideoOutput? VideoOutput
     {
-        get
-        {
-            lock (_sync)
-            {
-                return _videoOutput;
-            }
-        }
+        get => Volatile.Read(ref _videoOutput);
         set
         {
             lock (_sync)
             {
-                _videoOutput = value;
+                Volatile.Write(ref _videoOutput, value);
+                Volatile.Write(ref _consecutiveD3D11Failures, 0);
                 UpdateDecoderOutputPreferences();
             }
         }
@@ -327,14 +325,14 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         {
             lock (_sync)
             {
-                _frameReceived += value;
+                Volatile.Write(ref _frameReceived, _frameReceived + value);
             }
         }
         remove
         {
             lock (_sync)
             {
-                _frameReceived -= value;
+                Volatile.Write(ref _frameReceived, _frameReceived - value);
             }
         }
     }
@@ -671,13 +669,8 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
             return;
         }
 
-        IMediaVideoOutput? output;
-        EventHandler<MediaVideoFrame>? frameReceived;
-        lock (_sync)
-        {
-            output = _videoOutput;
-            frameReceived = _frameReceived;
-        }
+        var output = Volatile.Read(ref _videoOutput);
+        var frameReceived = Volatile.Read(ref _frameReceived);
 
         var seq = Interlocked.Increment(ref _frameSequence);
         var now = DateTimeOffset.UtcNow;
@@ -685,11 +678,9 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         // Create snapshot or MediaVideoFrame if needed
         if (frameReceived is not null || _options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame)
         {
-            if (frameLease.TryGetCpuBuffer(out var cpuBuf))
+            if (frameLease.TryGetCpuBuffer(out var cpuBuf) &&
+                TryCopyCpuFrameBytes(frameLease, cpuBuf, out var data, out var snapshotStride))
             {
-                var data = new byte[cpuBuf.Size];
-                Marshal.Copy(cpuBuf.Buffer, data, 0, cpuBuf.Size);
-
                 if (_options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame)
                 {
                     lock (_sync)
@@ -698,7 +689,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                             data,
                             frameLease.Width,
                             frameLease.Height,
-                            cpuBuf.Plane0Stride,
+                            snapshotStride,
                             frameLease.PixelFormat,
                             now);
                     }
@@ -708,7 +699,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                     data,
                     frameLease.Width,
                     frameLease.Height,
-                    cpuBuf.Plane0Stride,
+                    snapshotStride,
                     frameLease.PixelFormat,
                     seq,
                     now));
@@ -725,16 +716,26 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         // Case 1: D3D11 hardware texture frame
         if (frameLease.StorageKind == MediaFrameStorageKind.D3D11Texture)
         {
-            if (output.Supports(MediaFrameStorageKind.D3D11Texture, frameLease.PixelFormat) &&
-                output.TryPresent(frameLease))
+            if (!output.Supports(MediaFrameStorageKind.D3D11Texture, frameLease.PixelFormat))
             {
+                frameLease.Dispose();
+                _decoder.CanOutputD3D11Texture = false;
+                return;
+            }
+
+            if (output.TryPresent(frameLease))
+            {
+                Volatile.Write(ref _consecutiveD3D11Failures, 0);
                 // Directly presented on GPU (GpuComposition / NativeSurface)
                 return;
             }
 
-            // Output does not support D3D11 texture or GPU presentation failed: fallback to software
+            // Require consecutive failures before permanently falling back to CPU decoding
             frameLease.Dispose();
-            _decoder.CanOutputD3D11Texture = false;
+            if (Interlocked.Increment(ref _consecutiveD3D11Failures) >= 3)
+            {
+                _decoder.CanOutputD3D11Texture = false;
+            }
             return;
         }
 
@@ -767,7 +768,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
             }
 
             var bgraBuffer = _framePool.Rent(requiredSize);
-            var bgraLease = new WebRtcMediaFrameLease(bgraBuffer, requiredSize, l => _framePool.Return(l.Buffer, l.Size));
+            var bgraLease = new WebRtcMediaFrameLease(bgraBuffer, requiredSize, _framePool);
             bgraLease.ResetBgra(frameLease.Width, frameLease.Height, bgraStride);
 
             if (frameLease.PixelFormat == MediaPixelFormat.Yuv420P)
@@ -812,6 +813,63 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         frameLease.Dispose();
     }
 
+    private static unsafe bool TryCopyCpuFrameBytes(
+        IMediaFrameLease frameLease,
+        MediaCpuFrameBuffer cpuBuf,
+        out byte[] data,
+        out int stride)
+    {
+        if (cpuBuf.Buffer != IntPtr.Zero && cpuBuf.Size > 0)
+        {
+            data = RuntimeCompat.AllocateBytes(cpuBuf.Size);
+            Marshal.Copy(cpuBuf.Buffer, data, 0, cpuBuf.Size);
+            stride = cpuBuf.Plane0Stride;
+            return true;
+        }
+
+        var height = frameLease.Height;
+        if (height <= 0 || cpuBuf.Plane0 == IntPtr.Zero || cpuBuf.Plane0Stride <= 0)
+        {
+            data = [];
+            stride = 0;
+            return false;
+        }
+
+        var uvHeight = (height + 1) / 2;
+        if (frameLease.PixelFormat == MediaPixelFormat.Yuv420P &&
+            cpuBuf.Plane1 != IntPtr.Zero && cpuBuf.Plane2 != IntPtr.Zero &&
+            cpuBuf.Plane1Stride > 0 && cpuBuf.Plane2Stride > 0)
+        {
+            var ySize = cpuBuf.Plane0Stride * height;
+            var uSize = cpuBuf.Plane1Stride * uvHeight;
+            var vSize = cpuBuf.Plane2Stride * uvHeight;
+            data = RuntimeCompat.AllocateBytes(ySize + uSize + vSize);
+            Marshal.Copy(cpuBuf.Plane0, data, 0, ySize);
+            Marshal.Copy(cpuBuf.Plane1, data, ySize, uSize);
+            Marshal.Copy(cpuBuf.Plane2, data, ySize + uSize, vSize);
+            stride = cpuBuf.Plane0Stride;
+            return true;
+        }
+
+        if (frameLease.PixelFormat == MediaPixelFormat.Nv12 &&
+            cpuBuf.Plane1 != IntPtr.Zero && cpuBuf.Plane1Stride > 0)
+        {
+            var ySize = cpuBuf.Plane0Stride * height;
+            var uvSize = cpuBuf.Plane1Stride * uvHeight;
+            data = RuntimeCompat.AllocateBytes(ySize + uvSize);
+            Marshal.Copy(cpuBuf.Plane0, data, 0, ySize);
+            Marshal.Copy(cpuBuf.Plane1, data, ySize, uvSize);
+            stride = cpuBuf.Plane0Stride;
+            return true;
+        }
+
+        var plane0Size = cpuBuf.Plane0Stride * height;
+        data = RuntimeCompat.AllocateBytes(plane0Size);
+        Marshal.Copy(cpuBuf.Plane0, data, 0, plane0Size);
+        stride = cpuBuf.Plane0Stride;
+        return true;
+    }
+
     private void OnVideoSinkRawImage(RawImage rawImage)
     {
         if (_disposed || _state != MediaPlaybackState.Playing || rawImage.Sample == IntPtr.Zero)
@@ -843,7 +901,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
             Buffer.MemoryCopy((void*)rawImage.Sample, (void*)buffer, size, size);
         }
 
-        var lease = new WebRtcMediaFrameLease(buffer, size, l => _framePool.Return(l.Buffer, l.Size));
+        var lease = new WebRtcMediaFrameLease(buffer, size, _framePool);
         if (pixelFormat == MediaPixelFormat.Bgra32)
         {
             lease.ResetBgra(width, height, stride);
@@ -880,7 +938,7 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         var buffer = _framePool.Rent(sample.Length);
         Marshal.Copy(sample, 0, buffer, sample.Length);
 
-        var lease = new WebRtcMediaFrameLease(buffer, sample.Length, l => _framePool.Return(l.Buffer, l.Size));
+        var lease = new WebRtcMediaFrameLease(buffer, sample.Length, _framePool);
         if (pixelFormat == MediaPixelFormat.Bgra32)
         {
             lease.ResetBgra(w, h, stride);
@@ -922,25 +980,19 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         }
 
         var requiresKeyFrameRecovery = format.Codec is VideoCodecsEnum.H264 or VideoCodecsEnum.H265;
-        var isKeyFrame = IsKeyFrame(payload, format.Codec);
-
-        if (requiresKeyFrameRecovery &&
-            (!_hasReceivedKeyFrame || _decoderRefreshPending) &&
-            !isKeyFrame)
+        if (requiresKeyFrameRecovery && (!_hasReceivedKeyFrame || _decoderRefreshPending))
         {
-            return;
-        }
+            if (!IsKeyFrame(payload, format.Codec))
+            {
+                return;
+            }
 
-        if (requiresKeyFrameRecovery && isKeyFrame)
-        {
-            if ((!_hasReceivedKeyFrame || _decoderRefreshPending) &&
-                _decoder is FfmpegWebRtcVideoDecoder ffmpegDecoder)
+            if (_decoder is FfmpegWebRtcVideoDecoder ffmpegDecoder)
             {
                 ffmpegDecoder.Flush();
             }
 #if ANDROID
-            if ((!_hasReceivedKeyFrame || _decoderRefreshPending) &&
-                _decoder is AndroidWebRtcVideoDecoder androidDecoder)
+            if (_decoder is AndroidWebRtcVideoDecoder androidDecoder)
             {
                 androidDecoder.Flush();
             }
@@ -1166,6 +1218,8 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         });
     }
 
+    private static ReadOnlySpan<byte> AnnexBStartCode3 => [0, 0, 1];
+
     internal static bool IsKeyFrame(ReadOnlySpan<byte> payload, VideoCodecsEnum codec)
     {
         if (payload.Length == 0)
@@ -1179,29 +1233,32 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
         }
 
         var foundStartCode = false;
-        for (var index = 0; index + 3 < payload.Length; index++)
+        var searchOffset = 0;
+        while (searchOffset + 3 < payload.Length)
         {
-            var startCodeLength = payload[index] == 0 && payload[index + 1] == 0 && payload[index + 2] == 1
-                ? 3
-                : index + 4 < payload.Length &&
-                  payload[index] == 0 && payload[index + 1] == 0 &&
-                  payload[index + 2] == 0 && payload[index + 3] == 1
-                    ? 4
-                    : 0;
-
-            if (startCodeLength == 0)
+            var relativeIndex = payload.Slice(searchOffset).IndexOf(AnnexBStartCode3);
+            if (relativeIndex < 0)
             {
-                continue;
+                break;
             }
 
             foundStartCode = true;
-            var nalIndex = index + startCodeLength;
-            if (nalIndex < payload.Length && IsRecoveryNal(payload[nalIndex], codec))
+            var nalIndex = searchOffset + relativeIndex + 3;
+            if (nalIndex < payload.Length)
             {
-                return true;
+                var nalHeader = payload[nalIndex];
+                if (IsRecoveryNal(nalHeader, codec))
+                {
+                    return true;
+                }
+
+                if (IsNonRecoveryVclNal(nalHeader, codec))
+                {
+                    return false;
+                }
             }
 
-            index = nalIndex;
+            searchOffset = nalIndex + 1;
         }
 
         if (foundStartCode)
@@ -1221,15 +1278,33 @@ public sealed class WebRtcMediaPlayer : IMediaPlayer
                 break;
             }
 
-            if (IsRecoveryNal(payload[offset + 4], codec))
+            var nalHeader = payload[offset + 4];
+            if (IsRecoveryNal(nalHeader, codec))
             {
                 return true;
+            }
+
+            if (IsNonRecoveryVclNal(nalHeader, codec))
+            {
+                return false;
             }
 
             offset += 4 + nalLength;
         }
 
         return IsRecoveryNal(payload[0], codec);
+    }
+
+    private static bool IsNonRecoveryVclNal(byte nalHeader, VideoCodecsEnum codec)
+    {
+        if (codec == VideoCodecsEnum.H265)
+        {
+            var nalType = (nalHeader >> 1) & 0x3F;
+            return nalType <= 15;
+        }
+
+        var h264Type = nalHeader & 0x1F;
+        return h264Type is >= 1 and <= 4;
     }
 
     private static bool IsRecoveryNal(byte nalHeader, VideoCodecsEnum codec)

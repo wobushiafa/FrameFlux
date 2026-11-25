@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-
 namespace FrameFlux.WebRtc;
 
 /// <summary>
@@ -9,6 +7,9 @@ namespace FrameFlux.WebRtc;
 public sealed class WebRtcMediaFrameLease : IMediaFrameLease
 {
     private readonly Action<WebRtcMediaFrameLease>? _returnAction;
+    private readonly WebRtcFrameBufferPool? _pool;
+    private readonly Action<IntPtr>? _nativeReleaseAction;
+    private IntPtr _nativeHandle;
     private int _disposed;
 
     public WebRtcMediaFrameLease(
@@ -19,6 +20,24 @@ public sealed class WebRtcMediaFrameLease : IMediaFrameLease
         Buffer = buffer;
         Size = size;
         _returnAction = returnAction;
+    }
+
+    internal WebRtcMediaFrameLease(
+        IntPtr buffer,
+        int size,
+        WebRtcFrameBufferPool pool)
+    {
+        Buffer = buffer;
+        Size = size;
+        _pool = pool;
+    }
+
+    internal WebRtcMediaFrameLease(
+        IntPtr nativeHandle,
+        Action<IntPtr> nativeReleaseAction)
+    {
+        _nativeHandle = nativeHandle;
+        _nativeReleaseAction = nativeReleaseAction;
     }
 
     public IntPtr Buffer { get; private set; }
@@ -104,6 +123,19 @@ public sealed class WebRtcMediaFrameLease : IMediaFrameLease
             return;
         }
 
+        var nativeHandle = Interlocked.Exchange(ref _nativeHandle, IntPtr.Zero);
+        if (nativeHandle != IntPtr.Zero)
+        {
+            _nativeReleaseAction?.Invoke(nativeHandle);
+            return;
+        }
+
+        if (_pool is not null)
+        {
+            _pool.Return(Buffer, Size);
+            return;
+        }
+
         _returnAction?.Invoke(this);
     }
 
@@ -116,6 +148,26 @@ public sealed class WebRtcMediaFrameLease : IMediaFrameLease
         PixelFormat = MediaPixelFormat.Bgra32;
         StorageKind = MediaFrameStorageKind.CpuMemory;
         Plane0 = Buffer;
+        Plane1 = IntPtr.Zero;
+        Plane2 = IntPtr.Zero;
+        Plane0Stride = stride;
+        Plane1Stride = 0;
+        Plane2Stride = 0;
+        D3D11Texture = IntPtr.Zero;
+        D3D11ArraySlice = 0;
+    }
+
+    internal void ResetExternalBgra(int width, int height, IntPtr plane0, int stride)
+    {
+        Volatile.Write(ref _disposed, 0);
+        Buffer = plane0;
+        Size = stride * height;
+        Width = width;
+        Height = height;
+        Stride = stride;
+        PixelFormat = MediaPixelFormat.Bgra32;
+        StorageKind = MediaFrameStorageKind.CpuMemory;
+        Plane0 = plane0;
         Plane1 = IntPtr.Zero;
         Plane2 = IntPtr.Zero;
         Plane0Stride = stride;
@@ -148,6 +200,34 @@ public sealed class WebRtcMediaFrameLease : IMediaFrameLease
         D3D11ArraySlice = 0;
     }
 
+    internal void ResetExternalYuv420P(
+        int width,
+        int height,
+        IntPtr yPlane,
+        IntPtr uPlane,
+        IntPtr vPlane,
+        int yStride,
+        int uStride,
+        int vStride)
+    {
+        Volatile.Write(ref _disposed, 0);
+        Buffer = IntPtr.Zero;
+        Size = 0;
+        Width = width;
+        Height = height;
+        Stride = yStride;
+        PixelFormat = MediaPixelFormat.Yuv420P;
+        StorageKind = MediaFrameStorageKind.CpuMemory;
+        Plane0 = yPlane;
+        Plane1 = uPlane;
+        Plane2 = vPlane;
+        Plane0Stride = yStride;
+        Plane1Stride = uStride;
+        Plane2Stride = vStride;
+        D3D11Texture = IntPtr.Zero;
+        D3D11ArraySlice = 0;
+    }
+
     internal void ResetNv12(int width, int height, int yStride, int uvStride)
     {
         Volatile.Write(ref _disposed, 0);
@@ -161,6 +241,32 @@ public sealed class WebRtcMediaFrameLease : IMediaFrameLease
 
         Plane0 = Buffer;
         Plane1 = Buffer + ySize;
+        Plane2 = IntPtr.Zero;
+        Plane0Stride = yStride;
+        Plane1Stride = uvStride;
+        Plane2Stride = 0;
+        D3D11Texture = IntPtr.Zero;
+        D3D11ArraySlice = 0;
+    }
+
+    internal void ResetExternalNv12(
+        int width,
+        int height,
+        IntPtr yPlane,
+        IntPtr uvPlane,
+        int yStride,
+        int uvStride)
+    {
+        Volatile.Write(ref _disposed, 0);
+        Buffer = IntPtr.Zero;
+        Size = 0;
+        Width = width;
+        Height = height;
+        Stride = yStride;
+        PixelFormat = MediaPixelFormat.Nv12;
+        StorageKind = MediaFrameStorageKind.CpuMemory;
+        Plane0 = yPlane;
+        Plane1 = uvPlane;
         Plane2 = IntPtr.Zero;
         Plane0Stride = yStride;
         Plane1Stride = uvStride;

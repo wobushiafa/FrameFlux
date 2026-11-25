@@ -44,6 +44,16 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
     private static AvBufferRef? _bufferRef;
     private static AvBufferUnref? _bufferUnref;
     private static AvHwFrameTransferData? _hwFrameTransferData;
+    private static AvOptSet? _optSet;
+    private static AvOptSetInt? _optSetInt;
+    private static readonly Action<IntPtr> ReleaseClonedFrameAction = static ptr =>
+    {
+        var p = ptr;
+        if (p != IntPtr.Zero)
+        {
+            _frameFree!(ref p);
+        }
+    };
 
     private readonly object _sync = new();
     private IntPtr _hwDeviceCtx;
@@ -153,6 +163,14 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                     Marshal.WriteInt32(_packet, 32, encodedPayload.Length);
 
                     var sendResult = _sendPacket!(_codecContext, _packet);
+                    if (sendResult is -11 or -35)
+                    {
+                        if (_receiveFrame!(_codecContext, _frame) == 0)
+                        {
+                            _frameUnref!(_frame);
+                        }
+                        sendResult = _sendPacket(_codecContext, _packet);
+                    }
                     if (sendResult < 0)
                     {
                         return false;
@@ -193,14 +211,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                             var clone = _frameClone(_frame);
                             if (clone != IntPtr.Zero)
                             {
-                                var lease = new WebRtcMediaFrameLease(IntPtr.Zero, 0, _ =>
-                                {
-                                    var ptr = clone;
-                                    if (ptr != IntPtr.Zero)
-                                    {
-                                        _frameFree!(ref ptr);
-                                    }
-                                });
+                                var lease = new WebRtcMediaFrameLease(clone, ReleaseClonedFrameAction);
                                 lease.ResetD3D11(width, height, data0, (int)data1);
                                 decodedFrame = lease;
                                 _frameUnref!(_frame);
@@ -247,7 +258,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                         return false;
                     }
 
-                    // Copy YUV420P / YUVJ420P planes
+                    // Expose YUV420P / YUVJ420P planes (zero-copy AVFrame clone when available)
                     if (pixFmt is 0 or 12) // AV_PIX_FMT_YUV420P (0) or AV_PIX_FMT_YUVJ420P (12)
                     {
                         if (lineSize1 <= 0 || lineSize2 <= 0 || data1 == IntPtr.Zero || data2 == IntPtr.Zero)
@@ -258,6 +269,31 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                                 _frameUnref!(_transferFrame);
                             }
                             return false;
+                        }
+
+                        if (_frameClone is not null)
+                        {
+                            var clone = _frameClone(sourceFrame);
+                            if (clone != IntPtr.Zero)
+                            {
+                                var cloneData0 = Marshal.ReadIntPtr(clone, 0);
+                                var cloneData1 = Marshal.ReadIntPtr(clone, IntPtr.Size);
+                                var cloneData2 = Marshal.ReadIntPtr(clone, IntPtr.Size * 2);
+                                var cloneStride0 = Marshal.ReadInt32(clone, 64);
+                                var cloneStride1 = Marshal.ReadInt32(clone, 68);
+                                var cloneStride2 = Marshal.ReadInt32(clone, 72);
+                                var lease = new WebRtcMediaFrameLease(clone, ReleaseClonedFrameAction);
+                                lease.ResetExternalYuv420P(width, height, cloneData0, cloneData1, cloneData2, cloneStride0, cloneStride1, cloneStride2);
+                                lease.IsFullRange = (pixFmt == 12);
+                                decodedFrame = lease;
+
+                                _frameUnref!(_frame);
+                                if (sourceFrame != _frame)
+                                {
+                                    _frameUnref!(_transferFrame);
+                                }
+                                return true;
+                            }
                         }
 
                         var ySize = lineSize0 * height;
@@ -275,7 +311,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                         }
 
                         var buffer = pool.Rent(totalSize);
-                        var lease = new WebRtcMediaFrameLease(buffer, totalSize, l => pool.Return(l.Buffer, l.Size));
+                        var fallbackLease = new WebRtcMediaFrameLease(buffer, totalSize, pool);
 
                         var dstY = buffer;
                         var dstU = buffer + ySize;
@@ -285,9 +321,9 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                         Buffer.MemoryCopy((void*)data1, (void*)dstU, uSize, uSize);
                         Buffer.MemoryCopy((void*)data2, (void*)dstV, vSize, vSize);
 
-                        lease.ResetYuv420P(width, height, lineSize0, lineSize1);
-                        lease.IsFullRange = (pixFmt == 12);
-                        decodedFrame = lease;
+                        fallbackLease.ResetYuv420P(width, height, lineSize0, lineSize1);
+                        fallbackLease.IsFullRange = (pixFmt == 12);
+                        decodedFrame = fallbackLease;
 
                         _frameUnref!(_frame);
                         if (sourceFrame != _frame)
@@ -308,6 +344,28 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                             return false;
                         }
 
+                        if (_frameClone is not null)
+                        {
+                            var clone = _frameClone(sourceFrame);
+                            if (clone != IntPtr.Zero)
+                            {
+                                var cloneData0 = Marshal.ReadIntPtr(clone, 0);
+                                var cloneData1 = Marshal.ReadIntPtr(clone, IntPtr.Size);
+                                var cloneStride0 = Marshal.ReadInt32(clone, 64);
+                                var cloneStride1 = Marshal.ReadInt32(clone, 68);
+                                var lease = new WebRtcMediaFrameLease(clone, ReleaseClonedFrameAction);
+                                lease.ResetExternalNv12(width, height, cloneData0, cloneData1, cloneStride0, cloneStride1);
+                                decodedFrame = lease;
+
+                                _frameUnref!(_frame);
+                                if (sourceFrame != _frame)
+                                {
+                                    _frameUnref!(_transferFrame);
+                                }
+                                return true;
+                            }
+                        }
+
                         var ySize = lineSize0 * height;
                         var uvSize = lineSize1 * (height / 2);
                         var totalSize = ySize + uvSize;
@@ -322,13 +380,13 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                         }
 
                         var buffer = pool.Rent(totalSize);
-                        var lease = new WebRtcMediaFrameLease(buffer, totalSize, l => pool.Return(l.Buffer, l.Size));
+                        var fallbackLease = new WebRtcMediaFrameLease(buffer, totalSize, pool);
 
                         Buffer.MemoryCopy((void*)data0, (void*)buffer, ySize, ySize);
                         Buffer.MemoryCopy((void*)data1, (void*)(buffer + ySize), uvSize, uvSize);
 
-                        lease.ResetNv12(width, height, lineSize0, lineSize1);
-                        decodedFrame = lease;
+                        fallbackLease.ResetNv12(width, height, lineSize0, lineSize1);
+                        decodedFrame = fallbackLease;
 
                         _frameUnref!(_frame);
                         if (sourceFrame != _frame)
@@ -350,11 +408,31 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                             return false;
                         }
 
+                        if (_frameClone is not null)
+                        {
+                            var clone = _frameClone(sourceFrame);
+                            if (clone != IntPtr.Zero)
+                            {
+                                var cloneData0 = Marshal.ReadIntPtr(clone, 0);
+                                var cloneStride0 = Marshal.ReadInt32(clone, 64);
+                                var lease = new WebRtcMediaFrameLease(clone, ReleaseClonedFrameAction);
+                                lease.ResetExternalBgra(width, height, cloneData0, cloneStride0);
+                                decodedFrame = lease;
+
+                                _frameUnref!(_frame);
+                                if (sourceFrame != _frame)
+                                {
+                                    _frameUnref!(_transferFrame);
+                                }
+                                return true;
+                            }
+                        }
+
                         var buffer = pool.Rent(size);
-                        var lease = new WebRtcMediaFrameLease(buffer, size, l => pool.Return(l.Buffer, l.Size));
+                        var fallbackLease = new WebRtcMediaFrameLease(buffer, size, pool);
                         Buffer.MemoryCopy((void*)data0, (void*)buffer, size, size);
-                        lease.ResetBgra(width, height, lineSize0);
-                        decodedFrame = lease;
+                        fallbackLease.ResetBgra(width, height, lineSize0);
+                        decodedFrame = fallbackLease;
 
                         _frameUnref!(_frame);
                         if (sourceFrame != _frame)
@@ -482,6 +560,11 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
             throw new InvalidOperationException("Hardware decoding (D3D11VA) is required by policy, but failed to initialize.");
         }
 
+        if (!IsHardwareAccelerated)
+        {
+            ConfigureSoftwareThreading(ctx);
+        }
+
         var openResult = _open2!(ctx, pCodec, IntPtr.Zero);
         if (openResult < 0)
         {
@@ -491,14 +574,15 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
                 // Fallback to pure software decoding
                 IsHardwareAccelerated = false;
                 ctx = _allocContext3!(pCodec);
-                if (ctx != IntPtr.Zero && _open2!(ctx, pCodec, IntPtr.Zero) >= 0)
-                {
-                    _codecContext = ctx;
-                    _currentCodec = codec;
-                    return true;
-                }
                 if (ctx != IntPtr.Zero)
                 {
+                    ConfigureSoftwareThreading(ctx);
+                    if (_open2!(ctx, pCodec, IntPtr.Zero) >= 0)
+                    {
+                        _codecContext = ctx;
+                        _currentCodec = codec;
+                        return true;
+                    }
                     FreeCodecContext(ref ctx);
                 }
             }
@@ -553,6 +637,7 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
             return;
         }
 
+        ConfigureSoftwareThreading(ctx);
         if (_open2!(ctx, pCodec, IntPtr.Zero) >= 0)
         {
             _codecContext = ctx;
@@ -562,6 +647,13 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
         {
             FreeCodecContext(ref ctx);
         }
+    }
+
+    private static void ConfigureSoftwareThreading(IntPtr ctx)
+    {
+        var threads = Math.Clamp(Environment.ProcessorCount / 2, 2, 4);
+        _optSetInt?.Invoke(ctx, "threads", threads, 0);
+        _optSet?.Invoke(ctx, "thread_type", "slice", 0);
     }
 
     private static void FreeCodecContext(ref IntPtr context)
@@ -823,6 +915,14 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
             {
                 _hwFrameTransferData = Marshal.GetDelegateForFunctionPointer<AvHwFrameTransferData>(pTransfer);
             }
+            if (NativeLibrary.TryGetExport(_avUtilHandle, "av_opt_set", out var pOptSet))
+            {
+                _optSet = Marshal.GetDelegateForFunctionPointer<AvOptSet>(pOptSet);
+            }
+            if (NativeLibrary.TryGetExport(_avUtilHandle, "av_opt_set_int", out var pOptSetInt))
+            {
+                _optSetInt = Marshal.GetDelegateForFunctionPointer<AvOptSetInt>(pOptSetInt);
+            }
 
             return true;
         }
@@ -896,6 +996,20 @@ public sealed class FfmpegWebRtcVideoDecoder : IWebRtcVideoDecoder
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate IntPtr AvFrameClone(IntPtr src);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int AvOptSet(
+        IntPtr obj,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string val,
+        int searchFlags);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate int AvOptSetInt(
+        IntPtr obj,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
+        long val,
+        int searchFlags);
 
     private static AvFrameClone? _frameClone;
 }

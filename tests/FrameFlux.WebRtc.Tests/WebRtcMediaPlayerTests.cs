@@ -1031,16 +1031,24 @@ public sealed class WebRtcMediaPlayerTests
         Assert.Equal(1, mockGpuOutput.PresentedFrameCount);
         Assert.True(decoder.CanOutputD3D11Texture);
 
-        // Now test fallback when GPU presentation rejects/fails
+        // Now test fallback when GPU presentation repeatedly rejects/fails (3 consecutive failures)
         var rejectingGpuOutput = new MockGpuVideoOutput(acceptFrames: false);
         player.VideoOutput = rejectingGpuOutput;
         decoder.CanOutputD3D11Texture = true;
 
-        var lease2 = new WebRtcMediaFrameLease(IntPtr.Zero, 0, _ => { });
-        lease2.ResetD3D11(1920, 1080, new IntPtr(0x5678), 0);
-        player.DeliverFrame(lease2);
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var transientLease = new WebRtcMediaFrameLease(IntPtr.Zero, 0, _ => { });
+            transientLease.ResetD3D11(1920, 1080, new IntPtr(0x5678 + attempt), 0);
+            player.DeliverFrame(transientLease);
+            Assert.True(decoder.CanOutputD3D11Texture);
+        }
 
-        // Presentation rejected -> triggers fallback: CanOutputD3D11Texture set to false
+        var lease3 = new WebRtcMediaFrameLease(IntPtr.Zero, 0, _ => { });
+        lease3.ResetD3D11(1920, 1080, new IntPtr(0x567A), 0);
+        player.DeliverFrame(lease3);
+
+        // 3 consecutive rejections -> triggers fallback: CanOutputD3D11Texture set to false
         Assert.False(decoder.CanOutputD3D11Texture);
     }
 

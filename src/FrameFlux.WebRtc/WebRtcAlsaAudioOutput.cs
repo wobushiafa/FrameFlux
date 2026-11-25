@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 
@@ -8,7 +9,8 @@ public sealed class WebRtcAlsaAudioOutput : IWebRtcAudioOutput
 {
     private const int MaximumQueuedChunks = 12;
     private readonly object _sync = new();
-    private readonly BlockingCollection<(int Generation, short[] Samples)> _queue = new(MaximumQueuedChunks);
+    private readonly BlockingCollection<(int Generation, short[] Buffer, int Count)> _queue = new(MaximumQueuedChunks);
+    private readonly ManualResetEventSlim _wakeEvent = new(false);
     private readonly Thread _writer;
     private IntPtr _pcm;
     private int _sampleRate;
@@ -61,6 +63,7 @@ public sealed class WebRtcAlsaAudioOutput : IWebRtcAudioOutput
             _pcm = pcm;
             _sampleRate = sampleRate;
             _channels = channels;
+            _wakeEvent.Set();
         }
     }
 
@@ -71,15 +74,35 @@ public sealed class WebRtcAlsaAudioOutput : IWebRtcAudioOutput
         {
             if (_disposed || _paused || _pcm == IntPtr.Zero) return;
             var volume = _muted ? 0d : _volume;
-            var copy = new short[samples.Length];
-            for (var i = 0; i < samples.Length; i++)
-                copy[i] = (short)Math.Clamp(Math.Round(samples[i] * volume), short.MinValue, short.MaxValue);
+            var count = samples.Length;
+            var buffer = ArrayPool<short>.Shared.Rent(count);
+            if (volume <= 0d)
+            {
+                buffer.AsSpan(0, count).Clear();
+            }
+            else if (volume >= 1d)
+            {
+                samples.CopyTo(buffer.AsSpan(0, count));
+            }
+            else
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    buffer[i] = (short)Math.Clamp(Math.Round(samples[i] * volume), short.MinValue, short.MaxValue);
+                }
+            }
 
-            var queued = (_formatGeneration, copy);
+            var queued = (_formatGeneration, buffer, count);
             if (!_queue.TryAdd(queued))
             {
-                _queue.TryTake(out _);
-                _queue.TryAdd(queued);
+                if (_queue.TryTake(out var dropped))
+                {
+                    ArrayPool<short>.Shared.Return(dropped.Buffer);
+                }
+                if (!_queue.TryAdd(queued))
+                {
+                    ArrayPool<short>.Shared.Return(buffer);
+                }
             }
         }
     }
@@ -100,6 +123,7 @@ public sealed class WebRtcAlsaAudioOutput : IWebRtcAudioOutput
             _paused = true;
             ClearQueue();
             if (_pcm != IntPtr.Zero) _ = snd_pcm_drop(_pcm);
+            _wakeEvent.Set();
         }
     }
 
@@ -122,6 +146,7 @@ public sealed class WebRtcAlsaAudioOutput : IWebRtcAudioOutput
                 _ = snd_pcm_drop(_pcm);
                 _ = snd_pcm_prepare(_pcm);
             }
+            _wakeEvent.Set();
         }
     }
 
@@ -134,47 +159,60 @@ public sealed class WebRtcAlsaAudioOutput : IWebRtcAudioOutput
             _queue.CompleteAdding();
             ClearQueue();
             if (_pcm != IntPtr.Zero) _ = snd_pcm_drop(_pcm);
+            _wakeEvent.Set();
         }
 
         _writer.Join();
         lock (_sync) CloseDevice();
         _queue.Dispose();
+        _wakeEvent.Dispose();
     }
 
-    private void WriteQueuedSamples()
+    private unsafe void WriteQueuedSamples()
     {
         foreach (var queued in _queue.GetConsumingEnumerable())
         {
-            var (generation, samples) = queued;
-            var pinned = GCHandle.Alloc(samples, GCHandleType.Pinned);
+            var (generation, samples, count) = queued;
             try
             {
+                var totalBytes = count * sizeof(short);
                 var offset = 0;
-                while (offset < samples.Length * sizeof(short))
+                fixed (short* basePtr = samples)
                 {
-                    nint written;
-                    lock (_sync)
+                    var bytePtr = (byte*)basePtr;
+                    while (offset < totalBytes)
                     {
-                        if (_disposed || _paused || _pcm == IntPtr.Zero || generation != _formatGeneration) break;
-                        var frameSize = _channels * sizeof(short);
-                        written = snd_pcm_writei(_pcm, pinned.AddrOfPinnedObject() + offset,
-                            (nuint)((samples.Length * sizeof(short) - offset) / frameSize));
-                        if (written < 0 && written != -11 && snd_pcm_recover(_pcm, (int)written, 1) < 0) break;
-                        if (written > 0) offset += (int)written * frameSize;
+                        nint written;
+                        lock (_sync)
+                        {
+                            if (_disposed || _paused || _pcm == IntPtr.Zero || generation != _formatGeneration) break;
+                            var frameSize = _channels * sizeof(short);
+                            written = snd_pcm_writei(_pcm, (IntPtr)(bytePtr + offset),
+                                (nuint)((totalBytes - offset) / frameSize));
+                            if (written < 0 && written != -11 && snd_pcm_recover(_pcm, (int)written, 1) < 0) break;
+                            if (written > 0) offset += (int)written * frameSize;
+                        }
+                        if (written <= 0)
+                        {
+                            _wakeEvent.Reset();
+                            _wakeEvent.Wait(5);
+                        }
                     }
-                    if (written <= 0) Thread.Sleep(2);
                 }
             }
             finally
             {
-                pinned.Free();
+                ArrayPool<short>.Shared.Return(samples);
             }
         }
     }
 
     private void ClearQueue()
     {
-        while (_queue.TryTake(out _)) { }
+        while (_queue.TryTake(out var dropped))
+        {
+            ArrayPool<short>.Shared.Return(dropped.Buffer);
+        }
     }
 
     private void CloseDevice()

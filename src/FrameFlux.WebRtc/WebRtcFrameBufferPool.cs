@@ -6,10 +6,11 @@ namespace FrameFlux.WebRtc;
 /// Thread-safe unmanaged memory pool for WebRTC video frames.
 /// Prevents GC pressure and memory spikes by recycling buffers of uniform sizes.
 /// </summary>
-public sealed class WebRtcFrameBufferPool : IDisposable
+public sealed unsafe class WebRtcFrameBufferPool : IDisposable
 {
     public const int DefaultMaximumBufferCount = 8;
     public const long DefaultMaximumRetainedBytes = 64L * 1024 * 1024; // 64 MB
+    private const int MaximumTrackedSizeBuckets = 8;
 
     private readonly object _sync = new();
     private readonly Dictionary<int, Stack<IntPtr>> _buffersBySize = [];
@@ -63,7 +64,7 @@ public sealed class WebRtcFrameBufferPool : IDisposable
             {
                 _retainedBufferCount--;
                 _retainedBytes -= requiredSize;
-                if (buffers.Count == 0)
+                if (buffers.Count == 0 && _buffersBySize.Count > MaximumTrackedSizeBuckets)
                 {
                     _buffersBySize.Remove(requiredSize);
                 }
@@ -72,7 +73,7 @@ public sealed class WebRtcFrameBufferPool : IDisposable
             }
         }
 
-        return Marshal.AllocHGlobal(requiredSize);
+        return AllocateBuffer(requiredSize);
     }
 
     public void Return(IntPtr buffer, int size)
@@ -85,12 +86,15 @@ public sealed class WebRtcFrameBufferPool : IDisposable
         var release = false;
         lock (_sync)
         {
+            var effectiveMaxBytes = _maximumRetainedBytes >= DefaultMaximumRetainedBytes
+                ? Math.Max(_maximumRetainedBytes, (long)size * 2)
+                : _maximumRetainedBytes;
             if (_disposed ||
                 !_acceptingReturns ||
                 _retainedBufferCount >= _maximumBufferCount ||
                 size <= 0 ||
-                size > _maximumRetainedBytes ||
-                _retainedBytes > _maximumRetainedBytes - size)
+                size > effectiveMaxBytes ||
+                _retainedBytes > effectiveMaxBytes - size)
             {
                 release = true;
             }
@@ -98,6 +102,7 @@ public sealed class WebRtcFrameBufferPool : IDisposable
             {
                 if (!_buffersBySize.TryGetValue(size, out var buffers))
                 {
+                    PruneEmptyBucketsLocked();
                     buffers = new Stack<IntPtr>();
                     _buffersBySize.Add(size, buffers);
                 }
@@ -110,7 +115,7 @@ public sealed class WebRtcFrameBufferPool : IDisposable
 
         if (release)
         {
-            Marshal.FreeHGlobal(buffer);
+            FreeBuffer(buffer);
         }
     }
 
@@ -152,7 +157,53 @@ public sealed class WebRtcFrameBufferPool : IDisposable
 
         foreach (var buffer in buffers)
         {
-            Marshal.FreeHGlobal(buffer);
+            FreeBuffer(buffer);
         }
+    }
+
+    private void PruneEmptyBucketsLocked()
+    {
+        if (_buffersBySize.Count < MaximumTrackedSizeBuckets)
+        {
+            return;
+        }
+
+        List<int>? emptyKeys = null;
+        foreach (var pair in _buffersBySize)
+        {
+            if (pair.Value.Count == 0)
+            {
+                emptyKeys ??= [];
+                emptyKeys.Add(pair.Key);
+            }
+        }
+
+        if (emptyKeys is null)
+        {
+            return;
+        }
+
+        foreach (var key in emptyKeys)
+        {
+            _buffersBySize.Remove(key);
+        }
+    }
+
+    private static IntPtr AllocateBuffer(int size)
+    {
+#if NET8_0_OR_GREATER
+        return (IntPtr)NativeMemory.AlignedAlloc((nuint)size, 64);
+#else
+        return Marshal.AllocHGlobal(size);
+#endif
+    }
+
+    private static void FreeBuffer(IntPtr buffer)
+    {
+#if NET8_0_OR_GREATER
+        NativeMemory.AlignedFree((void*)buffer);
+#else
+        Marshal.FreeHGlobal(buffer);
+#endif
     }
 }

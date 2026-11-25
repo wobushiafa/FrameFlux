@@ -5,6 +5,7 @@ namespace FrameFlux.WebRtc;
 /// <summary>Serializes decoding without blocking the RTP receive loop.</summary>
 internal sealed class WebRtcVideoDecodeQueue : IAsyncDisposable
 {
+    private const int MaxIdleDrainIterations = 25;
     private readonly int _maximumFrames;
     private readonly int _maximumBytes;
     private readonly TimeSpan _maximumAge;
@@ -58,6 +59,14 @@ internal sealed class WebRtcVideoDecodeQueue : IAsyncDisposable
                 _bytes = 0;
                 _needsKeyFrame = true;
             }
+            else if (_frames.Count >= 2 &&
+                     WebRtcMediaPlayer.IsKeyFrame(frame.Payload, frame.Format.Codec))
+            {
+                // Fast-forward live playback to the newly arrived keyframe when backlog builds up.
+                _frames.Clear();
+                _bytes = 0;
+                _needsKeyFrame = true;
+            }
 
             // Dropping an arbitrary inter frame invalidates the rest of its reference chain.
             if (frame.Payload.Length > _maximumBytes ||
@@ -90,6 +99,7 @@ internal sealed class WebRtcVideoDecodeQueue : IAsyncDisposable
 
     private void Run()
     {
+        var idleDrains = MaxIdleDrainIterations;
         try
         {
             while (true)
@@ -101,20 +111,29 @@ internal sealed class WebRtcVideoDecodeQueue : IAsyncDisposable
                 {
                     while (!_stopped && _frames.Count == 0)
                     {
-                        if (_drainOutput is null) Monitor.Wait(_sync);
-                        else { Monitor.Wait(_sync, 10); break; }
+                        if (_drainOutput is null || idleDrains >= MaxIdleDrainIterations)
+                        {
+                            Monitor.Wait(_sync);
+                        }
+                        else
+                        {
+                            Monitor.Wait(_sync, 10);
+                            break;
+                        }
                     }
                     if (_stopped) return;
                     hasFrame = _frames.Count != 0;
                     if (!hasFrame)
                     {
                         // MediaCodec output can become ready after the last input
-                        // frame. Keep draining it even when network input pauses.
+                        // frame. Drain briefly after activity, then park cleanly.
+                        idleDrains++;
                         next = default;
                         expired = false;
                     }
                     else
                     {
+                        idleDrains = 0;
                         next = _frames.Dequeue();
                         _bytes -= next.Frame.Payload.Length;
                         expired = RuntimeCompat.Elapsed(next.Arrival) > _maximumAge;

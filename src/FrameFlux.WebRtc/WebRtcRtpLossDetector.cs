@@ -49,6 +49,14 @@ public sealed class WebRtcRtpLossDetector
     {
         Interlocked.Increment(ref _packetCount);
 
+        var sendNack = false;
+        ushort firstMissing = 0;
+        var missingCount = 0;
+        uint nackSenderSsrc = 0;
+        uint nackMediaSsrc = 0;
+        var shouldRequestKeyFrame = false;
+        var lossDetected = false;
+
         lock (_sync)
         {
             var mediaSourceChanged = _initialized &&
@@ -90,26 +98,42 @@ public sealed class WebRtcRtpLossDetector
             if (diff < 3000)
             {
                 // Packet gap detected: packets from (_lastSeqNum + 1) to (seqNum - 1) were missed.
-                var missingCount = diff - 1;
+                missingCount = diff - 1;
                 Interlocked.Add(ref _lostPacketCount, missingCount);
 
-                SendNackBatch((ushort)(_lastSeqNum + 1), missingCount);
+                firstMissing = (ushort)(_lastSeqNum + 1);
+                nackSenderSsrc = _senderSsrc;
+                nackMediaSsrc = _mediaSsrc;
+                sendNack = true;
                 _lastSeqNum = seqNum;
-                RequestKeyFrameRateLimited();
-                return true;
+                shouldRequestKeyFrame = TryAcquirePliSlotLocked();
+                lossDetected = true;
             }
-
-            if (diff > 60000)
+            else if (diff > 60000)
             {
                 // Late retransmission or out-of-order packet arrived, ignore for advancing _lastSeqNum
                 return false;
             }
-
-            // Severe sequence discontinuity (e.g. SSRC reset or link reset)
-            _lastSeqNum = seqNum;
-            RequestKeyFrameRateLimited();
-            return true;
+            else
+            {
+                // Severe sequence discontinuity (e.g. SSRC reset or link reset)
+                _lastSeqNum = seqNum;
+                shouldRequestKeyFrame = TryAcquirePliSlotLocked();
+                lossDetected = true;
+            }
         }
+
+        if (sendNack)
+        {
+            SendNackBatch(nackSenderSsrc, nackMediaSsrc, firstMissing, missingCount);
+        }
+
+        if (shouldRequestKeyFrame)
+        {
+            _requestKeyFrame();
+        }
+
+        return lossDetected;
     }
 
     /// <summary>
@@ -117,23 +141,34 @@ public sealed class WebRtcRtpLossDetector
     /// </summary>
     public void RequestKeyFrameRateLimited()
     {
-        var nowMs = Stopwatch.GetTimestamp() * 1000 / Stopwatch.Frequency;
+        bool shouldSend;
         lock (_sync)
         {
-            if (nowMs - _lastPliTimestampMs < MinPliIntervalMs)
-            {
-                return;
-            }
-            _lastPliTimestampMs = nowMs;
+            shouldSend = TryAcquirePliSlotLocked();
         }
 
-        _requestKeyFrame();
+        if (shouldSend)
+        {
+            _requestKeyFrame();
+        }
+    }
+
+    private bool TryAcquirePliSlotLocked()
+    {
+        var nowMs = Stopwatch.GetTimestamp() * 1000 / Stopwatch.Frequency;
+        if (nowMs - _lastPliTimestampMs < MinPliIntervalMs)
+        {
+            return false;
+        }
+
+        _lastPliTimestampMs = nowMs;
+        return true;
     }
 
     /// <summary>
     /// Dispatches RFC 4585 Generic NACK feedback packets for a range of missing sequence numbers.
     /// </summary>
-    private void SendNackBatch(ushort firstMissingSeq, int count)
+    private void SendNackBatch(uint senderSsrc, uint mediaSsrc, ushort firstMissingSeq, int count)
     {
         var currentFirst = firstMissingSeq;
         var remaining = count;
@@ -151,8 +186,8 @@ public sealed class WebRtcRtpLossDetector
             try
             {
                 var nack = new RTCPFeedback(
-                    _senderSsrc,
-                    _mediaSsrc,
+                    senderSsrc,
+                    mediaSsrc,
                     RTCPFeedbackTypesEnum.NACK,
                     currentFirst,
                     bitmask);

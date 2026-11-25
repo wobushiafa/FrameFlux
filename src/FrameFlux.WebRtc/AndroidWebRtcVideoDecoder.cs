@@ -1,5 +1,7 @@
 #if ANDROID
+using System.Collections.Concurrent;
 using Android.Media;
+using Android.Runtime;
 using FrameFlux.FFmpeg.Android;
 using Java.Nio;
 using SIPSorceryMedia.Abstractions;
@@ -9,6 +11,7 @@ namespace FrameFlux.WebRtc;
 internal sealed class AndroidWebRtcVideoDecoder : IWebRtcVideoDecoder
 {
     private const long CodecTimeoutMicroseconds = 10_000;
+    private static readonly ConcurrentDictionary<string, string?> CachedHardwareCodecs = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _sync = new();
     private readonly FfmpegWebRtcVideoDecoder? _software =
         FfmpegWebRtcVideoDecoder.IsSupported ? new FfmpegWebRtcVideoDecoder() : null;
@@ -98,15 +101,9 @@ internal sealed class AndroidWebRtcVideoDecoder : IWebRtcVideoDecoder
                 // player to recover at a key frame instead of silently continuing.
                 if (inputIndex < 0) throw new WebRtcDecoderInputDroppedException();
 
-                var length = NormalizeAnnexB(encodedPayload, ref _input);
                 using var inputBuffer = _codec.GetInputBuffer(inputIndex) ??
                     throw new InvalidOperationException("MediaCodec returned no input buffer.");
-                if (inputBuffer.Capacity() < length)
-                {
-                    throw new InvalidOperationException("MediaCodec input buffer is too small.");
-                }
-                inputBuffer.Clear();
-                inputBuffer.Put(_input, 0, length);
+                var length = WritePayloadToInputBuffer(encodedPayload, inputBuffer);
                 _codec.QueueInputBuffer(inputIndex, 0, length,
                     _nextTimestampMicroseconds, MediaCodecBufferFlags.None);
                 _nextTimestampMicroseconds += 33_333;
@@ -139,9 +136,15 @@ internal sealed class AndroidWebRtcVideoDecoder : IWebRtcVideoDecoder
         {
             if (_codec is not null)
             {
-                // A new key frame must carry parameter sets after a flush. Recreating
-                // the decoder also handles codec changes and lost Surface state.
-                ReleaseCodec();
+                try
+                {
+                    _codec.Flush();
+                }
+                catch
+                {
+                    // Fall back to recreating the codec if Flush fails or Surface state was lost.
+                    ReleaseCodec();
+                }
             }
             _failedCodec = null;
             _software?.Flush();
@@ -158,6 +161,50 @@ internal sealed class AndroidWebRtcVideoDecoder : IWebRtcVideoDecoder
             _bufferInfo.Dispose();
             _software?.Dispose();
         }
+    }
+
+    private unsafe int WritePayloadToInputBuffer(ReadOnlySpan<byte> encodedPayload, ByteBuffer inputBuffer)
+    {
+        var directAddress = JNIEnv.GetDirectBufferAddress(inputBuffer.Handle);
+        var capacity = inputBuffer.Capacity();
+        if (directAddress != IntPtr.Zero && IsAnnexB(encodedPayload))
+        {
+            if (capacity < encodedPayload.Length)
+            {
+                throw new InvalidOperationException("MediaCodec input buffer is too small.");
+            }
+
+            fixed (byte* src = encodedPayload)
+            {
+                System.Buffer.MemoryCopy(src, (void*)directAddress, capacity, encodedPayload.Length);
+            }
+            inputBuffer.Position(0);
+            inputBuffer.Limit(encodedPayload.Length);
+            return encodedPayload.Length;
+        }
+
+        var length = NormalizeAnnexB(encodedPayload, ref _input);
+        if (capacity < length)
+        {
+            throw new InvalidOperationException("MediaCodec input buffer is too small.");
+        }
+
+        if (directAddress != IntPtr.Zero)
+        {
+            fixed (byte* src = _input)
+            {
+                System.Buffer.MemoryCopy(src, (void*)directAddress, capacity, length);
+            }
+            inputBuffer.Position(0);
+            inputBuffer.Limit(length);
+        }
+        else
+        {
+            inputBuffer.Clear();
+            inputBuffer.Put(_input, 0, length);
+        }
+
+        return length;
     }
 
     private bool DecodeSoftware(
@@ -211,6 +258,23 @@ internal sealed class AndroidWebRtcVideoDecoder : IWebRtcVideoDecoder
 
     private MediaCodec CreateDecoder(string mime)
     {
+        var cachedName = CachedHardwareCodecs.GetOrAdd(mime, ResolveHardwareCodecName);
+        if (!string.IsNullOrEmpty(cachedName))
+        {
+            try
+            {
+                var codec = MediaCodec.CreateByCodecName(cachedName);
+                if (codec is not null)
+                {
+                    return codec;
+                }
+            }
+            catch (Exception) when (DecodingPolicy == MediaVideoDecodingPolicy.HardwarePreferred)
+            {
+                // Fall through to full scan/default fallback.
+            }
+        }
+
         using (var codecList = new MediaCodecList(MediaCodecListKind.AllCodecs))
         {
             foreach (var info in codecList.GetCodecInfos() ?? [])
@@ -223,8 +287,10 @@ internal sealed class AndroidWebRtcVideoDecoder : IWebRtcVideoDecoder
 
                 try
                 {
-                    return MediaCodec.CreateByCodecName(info.Name) ??
+                    var created = MediaCodec.CreateByCodecName(info.Name) ??
                         throw new PlatformNotSupportedException($"Could not create {info.Name}.");
+                    CachedHardwareCodecs[mime] = info.Name;
+                    return created;
                 }
                 catch (Exception) when (DecodingPolicy == MediaVideoDecodingPolicy.HardwarePreferred)
                 {
@@ -240,6 +306,21 @@ internal sealed class AndroidWebRtcVideoDecoder : IWebRtcVideoDecoder
 
         return MediaCodec.CreateDecoderByType(mime) ??
             throw new PlatformNotSupportedException($"No Android decoder supports {mime}.");
+    }
+
+    private static string? ResolveHardwareCodecName(string mime)
+    {
+        using var codecList = new MediaCodecList(MediaCodecListKind.AllCodecs);
+        foreach (var info in codecList.GetCodecInfos() ?? [])
+        {
+            if (!info.IsEncoder && IsHardwareCodec(info) &&
+                (info.GetSupportedTypes()?.Any(type => string.Equals(type, mime, StringComparison.OrdinalIgnoreCase)) ?? false))
+            {
+                return info.Name;
+            }
+        }
+
+        return null;
     }
 
     private static bool IsHardwareCodec(MediaCodecInfo info) =>
@@ -295,14 +376,17 @@ internal sealed class AndroidWebRtcVideoDecoder : IWebRtcVideoDecoder
         codec.Dispose();
     }
 
+    private static bool IsAnnexB(ReadOnlySpan<byte> payload) =>
+        payload.Length >= 4 && payload[0] == 0 && payload[1] == 0 &&
+        (payload[2] == 1 || (payload[2] == 0 && payload[3] == 1));
+
     private static int NormalizeAnnexB(ReadOnlySpan<byte> payload, ref byte[] buffer)
     {
         if (buffer.Length < payload.Length + 4)
         {
             buffer = RuntimeCompat.AllocateBytes(payload.Length + 4);
         }
-        if (payload.Length >= 4 && payload[0] == 0 && payload[1] == 0 &&
-            (payload[2] == 1 || payload[2] == 0 && payload[3] == 1))
+        if (IsAnnexB(payload))
         {
             payload.CopyTo(buffer);
             return payload.Length;
