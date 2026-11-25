@@ -6,7 +6,7 @@ internal interface ICaptureD3D11SliceReleaser
 }
 
 /// <summary>
-/// Reference-counted frame lease supporting CPU memory and D3D11 textures.
+/// Reference-counted frame lease supporting CPU memory, D3D11 textures, and Linux DMA-BUF frames.
 /// </summary>
 internal sealed class CaptureMediaFrameLease : IMediaFrameLease
 {
@@ -14,6 +14,7 @@ internal sealed class CaptureMediaFrameLease : IMediaFrameLease
     private readonly ICaptureD3D11SliceReleaser? _d3d11Releaser;
     private readonly Action? _releaseCallback;
     private readonly bool _isNv12;
+    private readonly MediaDmaBufFrameBuffer _dmaBuf;
     private int _remainingReferences = 1;
 
     private CaptureMediaFrameLease(
@@ -26,6 +27,7 @@ internal sealed class CaptureMediaFrameLease : IMediaFrameLease
         int stride,
         IntPtr d3d11Texture,
         int d3d11ArraySlice,
+        MediaDmaBufFrameBuffer dmaBuf,
         CaptureFrameBufferPool? cpuPool,
         ICaptureD3D11SliceReleaser? d3d11Releaser,
         bool isNv12,
@@ -40,6 +42,7 @@ internal sealed class CaptureMediaFrameLease : IMediaFrameLease
         Stride = stride;
         D3D11Texture = d3d11Texture;
         D3D11ArraySlice = d3d11ArraySlice;
+        _dmaBuf = dmaBuf;
         _cpuPool = cpuPool;
         _d3d11Releaser = d3d11Releaser;
         _isNv12 = isNv12;
@@ -64,6 +67,7 @@ internal sealed class CaptureMediaFrameLease : IMediaFrameLease
             stride,
             IntPtr.Zero,
             0,
+            default,
             pool,
             d3d11Releaser: null,
             isNv12: false,
@@ -89,6 +93,7 @@ internal sealed class CaptureMediaFrameLease : IMediaFrameLease
             0,
             texture,
             arraySlice,
+            default,
             cpuPool: null,
             d3d11Releaser: releaser,
             isNv12: isNv12,
@@ -113,9 +118,34 @@ internal sealed class CaptureMediaFrameLease : IMediaFrameLease
             0,
             texture,
             arraySlice,
+            default,
             cpuPool: null,
             d3d11Releaser: null,
             isNv12: false,
+            releaseCallback: releaseCallback);
+    }
+
+    internal static CaptureMediaFrameLease CreateDmaBuf(
+        int width,
+        int height,
+        MediaDmaBufFrameBuffer dmaBuf,
+        Action? releaseCallback,
+        MediaPixelFormat pixelFormat = MediaPixelFormat.Nv12)
+    {
+        return new CaptureMediaFrameLease(
+            width,
+            height,
+            MediaFrameStorageKind.DmaBuf,
+            pixelFormat,
+            IntPtr.Zero,
+            0,
+            0,
+            IntPtr.Zero,
+            0,
+            dmaBuf,
+            cpuPool: null,
+            d3d11Releaser: null,
+            isNv12: pixelFormat == MediaPixelFormat.Nv12,
             releaseCallback: releaseCallback);
     }
 
@@ -192,8 +222,17 @@ internal sealed class CaptureMediaFrameLease : IMediaFrameLease
 
     public bool TryGetDmaBuf(out MediaDmaBufFrameBuffer dmaBuf)
     {
-        dmaBuf = default;
-        return false;
+        if (Volatile.Read(ref _remainingReferences) <= 0 ||
+            StorageKind != MediaFrameStorageKind.DmaBuf ||
+            _dmaBuf.Objects.Length == 0 ||
+            _dmaBuf.Layers.Length == 0)
+        {
+            dmaBuf = default;
+            return false;
+        }
+
+        dmaBuf = _dmaBuf;
+        return true;
     }
 
     public void Dispose()

@@ -8,12 +8,19 @@ internal interface ICaptureBackend : IDisposable
         CapturePlayerOptions playerOptions);
 
     void Start(
-        Func<bool> prefersD3D11,
+        Func<bool> prefersHardwareFrame,
         Func<bool> needsCpuFrame,
         Action<CaptureDeliveredFrame> onFrame,
         Action<Exception, bool> onError);
 
     void Stop();
+}
+
+internal interface ICaptureLiveDiagnosticsProvider
+{
+    string? CurrentDiagnosticsDescription { get; }
+
+    bool? CurrentIsHardwareVideoActive { get; }
 }
 
 internal interface ICaptureAudioLoopback : IDisposable
@@ -37,7 +44,7 @@ internal sealed record CaptureOpenResult(
     bool IsHardwareVideoActive = false);
 
 internal readonly record struct CaptureDeliveredFrame(
-    CaptureMediaFrameLease? D3D11Lease,
+    CaptureMediaFrameLease? HardwareLease,
     CaptureMediaFrameLease? CpuLease,
     int Width,
     int Height,

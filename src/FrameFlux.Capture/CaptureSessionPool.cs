@@ -126,7 +126,7 @@ internal sealed class CaptureSessionLease : IAsyncDisposable
 
 internal sealed class CaptureSessionSubscriber
 {
-    private volatile IMediaVideoOutput? _lastFailedD3D11Output;
+    private volatile IMediaVideoOutput? _lastFailedHardwareOutput;
 
     internal CaptureSessionSubscriber(
         Func<IMediaVideoOutput?> getVideoOutput,
@@ -151,9 +151,9 @@ internal sealed class CaptureSessionSubscriber
     internal Action<MediaPlaybackState> OnStateChanged { get; }
     internal Action<MediaPlaybackError> OnError { get; }
 
-    internal bool PrefersD3D11 => PrefersD3D11For(GetVideoOutput());
+    internal bool PrefersHardwareFrame => PrefersHardwareFor(GetVideoOutput());
 
-    internal bool PrefersD3D11For(IMediaVideoOutput? output)
+    internal bool PrefersHardwareFor(IMediaVideoOutput? output)
     {
         if (output is null || GetDecodingPolicy() == MediaVideoDecodingPolicy.SoftwareOnly)
         {
@@ -161,7 +161,8 @@ internal sealed class CaptureSessionSubscriber
         }
 
         return output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Nv12) ||
-               output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Bgra32);
+               output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Bgra32) ||
+               output.Supports(MediaFrameStorageKind.DmaBuf, MediaPixelFormat.Nv12);
     }
 
     internal bool WantsCpuFrame
@@ -179,13 +180,11 @@ internal sealed class CaptureSessionSubscriber
                 return false;
             }
 
-            // Adaptive WPF/Avalonia outputs report Supports() == true for both D3D11Texture and CpuMemory/Bgra32.
-            // Do not request CPU frames when D3D11 is preferred and healthy, otherwise every frame forces
-            // GPU->CPU readback and scalar color conversion only to discard the unused CPU lease.
-            if (GetDecodingPolicy() != MediaVideoDecodingPolicy.SoftwareOnly &&
-                (output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Nv12) ||
-                 output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Bgra32)) &&
-                !ReferenceEquals(_lastFailedD3D11Output, output))
+            // Adaptive WPF/Avalonia outputs report Supports() == true for both hardware (D3D11/DMA-BUF)
+            // and CpuMemory/Bgra32. Do not request CPU frames when hardware output is preferred and healthy,
+            // otherwise every frame forces GPU->CPU readback and scalar color conversion only to discard it.
+            if (PrefersHardwareFor(output) &&
+                !ReferenceEquals(_lastFailedHardwareOutput, output))
             {
                 return false;
             }
@@ -194,18 +193,18 @@ internal sealed class CaptureSessionSubscriber
         }
     }
 
-    internal void ReportD3D11PresentationResult(IMediaVideoOutput output, bool succeeded)
+    internal void ReportHardwarePresentationResult(IMediaVideoOutput output, bool succeeded)
     {
         if (succeeded)
         {
-            if (ReferenceEquals(_lastFailedD3D11Output, output))
+            if (ReferenceEquals(_lastFailedHardwareOutput, output))
             {
-                _lastFailedD3D11Output = null;
+                _lastFailedHardwareOutput = null;
             }
         }
         else
         {
-            _lastFailedD3D11Output = output;
+            _lastFailedHardwareOutput = output;
         }
     }
 }
@@ -263,8 +262,13 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
         {
             lock (_sync)
             {
-                var diagText = _openResult?.DiagnosticsDescription ?? "Capture Idle";
-                var hwActive = _openResult?.IsHardwareVideoActive ?? false;
+                var liveProvider = _backend as ICaptureLiveDiagnosticsProvider;
+                var diagText = liveProvider?.CurrentDiagnosticsDescription ??
+                               _openResult?.DiagnosticsDescription ??
+                               "Capture Idle";
+                var hwActive = liveProvider?.CurrentIsHardwareVideoActive ??
+                               _openResult?.IsHardwareVideoActive ??
+                               false;
                 var audioDiag = _audioLoopback?.Diagnostics ?? MediaAudioDiagnostics.Empty;
                 return new MediaDiagnostics(
                     IsHardwareVideoDecodingActive: hwActive,
@@ -371,7 +375,7 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
 
             _bufferPool.StartAcceptingReturns();
             _backend!.Start(
-                prefersD3D11: AnySubscriberPrefersD3D11,
+                prefersHardwareFrame: AnySubscriberPrefersHardwareFrame,
                 needsCpuFrame: AnySubscriberWantsCpuFrame,
                 onFrame: HandleDeliveredFrame,
                 onError: HandleBackendError);
@@ -460,12 +464,23 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
             _ => pairedAudioDeviceId
         };
 
-    private bool AnySubscriberPrefersD3D11()
+    private static bool SupportsHardwareStorage(IMediaVideoOutput output, MediaFrameStorageKind storageKind) =>
+        storageKind switch
+        {
+            MediaFrameStorageKind.D3D11Texture =>
+                output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Nv12) ||
+                output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Bgra32),
+            MediaFrameStorageKind.DmaBuf =>
+                output.Supports(MediaFrameStorageKind.DmaBuf, MediaPixelFormat.Nv12),
+            _ => false
+        };
+
+    private bool AnySubscriberPrefersHardwareFrame()
     {
         var subscribers = _subscriberSnapshot;
         for (var i = 0; i < subscribers.Length; i++)
         {
-            if (subscribers[i].PrefersD3D11)
+            if (subscribers[i].PrefersHardwareFrame)
             {
                 return true;
             }
@@ -495,7 +510,7 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
         {
             if (_disposed || !_started)
             {
-                delivered.D3D11Lease?.Dispose();
+                delivered.HardwareLease?.Dispose();
                 delivered.CpuLease?.Dispose();
                 return;
             }
@@ -516,9 +531,11 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
 
                 if (output is not null)
                 {
-                    if (subscriber.PrefersD3D11For(output) && delivered.D3D11Lease is not null)
+                    if (subscriber.PrefersHardwareFor(output) &&
+                        delivered.HardwareLease is not null &&
+                        SupportsHardwareStorage(output, delivered.HardwareLease.StorageKind))
                     {
-                        var retained = delivered.D3D11Lease.Retain();
+                        var retained = delivered.HardwareLease.Retain();
                         try
                         {
                             presented = output.TryPresent(retained);
@@ -528,7 +545,7 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
                             presented = false;
                         }
 
-                        subscriber.ReportD3D11PresentationResult(output, presented);
+                        subscriber.ReportHardwarePresentationResult(output, presented);
                         if (!presented)
                         {
                             retained.Dispose();
@@ -572,7 +589,7 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
         }
         finally
         {
-            delivered.D3D11Lease?.Dispose();
+            delivered.HardwareLease?.Dispose();
             delivered.CpuLease?.Dispose();
         }
     }
@@ -670,7 +687,7 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
                     OpenBackendCore();
                     _bufferPool.StartAcceptingReturns();
                     _backend!.Start(
-                        prefersD3D11: AnySubscriberPrefersD3D11,
+                        prefersHardwareFrame: AnySubscriberPrefersHardwareFrame,
                         needsCpuFrame: AnySubscriberWantsCpuFrame,
                         onFrame: HandleDeliveredFrame,
                         onError: HandleBackendError);

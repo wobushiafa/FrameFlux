@@ -36,6 +36,11 @@ internal static class CaptureDeviceDiscovery
         {
             return WindowsMediaFoundationEnumerator.GetVideoDevices(includeFormats);
         }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return LinuxV4l2DeviceEnumerator.GetVideoDevices(includeFormats);
+        }
 #endif
         return [];
     }
@@ -47,6 +52,11 @@ internal static class CaptureDeviceDiscovery
         {
             return WindowsMediaFoundationEnumerator.GetVideoFormats(deviceId);
         }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return LinuxV4l2DeviceEnumerator.GetVideoFormats(deviceId);
+        }
 #endif
         return [];
     }
@@ -57,6 +67,11 @@ internal static class CaptureDeviceDiscovery
         if (OperatingSystem.IsWindows())
         {
             return WindowsWasapiAudioBridge.GetAudioCaptureDevices();
+        }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return LinuxAlsaAudioBridge.GetAudioCaptureDevices();
         }
 #endif
         return [];

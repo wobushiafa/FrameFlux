@@ -605,8 +605,13 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
         {
             return new WindowsMediaFoundationCaptureBackend(pool);
         }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return new LinuxV4l2CaptureBackend(pool);
+        }
 #endif
-        throw new PlatformNotSupportedException("Local USB capture devices are currently supported on Windows only.");
+        throw new PlatformNotSupportedException("Local USB capture devices are currently supported on Windows and Linux only.");
     }
 
     private static ICaptureAudioLoopback? CreatePlatformAudioLoopback(
@@ -626,6 +631,17 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
                 isMuted,
                 options.Audio.GainDecibels);
         }
+
+        if (OperatingSystem.IsLinux())
+        {
+            return new LinuxAlsaAudioBridge(
+                audioDeviceId,
+                options.Audio.OutputDeviceId,
+                options.Audio.BufferDuration,
+                volume,
+                isMuted,
+                options.Audio.GainDecibels);
+        }
 #endif
         return null;
     }
@@ -633,9 +649,22 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
     private static string? ResolvePlatformDeviceIdByIndex(int index)
     {
 #if !ANDROID
-        if (OperatingSystem.IsWindows() && index >= 0)
+        if (index < 0)
+        {
+            return null;
+        }
+
+        if (OperatingSystem.IsWindows())
         {
             var devices = WindowsMediaFoundationEnumerator.GetVideoDevices(includeFormats: false);
+            if (index < devices.Count)
+            {
+                return devices[index].DeviceId;
+            }
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            var devices = LinuxV4l2DeviceEnumerator.GetVideoDevices(includeFormats: false);
             if (index < devices.Count)
             {
                 return devices[index].DeviceId;

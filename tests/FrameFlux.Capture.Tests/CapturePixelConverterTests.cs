@@ -257,4 +257,91 @@ public sealed unsafe class CapturePixelConverterTests
             Marshal.FreeHGlobal(bgraFull);
         }
     }
+
+    [Fact]
+    public void Yuv420PToBgra32_OutputsOpaqueAlphaAndValidLuminance()
+    {
+        const int width = 10;
+        const int height = 4;
+        const int uvWidth = (width + 1) / 2;
+        const int uvHeight = (height + 1) / 2;
+        var yPlane = Marshal.AllocHGlobal(width * height);
+        var uPlane = Marshal.AllocHGlobal(uvWidth * uvHeight);
+        var vPlane = Marshal.AllocHGlobal(uvWidth * uvHeight);
+        var bgra = Marshal.AllocHGlobal(width * height * 4);
+        try
+        {
+            new Span<byte>((void*)yPlane, width * height).Fill(235);
+            new Span<byte>((void*)uPlane, uvWidth * uvHeight).Fill(128);
+            new Span<byte>((void*)vPlane, uvWidth * uvHeight).Fill(128);
+
+            CapturePixelConverter.Yuv420PToBgra32(
+                yPlane,
+                width,
+                uPlane,
+                uvWidth,
+                vPlane,
+                uvWidth,
+                bgra,
+                width,
+                height,
+                width * 4,
+                CaptureYuvColorSpace.Bt601Limited);
+
+            var pixels = new ReadOnlySpan<byte>((void*)bgra, width * height * 4);
+            for (var i = 0; i < width * height; i++)
+            {
+                var off = i * 4;
+                Assert.True(pixels[off] >= 250);
+                Assert.True(pixels[off + 1] >= 250);
+                Assert.True(pixels[off + 2] >= 250);
+                Assert.Equal(255, pixels[off + 3]);
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(yPlane);
+            Marshal.FreeHGlobal(uPlane);
+            Marshal.FreeHGlobal(vPlane);
+            Marshal.FreeHGlobal(bgra);
+        }
+    }
+
+    [Fact]
+    public void Rgb24AndBgr24ToBgra32_MapChannelsAndOpaqueAlpha()
+    {
+        const int width = 2;
+        const int height = 1;
+        var src = Marshal.AllocHGlobal(width * 3);
+        var dstRgb = Marshal.AllocHGlobal(width * 4);
+        var dstBgr = Marshal.AllocHGlobal(width * 4);
+        try
+        {
+            var bytes = new Span<byte>((void*)src, width * 3);
+            // Pixel 0: (10, 20, 30), Pixel 1: (40, 50, 60)
+            bytes[0] = 10; bytes[1] = 20; bytes[2] = 30;
+            bytes[3] = 40; bytes[4] = 50; bytes[5] = 60;
+
+            CapturePixelConverter.Rgb24ToBgra32(src, width * 3, dstRgb, width, height, width * 4);
+            CapturePixelConverter.Bgr24ToBgra32(src, width * 3, dstBgr, width, height, width * 4);
+
+            var outRgb = new ReadOnlySpan<byte>((void*)dstRgb, width * 4);
+            Assert.Equal(30, outRgb[0]); // B
+            Assert.Equal(20, outRgb[1]); // G
+            Assert.Equal(10, outRgb[2]); // R
+            Assert.Equal(255, outRgb[3]); // A
+
+            var outBgr = new ReadOnlySpan<byte>((void*)dstBgr, width * 4);
+            Assert.Equal(10, outBgr[0]); // B
+            Assert.Equal(20, outBgr[1]); // G
+            Assert.Equal(30, outBgr[2]); // R
+            Assert.Equal(255, outBgr[3]); // A
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(src);
+            Marshal.FreeHGlobal(dstRgb);
+            Marshal.FreeHGlobal(dstBgr);
+        }
+    }
 }

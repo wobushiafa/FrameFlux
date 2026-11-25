@@ -282,7 +282,7 @@ internal sealed unsafe class WindowsMediaFoundationCaptureBackend : ICaptureBack
     }
 
     public void Start(
-        Func<bool> prefersD3D11,
+        Func<bool> prefersHardwareFrame,
         Func<bool> needsCpuFrame,
         Action<CaptureDeliveredFrame> onFrame,
         Action<Exception, bool> onError)
@@ -297,7 +297,7 @@ internal sealed unsafe class WindowsMediaFoundationCaptureBackend : ICaptureBack
 
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
-            _captureThread = new Thread(() => RunCaptureLoop(token, prefersD3D11, needsCpuFrame, onFrame, onError))
+            _captureThread = new Thread(() => RunCaptureLoop(token, prefersHardwareFrame, needsCpuFrame, onFrame, onError))
             {
                 IsBackground = true,
                 Name = $"FrameFlux.Capture ({_deviceDisplayName})"

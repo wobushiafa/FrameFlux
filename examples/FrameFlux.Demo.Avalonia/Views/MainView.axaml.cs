@@ -70,10 +70,37 @@ public sealed partial class MainView : UserControl
         RenderModeComboBox.SelectedItem = Player.PresentationMode;
         _configuringPlaybackModes = false;
 
-        UsbCapturePanel.IsVisible = OperatingSystem.IsWindows();
-        if (OperatingSystem.IsWindows())
+        var supportsLocalCapture = OperatingSystem.IsWindows() || OperatingSystem.IsLinux();
+        UsbCapturePanel.IsVisible = supportsLocalCapture;
+        if (supportsLocalCapture)
         {
             RefreshCaptureDevices();
+        }
+
+        Loaded += MainView_OnLoaded;
+    }
+
+    private async void MainView_OnLoaded(object? sender, RoutedEventArgs e)
+    {
+        Loaded -= MainView_OnLoaded;
+        var args = Environment.GetCommandLineArgs();
+        for (var i = 1; i < args.Length - 1; i++)
+        {
+            if (args[i].Equals("--source", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(args[i + 1]))
+            {
+                var rawSource = args[i + 1];
+                SourceTextBox.Text = rawSource;
+                try
+                {
+                    await StartSourceAsync(MediaSource.Parse(rawSource));
+                }
+                catch (Exception exception)
+                {
+                    SetStatus(exception.Message, ErrorBrush);
+                }
+                break;
+            }
         }
     }
 

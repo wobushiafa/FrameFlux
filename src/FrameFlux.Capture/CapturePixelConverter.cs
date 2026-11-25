@@ -557,4 +557,277 @@ public static unsafe class CapturePixelConverter
             }
         }
     }
+
+    public static void Yuv420PToBgra32(
+        IntPtr yPlane,
+        int yStride,
+        IntPtr uPlane,
+        int uStride,
+        IntPtr vPlane,
+        int vStride,
+        IntPtr bgraDest,
+        int width,
+        int height,
+        int bgraStride) =>
+        Yuv420PToBgra32(
+            yPlane,
+            yStride,
+            uPlane,
+            uStride,
+            vPlane,
+            vStride,
+            bgraDest,
+            width,
+            height,
+            bgraStride,
+            CaptureYuvColorSpace.Bt601Limited);
+
+    public static void Yuv420PToBgra32(
+        IntPtr yPlane,
+        int yStride,
+        IntPtr uPlane,
+        int uStride,
+        IntPtr vPlane,
+        int vStride,
+        IntPtr bgraDest,
+        int width,
+        int height,
+        int bgraStride,
+        CaptureYuvColorSpace colorSpace)
+    {
+        if (width <= 0 || height <= 0 ||
+            yPlane == IntPtr.Zero || uPlane == IntPtr.Zero || vPlane == IntPtr.Zero || bgraDest == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var coeff = GetCoefficients(colorSpace);
+        var yPtr = (byte*)yPlane;
+        var uPtr = (byte*)uPlane;
+        var vPtr = (byte*)vPlane;
+        var dstPtr = (byte*)bgraDest;
+
+        if ((long)width * height < ParallelPixelThreshold || height < 16)
+        {
+            ConvertYuv420PBand(yPtr, yStride, uPtr, uStride, vPtr, vStride, dstPtr, width, bgraStride, 0, height, coeff);
+            return;
+        }
+
+        var bandCount = Math.Clamp(Environment.ProcessorCount, 2, 8);
+        var pairRows = (height + 1) >> 1;
+        var pairsPerBand = (pairRows + bandCount - 1) / bandCount;
+        Parallel.For(0, bandCount, band =>
+        {
+            var startY = (band * pairsPerBand) << 1;
+            if (startY >= height)
+            {
+                return;
+            }
+
+            var endY = Math.Min(height, ((band + 1) * pairsPerBand) << 1);
+            ConvertYuv420PBand(yPtr, yStride, uPtr, uStride, vPtr, vStride, dstPtr, width, bgraStride, startY, endY, coeff);
+        });
+    }
+
+    private static void ConvertYuv420PBand(
+        byte* yPtr,
+        int yStride,
+        byte* uPtr,
+        int uStride,
+        byte* vPtr,
+        int vStride,
+        byte* dstPtr,
+        int width,
+        int bgraStride,
+        int startY,
+        int endY,
+        YuvCoefficients coeff)
+    {
+#if NET8_0_OR_GREATER
+        var useVec256 = Vector256.IsHardwareAccelerated && width >= 8;
+        var useVec128 = !useVec256 && Vector128.IsHardwareAccelerated && width >= 4;
+        var vYOff256 = Vector256.Create(coeff.YOffset);
+        var vCy256 = Vector256.Create(coeff.Cy);
+        var vCrv256 = Vector256.Create(coeff.Crv);
+        var vCgu256 = Vector256.Create(coeff.Cgu);
+        var vCgv256 = Vector256.Create(coeff.Cgv);
+        var vCbu256 = Vector256.Create(coeff.Cbu);
+        var v128_256 = Vector256.Create(128);
+        var vZero256 = Vector256<int>.Zero;
+        var v255_256 = Vector256.Create(255);
+        var vAlpha256 = Vector256.Create(unchecked((int)0xFF000000u));
+
+        var vYOff128 = Vector128.Create(coeff.YOffset);
+        var vCy128 = Vector128.Create(coeff.Cy);
+        var vCrv128 = Vector128.Create(coeff.Crv);
+        var vCgu128 = Vector128.Create(coeff.Cgu);
+        var vCgv128 = Vector128.Create(coeff.Cgv);
+        var vCbu128 = Vector128.Create(coeff.Cbu);
+        var v128_128 = Vector128.Create(128);
+        var vZero128 = Vector128<int>.Zero;
+        var v255_128 = Vector128.Create(255);
+        var vAlpha128 = Vector128.Create(unchecked((int)0xFF000000u));
+#endif
+        var evenWidth = width & ~1;
+
+        for (var y = startY; y < endY; y += 2)
+        {
+            var hasSecondRow = y + 1 < endY;
+            var yRow0 = yPtr + ((long)y * yStride);
+            var yRow1 = hasSecondRow ? yPtr + ((long)(y + 1) * yStride) : null;
+            var chromaY = y >> 1;
+            var uRow = uPtr + ((long)chromaY * uStride);
+            var vRow = vPtr + ((long)chromaY * vStride);
+            var dstRow0 = (uint*)(dstPtr + ((long)y * bgraStride));
+            var dstRow1 = hasSecondRow ? (uint*)(dstPtr + ((long)(y + 1) * bgraStride)) : null;
+
+            var x = 0;
+#if NET8_0_OR_GREATER
+            if (useVec256)
+            {
+                var limit = width & ~7;
+                for (; x < limit; x += 8)
+                {
+                    var cx = x >> 1;
+                    var u0 = uRow[cx] - 128;
+                    var u1 = uRow[cx + 1] - 128;
+                    var u2 = uRow[cx + 2] - 128;
+                    var u3 = uRow[cx + 3] - 128;
+                    var v0 = vRow[cx] - 128;
+                    var v1 = vRow[cx + 1] - 128;
+                    var v2 = vRow[cx + 2] - 128;
+                    var v3 = vRow[cx + 3] - 128;
+
+                    var uVec = Vector256.Create(u0, u0, u1, u1, u2, u2, u3, u3);
+                    var vVec = Vector256.Create(v0, v0, v1, v1, v2, v2, v3, v3);
+                    var rAdd = vVec * vCrv256 + v128_256;
+                    var gAdd = uVec * vCgu256 + vVec * vCgv256 + v128_256;
+                    var bAdd = uVec * vCbu256 + v128_256;
+
+                    StoreBgra8(yRow0 + x, dstRow0 + x, vYOff256, vCy256, rAdd, gAdd, bAdd, vZero256, v255_256, vAlpha256);
+                    if (hasSecondRow)
+                    {
+                        StoreBgra8(yRow1 + x, dstRow1 + x, vYOff256, vCy256, rAdd, gAdd, bAdd, vZero256, v255_256, vAlpha256);
+                    }
+                }
+            }
+            else if (useVec128)
+            {
+                var limit = width & ~3;
+                for (; x < limit; x += 4)
+                {
+                    var cx = x >> 1;
+                    var u0 = uRow[cx] - 128;
+                    var u1 = uRow[cx + 1] - 128;
+                    var v0 = vRow[cx] - 128;
+                    var v1 = vRow[cx + 1] - 128;
+
+                    var uVec = Vector128.Create(u0, u0, u1, u1);
+                    var vVec = Vector128.Create(v0, v0, v1, v1);
+                    var rAdd = vVec * vCrv128 + v128_128;
+                    var gAdd = uVec * vCgu128 + vVec * vCgv128 + v128_128;
+                    var bAdd = uVec * vCbu128 + v128_128;
+
+                    StoreBgra4(yRow0 + x, dstRow0 + x, vYOff128, vCy128, rAdd, gAdd, bAdd, vZero128, v255_128, vAlpha128);
+                    if (hasSecondRow)
+                    {
+                        StoreBgra4(yRow1 + x, dstRow1 + x, vYOff128, vCy128, rAdd, gAdd, bAdd, vZero128, v255_128, vAlpha128);
+                    }
+                }
+            }
+#endif
+
+            for (; x < evenWidth; x += 2)
+            {
+                var cx = x >> 1;
+                var uVal = uRow[cx] - 128;
+                var vVal = vRow[cx] - 128;
+                var rAdd = coeff.Crv * vVal + 128;
+                var gAdd = coeff.Cgu * uVal + coeff.Cgv * vVal + 128;
+                var bAdd = coeff.Cbu * uVal + 128;
+
+                WritePair(yRow0, dstRow0, x, coeff.YOffset, coeff.Cy, rAdd, gAdd, bAdd);
+                if (hasSecondRow)
+                {
+                    WritePair(yRow1, dstRow1, x, coeff.YOffset, coeff.Cy, rAdd, gAdd, bAdd);
+                }
+            }
+
+            if (x < width)
+            {
+                var cx = x >> 1;
+                var uVal = uRow[cx] - 128;
+                var vVal = vRow[cx] - 128;
+                var rAdd = coeff.Crv * vVal + 128;
+                var gAdd = coeff.Cgu * uVal + coeff.Cgv * vVal + 128;
+                var bAdd = coeff.Cbu * uVal + 128;
+
+                WriteSingle(yRow0, dstRow0, x, coeff.YOffset, coeff.Cy, rAdd, gAdd, bAdd);
+                if (hasSecondRow)
+                {
+                    WriteSingle(yRow1, dstRow1, x, coeff.YOffset, coeff.Cy, rAdd, gAdd, bAdd);
+                }
+            }
+        }
+    }
+
+    public static void Rgb24ToBgra32(
+        IntPtr srcRgb24,
+        int srcStride,
+        IntPtr bgraDest,
+        int width,
+        int height,
+        int bgraStride)
+    {
+        if (width <= 0 || height <= 0 || srcRgb24 == IntPtr.Zero || bgraDest == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var srcPtr = (byte*)srcRgb24;
+        var dstPtr = (byte*)bgraDest;
+        for (var y = 0; y < height; y++)
+        {
+            var srcRow = srcPtr + ((long)y * srcStride);
+            var dstRow = (uint*)(dstPtr + ((long)y * bgraStride));
+            for (var x = 0; x < width; x++)
+            {
+                var off = x * 3;
+                var r = srcRow[off];
+                var g = srcRow[off + 1];
+                var b = srcRow[off + 2];
+                dstRow[x] = (uint)(b | (g << 8) | (r << 16) | (0xFF << 24));
+            }
+        }
+    }
+
+    public static void Bgr24ToBgra32(
+        IntPtr srcBgr24,
+        int srcStride,
+        IntPtr bgraDest,
+        int width,
+        int height,
+        int bgraStride)
+    {
+        if (width <= 0 || height <= 0 || srcBgr24 == IntPtr.Zero || bgraDest == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var srcPtr = (byte*)srcBgr24;
+        var dstPtr = (byte*)bgraDest;
+        for (var y = 0; y < height; y++)
+        {
+            var srcRow = srcPtr + ((long)y * srcStride);
+            var dstRow = (uint*)(dstPtr + ((long)y * bgraStride));
+            for (var x = 0; x < width; x++)
+            {
+                var off = x * 3;
+                var b = srcRow[off];
+                var g = srcRow[off + 1];
+                var r = srcRow[off + 2];
+                dstRow[x] = (uint)(b | (g << 8) | (r << 16) | (0xFF << 24));
+            }
+        }
+    }
 }

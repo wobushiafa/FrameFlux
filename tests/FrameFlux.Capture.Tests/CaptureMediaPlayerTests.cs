@@ -327,7 +327,7 @@ public sealed class CaptureMediaPlayerTests
                 IsHardwareVideoActive: hardwareActive);
 
         public void Start(
-            Func<bool> prefersD3D11,
+            Func<bool> prefersHardwareFrame,
             Func<bool> needsCpuFrame,
             Action<CaptureDeliveredFrame> onFrame,
             Action<Exception, bool> onError)

@@ -7,8 +7,8 @@
     <IsAotCompatible Condition="'$(TargetFramework)' != 'netstandard2.1'">true</IsAotCompatible>
     <IsPackable>true</IsPackable>
     <PackageId>FrameFlux.Capture</PackageId>
-    <Description>Local USB camera and capture device media engine for FrameFlux (Windows Media Foundation + WASAPI).</Description>
-    <PackageTags>media;video;capture;camera;usb;uvc;mediafoundation;wasapi;d3d11;windows</PackageTags>
+    <Description>Local USB camera and capture device media engine for FrameFlux (Windows Media Foundation + WASAPI, Linux V4L2 + ALSA).</Description>
+    <PackageTags>media;video;capture;camera;usb;uvc;mediafoundation;wasapi;d3d11;v4l2;alsa;dmabuf;windows;linux</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);1591</NoWarn>
