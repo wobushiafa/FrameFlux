@@ -9,10 +9,10 @@ from pathlib import Path
 
 directory = Path(sys.argv[1])
 managed = {
-    "FrameFlux.Abstractions", "FrameFlux.Presentation", "FrameFlux.FFmpeg",
-    "FrameFlux.FFmpeg.Android", "FrameFlux.WebRtc", "FrameFlux.Rendering.Windows",
-    "FrameFlux.Wpf", "FrameFlux.Avalonia", "FrameFlux.Avalonia.Windows",
-    "FrameFlux.Avalonia.Linux", "FrameFlux.Avalonia.Android",
+    "FrameFlux.Abstractions", "FrameFlux.Presentation", "FrameFlux.Capture",
+    "FrameFlux.FFmpeg", "FrameFlux.FFmpeg.Android", "FrameFlux.WebRtc",
+    "FrameFlux.Rendering.Windows", "FrameFlux.Wpf", "FrameFlux.Avalonia",
+    "FrameFlux.Avalonia.Windows", "FrameFlux.Avalonia.Linux", "FrameFlux.Avalonia.Android",
 }
 native_rids = {
     "FrameFlux.FFmpeg.NativeAssets.Windows": ["win-x64"],
@@ -90,5 +90,5 @@ for path in sorted(directory.glob("*.nupkg")):
         print(f"Verified {identity} {version}")
 assert identities == managed | native_rids.keys(), f"Missing packages: {(managed | native_rids.keys()) - identities}"
 assert len(versions) == 1, f"Mixed release versions: {versions}"
-assert len(list(directory.glob("*.snupkg"))) == len(managed), "Expected 11 managed symbol packages"
-print("Verified all 14 NuGet packages and 11 symbol packages.")
+assert len(list(directory.glob("*.snupkg"))) == len(managed), f"Expected {len(managed)} managed symbol packages"
+print(f"Verified all {len(managed) + len(native_rids)} NuGet packages and {len(managed)} symbol packages.")

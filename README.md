@@ -40,6 +40,7 @@
 | --- | --- | --- |
 | `src/FrameFlux.Abstractions` | `FrameFlux.Abstractions` | 与 UI/底层解耦的核心契约（`IMediaPlayer`、`MediaSource`、配置项、能力和帧租约）。 |
 | `src/FrameFlux.FFmpeg` | `FrameFlux.FFmpeg` | FFmpeg 独立媒体播放引擎，负责解复用、音频解码与时钟同步（不含原生二进制）。 |
+| `src/FrameFlux.Capture` | `FrameFlux.Capture` | 本地 USB 摄像头与采集卡媒体引擎（Windows Media Foundation + WASAPI），支持 D3D11 纹理直出与多视图共享。 |
 | `src/FrameFlux.WebRtc` | `FrameFlux.WebRtc` | 基于 SIPSorcery 的 WebRTC 信令与传输，支持 WHEP、go2rtc 及 SDP 协商；视频解码需要可加载的原生 FFmpeg 库或自定义解码器。 |
 | `src/FrameFlux.FFmpeg.Android` | `FrameFlux.FFmpeg.Android` | 接收 FFmpeg 解复用 H.264/HEVC 数据的 Android MediaCodec 硬件解码器。 |
 | `src/FrameFlux.Presentation` | `FrameFlux.Presentation` | UI 控件共享的播放控制与生命周期调度层。 |
@@ -60,7 +61,7 @@
 在项目文件 `.csproj` 中引用 `FrameFlux.Wpf`：
 
 ```xml
-<PackageReference Include="FrameFlux.Wpf" Version="0.1.4" />
+<PackageReference Include="FrameFlux.Wpf" Version="0.2.0" />
 ```
 
 #### XAML 界面定义
@@ -173,6 +174,7 @@ player.Volume = 0.8;                             // 80% 音量
 | **HLS 直播流** | `http://.../live.m3u8` | `FfmpegMediaPlayer` | 异步切片预取、直播时钟同步、低延迟缓冲 |
 | **RTSP 监控流** | `rtsp://camera.local:554/stream` | `FfmpegMediaPlayer` | TCP/UDP 传输、极低延迟低丢帧策略（`LowLatency`） |
 | **WebRTC 实时流** | `http://.../whep`<br/>`ws://.../api/ws`<br/>`webrtc://...` | `WebRtcMediaPlayer` | WHEP/WHIP 协商、超低延迟毫秒级互动直播 |
+| **本地 USB 采集设备** | `capture://video/0`<br/>`capture://video/device?deviceId=...` | `CaptureMediaPlayer` | Windows Media Foundation 视频采集、D3D11 纹理直出、WASAPI 伴随音频与断线重连 |
 
 HTTP 点播的实际 Seek 能力取决于服务器是否支持随机访问及媒体容器索引；首次 Seek 失败会报告错误并关闭当前媒体的 Seek 能力。WebRTC 当前内置 G.711 PCMA/PCMU 音频解码。
 

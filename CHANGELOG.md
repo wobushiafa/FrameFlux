@@ -2,6 +2,32 @@
 
 All notable changes to FrameFlux are documented in this file.
 
+## [0.2.0] - 2026-11-25
+
+### Added
+
+- New `FrameFlux.Capture` managed NuGet package for local USB cameras and capture devices (Windows Media Foundation + WASAPI), featuring device enumeration, format scoring and negotiation, shared capture session pooling, exponential-backoff reconnect on hot-unplug, VID/PID paired audio loopback, `IMFDXGIDeviceManager` GPU texture copy, D3D11 NV12 texture upload, and WPF/Avalonia demo integration.
+
+### Changed
+
+- End-to-end performance optimization across capture, decoding, audio output, and multi-platform rendering:
+  - **Capture**: Added SIMD pixel conversion (`CapturePixelConverter`), zero-closure frame leases (`CaptureMediaFrameLease`), `readonly record struct` frame delivery, lock-free Copy-on-Write subscriber/event snapshots, and 64-byte aligned buffer pooling with dynamic 2-frame retention.
+  - **FFmpeg**: Enabled multithreaded software video decoding, skipped redundant `forceOpaqueAlpha` scans for opaque YUV sources, allocated `extra_hw_frames` only when preserving hardware frames, eliminated per-frame `SafeHandle` wrapping in `FfmpegDecoder`, converted `FrameLayout` to `readonly record struct`, refactored `NetworkPacketPrefetchBuffer` to pooled native packets, introduced high-resolution `WaitableTimer` waits (`HighResolutionWait`), optimized Windows/Linux/Android audio buffer reuse, and introduced zero-allocation/pooled shared session fan-out (`MediaFrameDelivery`, `ReferenceCountedMediaFrameLease`, `SharedMediaSessionPool`).
+  - **WebRTC**: Added AVX2/SSSE3 SIMD pixel conversion (`WebRtcPixelConverter`), multithreaded FFmpeg software decoding with static release delegates, Android MediaCodec hardware codec caching and `DirectByteBuffer` input writes, improved RTP loss/keyframe recovery and consecutive GPU failure fallback threshold, and pooled ALSA audio buffers.
+  - **Rendering & UI**: Cached `ID3D11VideoProcessorInputView` and enabled fast `ResizeBuffers` in `WindowsD3D11Presenter`, added reference-counted cleanup for `WindowsD3D11DeviceSynchronizer.DeviceLocks`, switched `WindowsD3D11DirectVisualHandler` to frame-driven on-demand invalidation, added shared `SharedD3D9DevicePool` and reduced GPU flushes in WPF `D3D11ImageMediaOutput`, hardened cross-D3D11/D3D9Ex/MIL composition synchronization, cached OpenGL/EGL/DMA-BUF and Android SurfaceTexture/NativeSurface state and vertices, and cached `RenderScaling` via `TopLevel.ScalingChanged`.
+- Updated NuGet release packaging and validation (`publish-nuget.yml`, `eng/pack-managed.ps1`, `eng/verify-packages.py`) to publish 12 managed packages (adding `FrameFlux.Capture`) and 3 native FFmpeg packages.
+
+### Fixed
+
+- Fixed `CaptureSessionSubscriber.WantsCpuFrame` triggering unnecessary GPU-to-CPU readbacks and BGRA conversions when D3D11 output is preferred.
+- Fixed FFmpeg GPU playback with `SnapshotPolicy.KeepLatestFrame` performing unused GPU-to-CPU readbacks and per-frame LOH allocations.
+- Fixed COM lifetime race between synchronous `IMFSourceReader.ReadSample` and `Stop()` in Windows Media Foundation capture.
+- Fixed transient GPU contention in `WindowsD3D11DirectVisualHandler` permanently degrading to software fallback.
+
+### Removed
+
+- Removed preview Unity 2022.3 LTS integration (`FrameFlux.Unity.Native`, `FrameFlux.Unity.Tests`, `unity/com.frameflux.player`, Unity packaging/smoke scripts, and `docs/UNITY-COMPATIBILITY.md`).
+
 ## [0.1.4] - 2026-11-20
 
 ### Added

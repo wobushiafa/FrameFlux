@@ -1,6 +1,6 @@
 # Releasing FrameFlux
 
-Version 0.1.4 publishes 11 managed packages and three optional native FFmpeg
+Version 0.2.0 publishes 12 managed packages and three optional native FFmpeg
 packages. Managed packages are MIT licensed; native package licenses are
 recorded in THIRD-PARTY-NOTICES.md and their package license files.
 
@@ -20,7 +20,7 @@ dotnet test FrameFlux.slnx -c Release --no-build
 
 The source preparation script downloads pinned archives and checks their SHA-256.
 Native projects require corresponding source when packing. The publishing
-workflow checks out Git LFS binaries, packs all 14 projects, and runs
+workflow checks out Git LFS binaries, packs all 15 projects, and runs
 eng/verify-packages.py to validate package identities, exact internal dependency
 versions, licenses, sources, native architecture, Android alignment and Linux
 glibc requirements. Examples must never appear as NuGet packages.

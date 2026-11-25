@@ -15,6 +15,7 @@ $outputPath = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $OutputDi
 
 $projects = @(
     'src/FrameFlux.Abstractions/FrameFlux.Abstractions.csproj'
+    'src/FrameFlux.Capture/FrameFlux.Capture.csproj'
     'src/FrameFlux.FFmpeg/FrameFlux.FFmpeg.csproj'
     'src/FrameFlux.FFmpeg.Android/FrameFlux.FFmpeg.Android.csproj'
     'src/FrameFlux.Presentation/FrameFlux.Presentation.csproj'
