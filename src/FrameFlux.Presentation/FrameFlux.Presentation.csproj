@@ -27,7 +27,6 @@
     <Compile Include="..\FrameFlux.Compatibility\*.cs" Link="Compatibility\%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="FrameFlux.Unity" />
     <PackageReference Include="Microsoft.Bcl.TimeProvider" Condition="'$(TargetFramework)' == 'netstandard2.1'" />
   </ItemGroup>
 </Project>

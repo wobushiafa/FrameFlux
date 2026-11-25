@@ -13,12 +13,12 @@ namespace FrameFlux.Compatibility
         internal static bool IsAndroid() => RuntimeInformation.IsOSPlatform(OSPlatform.Create("ANDROID"));
     }
 
-    // Windows Unity loads FFmpeg from an explicit plugin directory. Handles stay owned by the caller.
+    // Windows netstandard2.1 loader for explicit native library directories. Handles stay owned by the caller.
     internal static class NativeLibraryCompat
     {
         internal static IntPtr Load(string path)
         {
-            if (!Platform.IsWindows()) throw new PlatformNotSupportedException("This native loader supports Unity Windows only.");
+            if (!Platform.IsWindows()) throw new PlatformNotSupportedException("This native loader supports Windows only.");
             var handle = LoadLibraryExW(path, IntPtr.Zero, System.IO.Path.IsPathRooted(path) ? 0x00001100u : 0x00001000u);
             if (handle == IntPtr.Zero) throw new DllNotFoundException($"Unable to load {path} (Win32 {Marshal.GetLastWin32Error()}).");
             return handle;

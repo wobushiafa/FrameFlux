@@ -19,7 +19,6 @@
     <Project Path="src/FrameFlux.FFmpeg.NativeAssets.Windows/FrameFlux.FFmpeg.NativeAssets.Windows.csproj" />
     <Project Path="src/FrameFlux.Presentation/FrameFlux.Presentation.csproj" />
     <Project Path="src/FrameFlux.Rendering.Windows/FrameFlux.Rendering.Windows.csproj" />
-    <Project Path="src/FrameFlux.Unity.Native/FrameFlux.Unity.Native.csproj" />
     <Project Path="src/FrameFlux.WebRtc/FrameFlux.WebRtc.csproj" />
     <Project Path="src/FrameFlux.Wpf/FrameFlux.Wpf.csproj" />
   </Folder>
@@ -29,7 +28,6 @@
     <Project Path="tests/FrameFlux.Capture.Tests/FrameFlux.Capture.Tests.csproj" />
     <Project Path="tests/FrameFlux.FFmpeg.Tests/FrameFlux.FFmpeg.Tests.csproj" />
     <Project Path="tests/FrameFlux.Presentation.Api.Tests/FrameFlux.Presentation.Api.Tests.csproj" />
-    <Project Path="tests/FrameFlux.Unity.Tests/FrameFlux.Unity.Tests.csproj" />
     <Project Path="tests/FrameFlux.WebRtc.Tests/FrameFlux.WebRtc.Tests.csproj" />
   </Folder>
 </Solution>

@@ -164,27 +164,6 @@ player.Volume = 0.8;                             // 80% 音量
 
 ## 媒体源与模式参考
 
-### Unity 2022.3 LTS（Windows x64）
-
-Unity 通过自包含 UPM 包使用通用 `FrameFlux.Unity.MediaView`，复用公共契约、
-播放调度和 FFmpeg/WebRTC 的 netstandard2.1 核心。RawImage/材质共享纹理，
-音频进入 Unity AudioSource/AudioMixer。构建包：
-
-```powershell
-powershell -NoProfile -File scripts/build-unity-package.ps1
-```
-
-在 Unity Package Manager 中选择 **Add package from disk**，打开
-`artifacts/unity-managed/com.frameflux.player/package.json`，然后在 RawImage 上添加
-`MediaView` 和 `MediaRawImage`。当前为预览版：Editor/Mono Player 的 FFmpeg 与
-WebRTC 场景、Mono Player 文件/HTTP/HLS 播放及核心 IL2CPP 代码生成已验证；
-IL2CPP Player 构建因缺少 Windows IL2CPP 模块尚未完成；
-内置 Unity 输出为 CPU 纹理上传，GPU 零拷贝呈现待实现。详细接口和边界见
-[Unity 接入说明](unity/com.frameflux.player/README.md)与
-[验收状态](docs/UNITY-COMPATIBILITY.md)。
-
----
-
 ### 媒体源类型与协议支持
 
 | 源类型 | 协议示例 | 推荐后端 | 具备能力 |
