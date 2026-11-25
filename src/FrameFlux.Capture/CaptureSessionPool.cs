@@ -126,6 +126,8 @@ internal sealed class CaptureSessionLease : IAsyncDisposable
 
 internal sealed class CaptureSessionSubscriber
 {
+    private volatile IMediaVideoOutput? _lastFailedD3D11Output;
+
     internal CaptureSessionSubscriber(
         Func<IMediaVideoOutput?> getVideoOutput,
         Func<MediaVideoDecodingPolicy> getDecodingPolicy,
@@ -149,20 +151,17 @@ internal sealed class CaptureSessionSubscriber
     internal Action<MediaPlaybackState> OnStateChanged { get; }
     internal Action<MediaPlaybackError> OnError { get; }
 
-    internal bool PrefersD3D11
-    {
-        get
-        {
-            if (GetDecodingPolicy() == MediaVideoDecodingPolicy.SoftwareOnly)
-            {
-                return false;
-            }
+    internal bool PrefersD3D11 => PrefersD3D11For(GetVideoOutput());
 
-            var output = GetVideoOutput();
-            return output is not null &&
-                   (output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Nv12) ||
-                    output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Bgra32));
+    internal bool PrefersD3D11For(IMediaVideoOutput? output)
+    {
+        if (output is null || GetDecodingPolicy() == MediaVideoDecodingPolicy.SoftwareOnly)
+        {
+            return false;
         }
+
+        return output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Nv12) ||
+               output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Bgra32);
     }
 
     internal bool WantsCpuFrame
@@ -175,8 +174,38 @@ internal sealed class CaptureSessionSubscriber
             }
 
             var output = GetVideoOutput();
-            return output is not null &&
-                   output.Supports(MediaFrameStorageKind.CpuMemory, MediaPixelFormat.Bgra32);
+            if (output is null)
+            {
+                return false;
+            }
+
+            // Adaptive WPF/Avalonia outputs report Supports() == true for both D3D11Texture and CpuMemory/Bgra32.
+            // Do not request CPU frames when D3D11 is preferred and healthy, otherwise every frame forces
+            // GPU->CPU readback and scalar color conversion only to discard the unused CPU lease.
+            if (GetDecodingPolicy() != MediaVideoDecodingPolicy.SoftwareOnly &&
+                (output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Nv12) ||
+                 output.Supports(MediaFrameStorageKind.D3D11Texture, MediaPixelFormat.Bgra32)) &&
+                !ReferenceEquals(_lastFailedD3D11Output, output))
+            {
+                return false;
+            }
+
+            return output.Supports(MediaFrameStorageKind.CpuMemory, MediaPixelFormat.Bgra32);
+        }
+    }
+
+    internal void ReportD3D11PresentationResult(IMediaVideoOutput output, bool succeeded)
+    {
+        if (succeeded)
+        {
+            if (ReferenceEquals(_lastFailedD3D11Output, output))
+            {
+                _lastFailedD3D11Output = null;
+            }
+        }
+        else
+        {
+            _lastFailedD3D11Output = output;
         }
     }
 }
@@ -192,6 +221,7 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
     private readonly Func<CaptureFrameBufferPool, ICaptureBackend> _backendFactory;
     private readonly Func<string?, MediaOpenOptions, double, bool, ICaptureAudioLoopback?> _audioFactory;
     private readonly HashSet<CaptureSessionSubscriber> _subscribers = [];
+    private volatile CaptureSessionSubscriber[] _subscriberSnapshot = [];
     private ICaptureBackend? _backend;
     private ICaptureAudioLoopback? _audioLoopback;
     private CaptureOpenResult? _openResult;
@@ -278,7 +308,10 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
             RuntimeCompat.NotDisposed(_disposed, this);
             lock (_sync)
             {
-                _subscribers.Add(subscriber);
+                if (_subscribers.Add(subscriber))
+                {
+                    _subscriberSnapshot = [.. _subscribers];
+                }
                 _volume = volume;
                 _isMuted = isMuted;
             }
@@ -316,7 +349,10 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
             RuntimeCompat.NotDisposed(_disposed, this);
             lock (_sync)
             {
-                _subscribers.Add(subscriber);
+                if (_subscribers.Add(subscriber))
+                {
+                    _subscriberSnapshot = [.. _subscribers];
+                }
                 _volume = volume;
                 _isMuted = isMuted;
                 _audioLoopback?.SetVolume(volume, isMuted, _openOptions.Audio.GainDecibels);
@@ -361,7 +397,10 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
         bool remainingEmpty;
         lock (_sync)
         {
-            _subscribers.Remove(subscriber);
+            if (_subscribers.Remove(subscriber))
+            {
+                _subscriberSnapshot = [.. _subscribers];
+            }
             remainingEmpty = _subscribers.Count == 0;
         }
 
@@ -423,34 +462,30 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
 
     private bool AnySubscriberPrefersD3D11()
     {
-        lock (_sync)
+        var subscribers = _subscriberSnapshot;
+        for (var i = 0; i < subscribers.Length; i++)
         {
-            foreach (var sub in _subscribers)
+            if (subscribers[i].PrefersD3D11)
             {
-                if (sub.PrefersD3D11)
-                {
-                    return true;
-                }
+                return true;
             }
-
-            return false;
         }
+
+        return false;
     }
 
     private bool AnySubscriberWantsCpuFrame()
     {
-        lock (_sync)
+        var subscribers = _subscriberSnapshot;
+        for (var i = 0; i < subscribers.Length; i++)
         {
-            foreach (var sub in _subscribers)
+            if (subscribers[i].WantsCpuFrame)
             {
-                if (sub.WantsCpuFrame)
-                {
-                    return true;
-                }
+                return true;
             }
-
-            return false;
         }
+
+        return false;
     }
 
     private void HandleDeliveredFrame(CaptureDeliveredFrame delivered)
@@ -468,19 +503,20 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
             _readMilliseconds = delivered.ReadMilliseconds;
             _decodeMilliseconds = delivered.DecodeMilliseconds;
             _sampleCount++;
-            subscribers = [.. _subscribers];
+            subscribers = _subscriberSnapshot;
         }
 
         try
         {
-            foreach (var subscriber in subscribers)
+            for (var i = 0; i < subscribers.Length; i++)
             {
+                var subscriber = subscribers[i];
                 var output = subscriber.GetVideoOutput();
                 var presented = false;
 
                 if (output is not null)
                 {
-                    if (subscriber.PrefersD3D11 && delivered.D3D11Lease is not null)
+                    if (subscriber.PrefersD3D11For(output) && delivered.D3D11Lease is not null)
                     {
                         var retained = delivered.D3D11Lease.Retain();
                         try
@@ -492,6 +528,7 @@ internal sealed class CapturePhysicalSession : IAsyncDisposable
                             presented = false;
                         }
 
+                        subscriber.ReportD3D11PresentationResult(output, presented);
                         if (!presented)
                         {
                             retained.Dispose();

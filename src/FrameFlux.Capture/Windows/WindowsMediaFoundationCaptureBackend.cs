@@ -214,7 +214,10 @@ internal sealed unsafe class WindowsMediaFoundationCaptureBackend : ICaptureBack
                 ApplyBestNativeFormat(sourceReader, selectedNative);
             }
 
-            var negotiatedOutput = ConfigureOutputMediaType(sourceReader, selectedNative);
+            var negotiatedOutput = ConfigureOutputMediaType(
+                sourceReader,
+                selectedNative,
+                preferGpuNv12: actualHardwareActive);
 
             RefreshCurrentOutputMediaType(sourceReader, selectedNative?.PixelFormat);
 
@@ -452,9 +455,9 @@ internal sealed unsafe class WindowsMediaFoundationCaptureBackend : ICaptureBack
                     needsCpuFrame(),
                     readMs,
                     decodeStart);
-                if (delivered is not null)
+                if (delivered is { } frame)
                 {
-                    onFrame(delivered);
+                    onFrame(frame);
                 }
             }
             catch (Exception exception)
@@ -871,10 +874,22 @@ internal sealed unsafe class WindowsMediaFoundationCaptureBackend : ICaptureBack
 
     private static MediaCapturePixelFormat ConfigureOutputMediaType(
         IntPtr sourceReader,
-        MediaCaptureVideoFormat? nativeFormat)
+        MediaCaptureVideoFormat? nativeFormat,
+        bool preferGpuNv12)
     {
         var candidates = new List<MediaCapturePixelFormat>();
-        if (nativeFormat is { PixelFormat: MediaCapturePixelFormat.Nv12 or MediaCapturePixelFormat.Yuy2 or MediaCapturePixelFormat.Bgra32 })
+        if (preferGpuNv12)
+        {
+            // When hardware GPU presentation is enabled, prefer NV12 first even for native YUY2 webcams
+            // so Media Foundation's GPU video processor handles YUY2->NV12 without CPU conversion + 4Bpp BGRA upload.
+            if (nativeFormat is { PixelFormat: MediaCapturePixelFormat.Bgra32 })
+            {
+                candidates.Add(MediaCapturePixelFormat.Bgra32);
+            }
+
+            candidates.Add(MediaCapturePixelFormat.Nv12);
+        }
+        else if (nativeFormat is { PixelFormat: MediaCapturePixelFormat.Nv12 or MediaCapturePixelFormat.Yuy2 or MediaCapturePixelFormat.Bgra32 })
         {
             candidates.Add(nativeFormat.PixelFormat);
         }

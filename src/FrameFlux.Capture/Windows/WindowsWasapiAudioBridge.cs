@@ -1,4 +1,6 @@
 #if !ANDROID
+using System.Numerics;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
@@ -31,6 +33,8 @@ internal sealed partial class WindowsWasapiAudioBridge : ICaptureAudioLoopback
     private double _volume;
     private bool _isMuted;
     private double _gainDecibels;
+    private double _effectiveScale;
+    private bool _providerIsFloat32;
     private bool _isOperational;
     private string? _lastError;
     private byte[] _pcmScratch = [];
@@ -50,6 +54,7 @@ internal sealed partial class WindowsWasapiAudioBridge : ICaptureAudioLoopback
         _volume = Math.Clamp(volume, 0d, 1d);
         _isMuted = isMuted;
         _gainDecibels = gainDecibels;
+        _effectiveScale = ComputeEffectiveScale(_volume, _isMuted, _gainDecibels);
     }
 
     public MediaAudioDiagnostics Diagnostics
@@ -80,8 +85,12 @@ internal sealed partial class WindowsWasapiAudioBridge : ICaptureAudioLoopback
             _volume = Math.Clamp(volume, 0d, 1d);
             _isMuted = isMuted;
             _gainDecibels = gainDecibels;
+            Volatile.Write(ref _effectiveScale, ComputeEffectiveScale(_volume, _isMuted, _gainDecibels));
         }
     }
+
+    private static double ComputeEffectiveScale(double volume, bool isMuted, double gainDecibels) =>
+        isMuted ? 0d : volume * Math.Pow(10d, gainDecibels / 20d);
 
     public void Start()
     {
@@ -107,23 +116,27 @@ internal sealed partial class WindowsWasapiAudioBridge : ICaptureAudioLoopback
                 _sampleRate = captureFormat.SampleRate;
                 _channels = captureFormat.Channels;
 
-                var pcmFormat = new WaveFormat(captureFormat.SampleRate, 16, captureFormat.Channels);
+                var isFloat32Capture = IsIeeeFloat(captureFormat);
                 var latencyMs = Math.Max(10, checked((int)Math.Ceiling(_bufferDuration.TotalMilliseconds)));
-                var provider = new BufferedWaveProvider(pcmFormat)
-                {
-                    BufferDuration = TimeSpan.FromMilliseconds(Math.Max(latencyMs * 4, 400)),
-                    DiscardOnBufferOverflow = true,
-                    ReadFully = true
-                };
-
+                BufferedWaveProvider provider;
                 IWavePlayer player;
                 try
                 {
                     _renderDevice = string.IsNullOrWhiteSpace(_renderDeviceId)
                         ? _enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia)
                         : _enumerator.GetDevice(_renderDeviceId);
+                    var wasapiFormat = isFloat32Capture
+                        ? WaveFormat.CreateIeeeFloatWaveFormat(captureFormat.SampleRate, captureFormat.Channels)
+                        : new WaveFormat(captureFormat.SampleRate, 16, captureFormat.Channels);
+                    provider = new BufferedWaveProvider(wasapiFormat)
+                    {
+                        BufferDuration = TimeSpan.FromMilliseconds(Math.Max(latencyMs * 4, 400)),
+                        DiscardOnBufferOverflow = true,
+                        ReadFully = true
+                    };
                     var wasapiOut = new WasapiOut(_renderDevice, AudioClientShareMode.Shared, useEventSync: true, latencyMs);
                     wasapiOut.Init(provider);
+                    _providerIsFloat32 = isFloat32Capture;
                     _backendName = "WASAPI Loopback";
                     player = wasapiOut;
                 }
@@ -131,8 +144,16 @@ internal sealed partial class WindowsWasapiAudioBridge : ICaptureAudioLoopback
                 {
                     _renderDevice?.Dispose();
                     _renderDevice = null;
+                    var pcmFormat = new WaveFormat(captureFormat.SampleRate, 16, captureFormat.Channels);
+                    provider = new BufferedWaveProvider(pcmFormat)
+                    {
+                        BufferDuration = TimeSpan.FromMilliseconds(Math.Max(latencyMs * 4, 400)),
+                        DiscardOnBufferOverflow = true,
+                        ReadFully = true
+                    };
                     var waveOut = new WaveOutEvent { DesiredLatency = Math.Max(40, latencyMs) };
                     waveOut.Init(provider);
+                    _providerIsFloat32 = false;
                     _backendName = "WASAPI->WaveOut";
                     player = waveOut;
                 }
@@ -191,7 +212,7 @@ internal sealed partial class WindowsWasapiAudioBridge : ICaptureAudioLoopback
 
         BufferedWaveProvider? provider;
         WaveFormat? format;
-        double scale;
+        bool providerIsFloat32;
         lock (_sync)
         {
             if (_disposed || _provider is null || _capture is null)
@@ -201,7 +222,29 @@ internal sealed partial class WindowsWasapiAudioBridge : ICaptureAudioLoopback
 
             provider = _provider;
             format = _capture.WaveFormat;
-            scale = _isMuted ? 0d : _volume * Math.Pow(10d, _gainDecibels / 20d);
+            providerIsFloat32 = _providerIsFloat32;
+        }
+
+        // Prevent gradual latency drift between USB capture crystal and render endpoint crystal.
+        var maxBuffered = TimeSpan.FromMilliseconds(Math.Max(_bufferDuration.TotalMilliseconds * 2.5d, 200d));
+        if (provider.BufferedDuration > maxBuffered)
+        {
+            provider.ClearBuffer();
+        }
+
+        var scale = Volatile.Read(ref _effectiveScale);
+        if (providerIsFloat32 && IsIeeeFloat(format))
+        {
+            if (Math.Abs(scale - 1d) <= 1e-6d)
+            {
+                provider.AddSamples(e.Buffer, 0, e.BytesRecorded);
+                return;
+            }
+
+            EnsureScratchCapacity(e.BytesRecorded);
+            ScaleFloat32Samples(e.Buffer, _pcmScratch, e.BytesRecorded, (float)scale);
+            provider.AddSamples(_pcmScratch, 0, e.BytesRecorded);
+            return;
         }
 
         var pcmBytes = ConvertToScaledPcm16(e.Buffer, e.BytesRecorded, format, scale, out var outCount);
@@ -213,6 +256,45 @@ internal sealed partial class WindowsWasapiAudioBridge : ICaptureAudioLoopback
 
     private static readonly Guid IeeeFloatSubFormat = new("00000003-0000-0010-8000-00aa00389b71");
 
+    private static bool IsIeeeFloat(WaveFormat format) =>
+        format.Encoding == WaveFormatEncoding.IeeeFloat ||
+        (format is WaveFormatExtensible ext && ext.SubFormat == IeeeFloatSubFormat);
+
+    private static void ScaleFloat32Samples(byte[] source, byte[] dest, int byteCount, float scale)
+    {
+        var sampleCount = byteCount / sizeof(float);
+        if (scale == 0f)
+        {
+            Array.Clear(dest, 0, byteCount);
+            return;
+        }
+
+        var srcFloats = MemoryMarshal.Cast<byte, float>(source.AsSpan(0, sampleCount * sizeof(float)));
+        var dstFloats = MemoryMarshal.Cast<byte, float>(dest.AsSpan(0, sampleCount * sizeof(float)));
+        var i = 0;
+        if (Vector.IsHardwareAccelerated && sampleCount >= Vector<float>.Count)
+        {
+            var vScale = new Vector<float>(scale);
+            var vMin = new Vector<float>(-1f);
+            var vMax = new Vector<float>(1f);
+            var vecWidth = Vector<float>.Count;
+            var vecCount = sampleCount / vecWidth;
+            var vecByteLength = vecCount * vecWidth * sizeof(float);
+            var srcVectors = MemoryMarshal.Cast<byte, Vector<float>>(source.AsSpan(0, vecByteLength));
+            var dstVectors = MemoryMarshal.Cast<byte, Vector<float>>(dest.AsSpan(0, vecByteLength));
+            for (var vi = 0; vi < vecCount; vi++)
+            {
+                dstVectors[vi] = Vector.Min(vMax, Vector.Max(vMin, srcVectors[vi] * vScale));
+            }
+            i = vecCount * vecWidth;
+        }
+
+        for (; i < sampleCount; i++)
+        {
+            dstFloats[i] = Math.Clamp(srcFloats[i] * scale, -1f, 1f);
+        }
+    }
+
     private byte[] ConvertToScaledPcm16(
         byte[] source,
         int bytesRecorded,
@@ -221,20 +303,19 @@ internal sealed partial class WindowsWasapiAudioBridge : ICaptureAudioLoopback
         out int outputBytes)
     {
         outputBytes = 0;
-        if (format.Encoding == WaveFormatEncoding.IeeeFloat ||
-            (format is WaveFormatExtensible ext && ext.SubFormat == IeeeFloatSubFormat))
+        if (IsIeeeFloat(format))
         {
             var sampleCount = bytesRecorded / sizeof(float);
             outputBytes = sampleCount * sizeof(short);
             EnsureScratchCapacity(outputBytes);
 
+            var srcFloats = MemoryMarshal.Cast<byte, float>(source.AsSpan(0, sampleCount * sizeof(float)));
+            var dstShorts = MemoryMarshal.Cast<byte, short>(_pcmScratch.AsSpan(0, outputBytes));
+            var fScale = (float)(scale * 32767d);
             for (var i = 0; i < sampleCount; i++)
             {
-                var sample = BitConverter.ToSingle(source, i * sizeof(float));
-                var scaled = Math.Clamp(sample * scale * 32767d, short.MinValue, short.MaxValue);
-                var pcmSample = (short)Math.Round(scaled);
-                _pcmScratch[i * 2] = (byte)(pcmSample & 0xFF);
-                _pcmScratch[i * 2 + 1] = (byte)((pcmSample >> 8) & 0xFF);
+                var scaled = Math.Clamp(srcFloats[i] * fScale, short.MinValue, short.MaxValue);
+                dstShorts[i] = (short)MathF.Round(scaled);
             }
 
             return _pcmScratch;
@@ -242,17 +323,22 @@ internal sealed partial class WindowsWasapiAudioBridge : ICaptureAudioLoopback
 
         if (format.BitsPerSample == 16)
         {
+            if (Math.Abs(scale - 1d) <= 1e-6d)
+            {
+                outputBytes = bytesRecorded;
+                return source;
+            }
+
             var sampleCount = bytesRecorded / sizeof(short);
             outputBytes = sampleCount * sizeof(short);
             EnsureScratchCapacity(outputBytes);
 
+            var srcShorts = MemoryMarshal.Cast<byte, short>(source.AsSpan(0, outputBytes));
+            var dstShorts = MemoryMarshal.Cast<byte, short>(_pcmScratch.AsSpan(0, outputBytes));
             for (var i = 0; i < sampleCount; i++)
             {
-                var sample = BitConverter.ToInt16(source, i * sizeof(short));
-                var scaled = Math.Clamp(sample * scale, short.MinValue, short.MaxValue);
-                var pcmSample = (short)Math.Round(scaled);
-                _pcmScratch[i * 2] = (byte)(pcmSample & 0xFF);
-                _pcmScratch[i * 2 + 1] = (byte)((pcmSample >> 8) & 0xFF);
+                var scaled = Math.Clamp(srcShorts[i] * scale, short.MinValue, short.MaxValue);
+                dstShorts[i] = (short)Math.Round(scaled);
             }
 
             return _pcmScratch;

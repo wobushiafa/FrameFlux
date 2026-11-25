@@ -24,11 +24,13 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
     private CaptureSessionSubscriber? _subscriber;
     private MediaSnapshot? _latestSnapshot;
     private EventHandler<MediaVideoFrame>? _frameReceived;
+    private volatile EventHandler<MediaVideoFrame>[] _frameReceivedSnapshot = [];
     private TaskCompletionSource<MediaSnapshot?>? _pendingSnapshotTcs;
     private double _volume = 1d;
     private bool _isMuted;
     private long _frameSequence;
-    private bool _disposed;
+    private volatile bool _needsCpuFrameCopy;
+    private volatile bool _disposed;
 
     public CaptureMediaPlayer(CapturePlayerOptions? options = null)
         : this(
@@ -66,16 +68,7 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
         }
     }
 
-    public MediaOpenOptions Options
-    {
-        get
-        {
-            lock (_sync)
-            {
-                return _options;
-            }
-        }
-    }
+    public MediaOpenOptions Options => Volatile.Read(ref _options);
 
     public MediaPlaybackState State
     {
@@ -178,19 +171,13 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
 
     public IMediaVideoOutput? VideoOutput
     {
-        get
-        {
-            lock (_sync)
-            {
-                return _videoOutput;
-            }
-        }
+        get => Volatile.Read(ref _videoOutput);
         set
         {
             lock (_sync)
             {
                 RuntimeCompat.NotDisposed(_disposed, this);
-                _videoOutput = value;
+                Volatile.Write(ref _videoOutput, value);
             }
         }
     }
@@ -210,6 +197,8 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
             lock (_sync)
             {
                 _frameReceived += value;
+                _frameReceivedSnapshot = BuildFrameSubscribersSnapshot(_frameReceived);
+                RefreshNeedsCpuFrameCopyLocked();
             }
         }
         remove
@@ -217,6 +206,8 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
             lock (_sync)
             {
                 _frameReceived -= value;
+                _frameReceivedSnapshot = BuildFrameSubscribersSnapshot(_frameReceived);
+                RefreshNeedsCpuFrameCopyLocked();
             }
         }
     }
@@ -287,11 +278,12 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
             lock (_sync)
             {
                 _source = source;
-                _options = resolvedOptions;
+                Volatile.Write(ref _options, resolvedOptions);
                 _sessionLease = lease;
                 _subscriber = subscriber;
                 _latestSnapshot = null;
                 _frameSequence = 0;
+                RefreshNeedsCpuFrameCopyLocked();
             }
 
             _playbackStopwatch.Reset();
@@ -379,6 +371,7 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
             }
 
             _pendingSnapshotTcs ??= new TaskCompletionSource<MediaSnapshot?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            RefreshNeedsCpuFrameCopyLocked();
             waitTask = _pendingSnapshotTcs.Task;
         }
 
@@ -407,6 +400,7 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
             _disposed = true;
             _pendingSnapshotTcs?.TrySetResult(null);
             _pendingSnapshotTcs = null;
+            RefreshNeedsCpuFrameCopyLocked();
         }
 
         await _commands.WaitAsync(CancellationToken.None).ConfigureAwait(false);
@@ -422,19 +416,38 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
         }
     }
 
-    private bool NeedsCpuFrameCopy()
+    private bool NeedsCpuFrameCopy() => _needsCpuFrameCopy;
+
+    private void RefreshNeedsCpuFrameCopyLocked()
     {
-        lock (_sync)
+        _needsCpuFrameCopy = !_disposed &&
+            (_frameReceived is not null ||
+             _options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame ||
+             _pendingSnapshotTcs is not null);
+    }
+
+    private static EventHandler<MediaVideoFrame>[] BuildFrameSubscribersSnapshot(
+        EventHandler<MediaVideoFrame>? handlers)
+    {
+        if (handlers is null)
         {
-            return _frameReceived is not null ||
-                   _options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame ||
-                   _pendingSnapshotTcs is not null;
+            return [];
         }
+
+        var list = handlers.GetInvocationList();
+        var result = new EventHandler<MediaVideoFrame>[list.Length];
+        for (var i = 0; i < list.Length; i++)
+        {
+            result[i] = (EventHandler<MediaVideoFrame>)list[i];
+        }
+
+        return result;
     }
 
     private void OnSessionFrame(CaptureMediaFrameLease? cpuLease, int width, int height)
     {
-        if (cpuLease is null || !cpuLease.TryGetCpuBuffer(out var cpuBuffer) || cpuBuffer.Plane0 == IntPtr.Zero)
+        if (_disposed || !_needsCpuFrameCopy ||
+            cpuLease is null || !cpuLease.TryGetCpuBuffer(out var cpuBuffer) || cpuBuffer.Plane0 == IntPtr.Zero)
         {
             return;
         }
@@ -446,61 +459,89 @@ public sealed class CaptureMediaPlayer : IMediaPlayer
             return;
         }
 
-        var managedCopy = new byte[totalBytes];
+        var managedCopy = RuntimeCompat.AllocateBytes(totalBytes);
         unsafe
         {
             var src = (byte*)cpuBuffer.Plane0;
-            for (var y = 0; y < height; y++)
+            if (cpuBuffer.Plane0Stride == rowBytes)
             {
-                Marshal.Copy((IntPtr)(src + ((long)y * cpuBuffer.Plane0Stride)), managedCopy, y * rowBytes, rowBytes);
+                fixed (byte* dst = managedCopy)
+                {
+                    Buffer.MemoryCopy(src, dst, totalBytes, totalBytes);
+                }
+            }
+            else
+            {
+                fixed (byte* dst = managedCopy)
+                {
+                    for (var y = 0; y < height; y++)
+                    {
+                        Buffer.MemoryCopy(
+                            src + ((long)y * cpuBuffer.Plane0Stride),
+                            dst + ((long)y * rowBytes),
+                            rowBytes,
+                            rowBytes);
+                    }
+                }
             }
         }
 
         var capturedAt = DateTimeOffset.UtcNow;
         var sequence = Interlocked.Increment(ref _frameSequence);
 
-        EventHandler<MediaVideoFrame>? handlers;
+        var subscribers = _frameReceivedSnapshot;
         TaskCompletionSource<MediaSnapshot?>? snapshotTcs = null;
         MediaSnapshot? snapshot = null;
 
-        lock (_sync)
+        if (Volatile.Read(ref _options).Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame ||
+            Volatile.Read(ref _pendingSnapshotTcs) is not null)
         {
-            if (_disposed)
+            lock (_sync)
             {
-                return;
-            }
+                if (_disposed)
+                {
+                    return;
+                }
 
-            handlers = _frameReceived;
-            if (_options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame ||
-                _pendingSnapshotTcs is not null)
-            {
-                snapshot = new MediaSnapshot(
-                    managedCopy,
-                    width,
-                    height,
-                    rowBytes,
-                    MediaPixelFormat.Bgra32,
-                    capturedAt);
-                _latestSnapshot = snapshot;
-                snapshotTcs = _pendingSnapshotTcs;
-                _pendingSnapshotTcs = null;
+                subscribers = _frameReceivedSnapshot;
+                if (_options.Video.SnapshotPolicy == MediaSnapshotPolicy.KeepLatestFrame ||
+                    _pendingSnapshotTcs is not null)
+                {
+                    snapshot = new MediaSnapshot(
+                        managedCopy,
+                        width,
+                        height,
+                        rowBytes,
+                        MediaPixelFormat.Bgra32,
+                        capturedAt);
+                    _latestSnapshot = snapshot;
+                    snapshotTcs = _pendingSnapshotTcs;
+                    _pendingSnapshotTcs = null;
+                    RefreshNeedsCpuFrameCopyLocked();
+                }
             }
+        }
+        else if (_disposed)
+        {
+            return;
         }
 
         snapshotTcs?.TrySetResult(snapshot);
 
-        if (handlers is not null)
+        if (subscribers.Length > 0)
         {
-            handlers.Invoke(
-                this,
-                new MediaVideoFrame(
-                    managedCopy,
-                    width,
-                    height,
-                    rowBytes,
-                    MediaPixelFormat.Bgra32,
-                    sequence,
-                    capturedAt));
+            var videoFrame = new MediaVideoFrame(
+                managedCopy,
+                width,
+                height,
+                rowBytes,
+                MediaPixelFormat.Bgra32,
+                sequence,
+                capturedAt);
+            for (var i = 0; i < subscribers.Length; i++)
+            {
+                subscribers[i](this, videoFrame);
+            }
         }
     }
 

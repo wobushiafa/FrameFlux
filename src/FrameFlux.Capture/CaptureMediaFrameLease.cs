@@ -1,11 +1,19 @@
 namespace FrameFlux.Capture;
 
+internal interface ICaptureD3D11SliceReleaser
+{
+    void ReleaseSlice(bool isNv12, int sliceIndex, IntPtr texturePtr);
+}
+
 /// <summary>
 /// Reference-counted frame lease supporting CPU memory and D3D11 textures.
 /// </summary>
 internal sealed class CaptureMediaFrameLease : IMediaFrameLease
 {
-    private readonly Action<CaptureMediaFrameLease>? _releaseAction;
+    private readonly CaptureFrameBufferPool? _cpuPool;
+    private readonly ICaptureD3D11SliceReleaser? _d3d11Releaser;
+    private readonly Action? _releaseCallback;
+    private readonly bool _isNv12;
     private int _remainingReferences = 1;
 
     private CaptureMediaFrameLease(
@@ -18,7 +26,10 @@ internal sealed class CaptureMediaFrameLease : IMediaFrameLease
         int stride,
         IntPtr d3d11Texture,
         int d3d11ArraySlice,
-        Action<CaptureMediaFrameLease>? releaseAction)
+        CaptureFrameBufferPool? cpuPool,
+        ICaptureD3D11SliceReleaser? d3d11Releaser,
+        bool isNv12,
+        Action? releaseCallback)
     {
         Width = width;
         Height = height;
@@ -29,7 +40,10 @@ internal sealed class CaptureMediaFrameLease : IMediaFrameLease
         Stride = stride;
         D3D11Texture = d3d11Texture;
         D3D11ArraySlice = d3d11ArraySlice;
-        _releaseAction = releaseAction;
+        _cpuPool = cpuPool;
+        _d3d11Releaser = d3d11Releaser;
+        _isNv12 = isNv12;
+        _releaseCallback = releaseCallback;
     }
 
     internal static CaptureMediaFrameLease CreateBgraCpu(
@@ -50,7 +64,35 @@ internal sealed class CaptureMediaFrameLease : IMediaFrameLease
             stride,
             IntPtr.Zero,
             0,
-            lease => pool.Return(lease.Buffer, lease.Size));
+            pool,
+            d3d11Releaser: null,
+            isNv12: false,
+            releaseCallback: null);
+    }
+
+    internal static CaptureMediaFrameLease CreateD3D11(
+        int width,
+        int height,
+        IntPtr texture,
+        int arraySlice,
+        ICaptureD3D11SliceReleaser releaser,
+        bool isNv12,
+        MediaPixelFormat pixelFormat = MediaPixelFormat.Bgra32)
+    {
+        return new CaptureMediaFrameLease(
+            width,
+            height,
+            MediaFrameStorageKind.D3D11Texture,
+            pixelFormat,
+            IntPtr.Zero,
+            0,
+            0,
+            texture,
+            arraySlice,
+            cpuPool: null,
+            d3d11Releaser: releaser,
+            isNv12: isNv12,
+            releaseCallback: null);
     }
 
     internal static CaptureMediaFrameLease CreateD3D11(
@@ -71,7 +113,10 @@ internal sealed class CaptureMediaFrameLease : IMediaFrameLease
             0,
             texture,
             arraySlice,
-            _ => releaseCallback?.Invoke());
+            cpuPool: null,
+            d3d11Releaser: null,
+            isNv12: false,
+            releaseCallback: releaseCallback);
     }
 
     public int Width { get; }
@@ -156,7 +201,18 @@ internal sealed class CaptureMediaFrameLease : IMediaFrameLease
         var remaining = Interlocked.Decrement(ref _remainingReferences);
         if (remaining == 0)
         {
-            _releaseAction?.Invoke(this);
+            if (_cpuPool is not null)
+            {
+                _cpuPool.Return(Buffer, Size);
+            }
+            else if (_d3d11Releaser is not null)
+            {
+                _d3d11Releaser.ReleaseSlice(_isNv12, D3D11ArraySlice, D3D11Texture);
+            }
+            else
+            {
+                _releaseCallback?.Invoke();
+            }
         }
         else if (remaining < 0)
         {

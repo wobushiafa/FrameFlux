@@ -12,9 +12,10 @@ namespace FrameFlux.Capture;
 /// Supports GPU-to-GPU copies from Media Foundation DXGI samples, direct NV12 uploads (2.67x less
 /// PCIe bandwidth than BGRA), and BGRA fallback uploads.
 /// </summary>
-internal sealed unsafe class WindowsCaptureD3D11TexturePool : IDisposable
+internal sealed unsafe class WindowsCaptureD3D11TexturePool : IDisposable, ICaptureD3D11SliceReleaser
 {
     private const int SliceCount = 16;
+    private const int Nv12StagingRingCount = 3;
 
     private readonly object _sync = new();
     private ID3D11Device? _device;
@@ -30,7 +31,8 @@ internal sealed unsafe class WindowsCaptureD3D11TexturePool : IDisposable
     private int _nextBgraSlice;
 
     private ID3D11Texture2D? _nv12TextureArray;
-    private ID3D11Texture2D? _nv12StagingTexture;
+    private ID3D11Texture2D[]? _nv12StagingTextures;
+    private int _nextNv12Staging;
     private IntPtr _currentNv12TexturePtr;
     private readonly bool[] _nv12SliceInUse = new bool[SliceCount];
     private int _nv12Width;
@@ -194,7 +196,8 @@ internal sealed unsafe class WindowsCaptureD3D11TexturePool : IDisposable
                     height,
                     destPtr,
                     sliceIndex,
-                    () => ReleaseSlice(isNv12, sliceIndex, destPtr),
+                    this,
+                    isNv12,
                     isNv12 ? MediaPixelFormat.Nv12 : MediaPixelFormat.Bgra32);
                 return true;
             }
@@ -233,6 +236,13 @@ internal sealed unsafe class WindowsCaptureD3D11TexturePool : IDisposable
             return false;
         }
 
+        ID3D11DeviceContext? context;
+        ID3D11Multithread? multithread;
+        ID3D11Texture2D? texture;
+        ID3D11Texture2D? staging;
+        IntPtr texturePtr;
+        int sliceIndex;
+
         lock (_sync)
         {
             if (_disposed)
@@ -255,79 +265,100 @@ internal sealed unsafe class WindowsCaptureD3D11TexturePool : IDisposable
                 return false;
             }
 
-            var sliceIndex = FindAvailableSlice(_nv12SliceInUse, ref _nextNv12Slice);
+            sliceIndex = FindAvailableSlice(_nv12SliceInUse, ref _nextNv12Slice);
             if (sliceIndex < 0 ||
                 _nv12TextureArray is null ||
-                _nv12StagingTexture is null ||
+                _nv12StagingTextures is null ||
                 _context is null)
             {
                 return false;
             }
 
             _nv12SliceInUse[sliceIndex] = true;
-            var texture = _nv12TextureArray;
-            var staging = _nv12StagingTexture;
-            var texturePtr = _currentNv12TexturePtr;
+            texture = _nv12TextureArray;
+            texturePtr = _currentNv12TexturePtr;
+            staging = _nv12StagingTextures[_nextNv12Staging];
+            _nextNv12Staging = (_nextNv12Staging + 1) % Nv12StagingRingCount;
+            context = _context;
+            multithread = _multithread;
+            Marshal.AddRef(texturePtr);
+        }
+
+        try
+        {
+            var subresource = checked((uint)sliceIndex);
+            var uvHeight = height >> 1;
+            multithread?.Enter();
             try
             {
-                var subresource = checked((uint)sliceIndex);
-                var uvHeight = height >> 1;
-                _multithread?.Enter();
+                var mapped = context.Map(staging, 0, MapMode.Write);
                 try
                 {
-                    var mapped = _context.Map(staging, 0, MapMode.Write);
-                    try
+                    var dst = (byte*)mapped.DataPointer;
+                    var dstPitch = (long)mapped.RowPitch;
+                    var ySrc = (byte*)yPlane;
+                    if (yStride == dstPitch && yStride > 0)
                     {
-                        var dst = (byte*)mapped.DataPointer;
-                        var dstPitch = (long)mapped.RowPitch;
-                        var ySrc = (byte*)yPlane;
+                        var yBytes = checked(dstPitch * height);
+                        Buffer.MemoryCopy(ySrc, dst, yBytes, yBytes);
+                    }
+                    else
+                    {
                         for (var y = 0; y < height; y++)
                         {
                             Buffer.MemoryCopy(ySrc + ((long)y * yStride), dst + (y * dstPitch), width, width);
                         }
+                    }
 
-                        var uvDst = dst + (height * dstPitch);
-                        var uvSrc = (byte*)uvPlane;
+                    var uvDst = dst + (height * dstPitch);
+                    var uvSrc = (byte*)uvPlane;
+                    if (uvStride == dstPitch && uvStride > 0)
+                    {
+                        var uvBytes = checked(dstPitch * uvHeight);
+                        Buffer.MemoryCopy(uvSrc, uvDst, uvBytes, uvBytes);
+                    }
+                    else
+                    {
                         for (var y = 0; y < uvHeight; y++)
                         {
                             Buffer.MemoryCopy(uvSrc + ((long)y * uvStride), uvDst + (y * dstPitch), width, width);
                         }
                     }
-                    finally
-                    {
-                        _context.Unmap(staging, 0);
-                    }
-
-                    _context.CopySubresourceRegion(
-                        texture,
-                        subresource,
-                        0,
-                        0,
-                        0,
-                        staging,
-                        0);
-                    _context.Flush();
                 }
                 finally
                 {
-                    _multithread?.Leave();
+                    context.Unmap(staging, 0);
                 }
 
-                Marshal.AddRef(texturePtr);
-                lease = CaptureMediaFrameLease.CreateD3D11(
-                    width,
-                    height,
-                    texturePtr,
-                    sliceIndex,
-                    () => ReleaseSlice(isNv12: true, sliceIndex, texturePtr),
-                    MediaPixelFormat.Nv12);
-                return true;
+                context.CopySubresourceRegion(
+                    texture,
+                    subresource,
+                    0,
+                    0,
+                    0,
+                    staging,
+                    0);
+                context.Flush();
             }
-            catch
+            finally
             {
-                _nv12SliceInUse[sliceIndex] = false;
-                return false;
+                multithread?.Leave();
             }
+
+            lease = CaptureMediaFrameLease.CreateD3D11(
+                width,
+                height,
+                texturePtr,
+                sliceIndex,
+                this,
+                isNv12: true,
+                MediaPixelFormat.Nv12);
+            return true;
+        }
+        catch
+        {
+            ReleaseSlice(isNv12: true, sliceIndex, texturePtr);
+            return false;
         }
     }
 
@@ -397,7 +428,8 @@ internal sealed unsafe class WindowsCaptureD3D11TexturePool : IDisposable
                     height,
                     texturePtr,
                     sliceIndex,
-                    () => ReleaseSlice(isNv12: false, sliceIndex, texturePtr),
+                    this,
+                    isNv12: false,
                     MediaPixelFormat.Bgra32);
                 return true;
             }
@@ -409,7 +441,7 @@ internal sealed unsafe class WindowsCaptureD3D11TexturePool : IDisposable
         }
     }
 
-    private void ReleaseSlice(bool isNv12, int sliceIndex, IntPtr texturePtr)
+    public void ReleaseSlice(bool isNv12, int sliceIndex, IntPtr texturePtr)
     {
         Marshal.Release(texturePtr);
         lock (_sync)
@@ -514,7 +546,7 @@ internal sealed unsafe class WindowsCaptureD3D11TexturePool : IDisposable
         if (_nv12Width == width &&
             _nv12Height == height &&
             _nv12TextureArray is not null &&
-            _nv12StagingTexture is not null)
+            _nv12StagingTextures is not null)
         {
             return;
         }
@@ -561,7 +593,28 @@ internal sealed unsafe class WindowsCaptureD3D11TexturePool : IDisposable
             _nv12TextureArray = _device!.CreateTexture2D(desc);
         }
 
-        _nv12StagingTexture = _device.CreateTexture2D(stagingDesc);
+        var ring = new ID3D11Texture2D[Nv12StagingRingCount];
+        try
+        {
+            for (var i = 0; i < Nv12StagingRingCount; i++)
+            {
+                ring[i] = _device.CreateTexture2D(stagingDesc);
+            }
+        }
+        catch
+        {
+            for (var i = 0; i < ring.Length; i++)
+            {
+                ring[i]?.Dispose();
+            }
+
+            _nv12TextureArray.Dispose();
+            _nv12TextureArray = null;
+            throw;
+        }
+
+        _nv12StagingTextures = ring;
+        _nextNv12Staging = 0;
         _currentNv12TexturePtr = _nv12TextureArray.NativePointer;
         Array.Clear(_nv12SliceInUse);
         _nextNv12Slice = 0;
@@ -578,8 +631,16 @@ internal sealed unsafe class WindowsCaptureD3D11TexturePool : IDisposable
     private void DisposeNv12Textures()
     {
         _currentNv12TexturePtr = IntPtr.Zero;
-        _nv12StagingTexture?.Dispose();
-        _nv12StagingTexture = null;
+        if (_nv12StagingTextures is not null)
+        {
+            for (var i = 0; i < _nv12StagingTextures.Length; i++)
+            {
+                _nv12StagingTextures[i]?.Dispose();
+            }
+
+            _nv12StagingTextures = null;
+        }
+
         _nv12TextureArray?.Dispose();
         _nv12TextureArray = null;
         Array.Clear(_nv12SliceInUse);

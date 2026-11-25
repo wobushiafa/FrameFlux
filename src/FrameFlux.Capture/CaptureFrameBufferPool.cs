@@ -40,16 +40,11 @@ internal sealed class CaptureFrameBufferPool : IDisposable
             {
                 _retainedBufferCount--;
                 _retainedBytes -= requiredSize;
-                if (buffers.Count == 0)
-                {
-                    _buffersBySize.Remove(requiredSize);
-                }
-
                 return buffer;
             }
         }
 
-        return Marshal.AllocHGlobal(requiredSize);
+        return AllocateNative(requiredSize);
     }
 
     internal void Return(IntPtr buffer, int size)
@@ -62,12 +57,13 @@ internal sealed class CaptureFrameBufferPool : IDisposable
         var release = false;
         lock (_sync)
         {
+            var effectiveMaxBytes = Math.Max(_maximumRetainedBytes, (long)size * 2);
             if (_disposed ||
                 !_acceptingReturns ||
                 _retainedBufferCount >= _maximumBufferCount ||
                 size <= 0 ||
-                size > _maximumRetainedBytes ||
-                _retainedBytes > _maximumRetainedBytes - size)
+                size > effectiveMaxBytes ||
+                _retainedBytes > effectiveMaxBytes - size)
             {
                 release = true;
             }
@@ -75,6 +71,11 @@ internal sealed class CaptureFrameBufferPool : IDisposable
             {
                 if (!_buffersBySize.TryGetValue(size, out var buffers))
                 {
+                    if (_buffersBySize.Count >= 8)
+                    {
+                        PruneEmptyBucketsLocked();
+                    }
+
                     buffers = new Stack<IntPtr>();
                     _buffersBySize.Add(size, buffers);
                 }
@@ -87,8 +88,47 @@ internal sealed class CaptureFrameBufferPool : IDisposable
 
         if (release)
         {
-            Marshal.FreeHGlobal(buffer);
+            FreeNative(buffer);
         }
+    }
+
+    private void PruneEmptyBucketsLocked()
+    {
+        List<int>? emptyKeys = null;
+        foreach (var entry in _buffersBySize)
+        {
+            if (entry.Value.Count == 0)
+            {
+                emptyKeys ??= [];
+                emptyKeys.Add(entry.Key);
+            }
+        }
+
+        if (emptyKeys is not null)
+        {
+            foreach (var key in emptyKeys)
+            {
+                _buffersBySize.Remove(key);
+            }
+        }
+    }
+
+    private static unsafe IntPtr AllocateNative(int size)
+    {
+#if NET8_0_OR_GREATER
+        return (IntPtr)NativeMemory.AlignedAlloc(checked((nuint)size), 64);
+#else
+        return Marshal.AllocHGlobal(size);
+#endif
+    }
+
+    private static unsafe void FreeNative(IntPtr buffer)
+    {
+#if NET8_0_OR_GREATER
+        NativeMemory.AlignedFree((void*)buffer);
+#else
+        Marshal.FreeHGlobal(buffer);
+#endif
     }
 
     internal void StopAcceptingReturns() => ReleaseRetainedBuffers(dispose: false);
@@ -129,7 +169,7 @@ internal sealed class CaptureFrameBufferPool : IDisposable
 
         foreach (var buffer in buffers)
         {
-            Marshal.FreeHGlobal(buffer);
+            FreeNative(buffer);
         }
     }
 }

@@ -36,7 +36,7 @@ internal sealed record CaptureOpenResult(
     string DiagnosticsDescription,
     bool IsHardwareVideoActive = false);
 
-internal sealed record CaptureDeliveredFrame(
+internal readonly record struct CaptureDeliveredFrame(
     CaptureMediaFrameLease? D3D11Lease,
     CaptureMediaFrameLease? CpuLease,
     int Width,
