@@ -30,13 +30,20 @@ internal sealed class LinuxOpenGlMediaOutput :
     private const int GlTextureWrapS = 0x2802;
     private const int GlTextureWrapT = 0x2803;
     private const int GlTriangles = 0x0004;
+    private const int GlUnpackRowLength = 0x0CF2;
     private const int GlUnsignedByte = 0x1401;
     private const int GlVertexShader = 0x8B31;
     private const int GlClampToEdge = 0x812F;
 
     private readonly LatestMediaFrameSlot _frameSlot = new();
     private readonly MediaPresentationFailureTracker _failureTracker = new();
+    private readonly Action _requestNextFrameRendering;
+    private readonly Action _notifyFramePresented;
+    private readonly float[] _vertices = new float[24];
+    private TopLevel? _topLevel;
+    private double _renderScaling = 1d;
     private TexSubImage2DDelegate? _texSubImage2D;
+    private PixelStoreiDelegate? _pixelStorei;
     private byte[]? _stagingBuffer;
     private Stretch _stretch = Stretch.Uniform;
     private int _program;
@@ -47,18 +54,31 @@ internal sealed class LinuxOpenGlMediaOutput :
     private int _vertexBuffer;
     private int _vertexArray;
     private int _texture;
+    private int _uTextureLocation = -1;
+    private int _uSwapRedBlueLocation = -1;
+    private int _uTextureYLocation = -1;
+    private int _uTextureUvLocation = -1;
     private int _textureWidth;
     private int _textureHeight;
     private int _sourceWidth;
     private int _sourceHeight;
+    private int _cachedSourceWidth;
+    private int _cachedSourceHeight;
+    private int _cachedTargetWidth;
+    private int _cachedTargetHeight;
+    private Stretch _cachedStretch;
+    private bool _verticesUploaded;
     private bool _isOpenGlEs;
     private bool _hasTexture;
     private bool _hasDmaBufTexture;
     private bool _clearRequested;
+    private bool _presentationNotified;
     private bool _disposed;
 
     internal LinuxOpenGlMediaOutput()
     {
+        _requestNextFrameRendering = RequestNextFrameRendering;
+        _notifyFramePresented = () => FramePresented?.Invoke(this, EventArgs.Empty);
         ClipToBounds = true;
         IsHitTestVisible = false;
     }
@@ -119,8 +139,9 @@ internal sealed class LinuxOpenGlMediaOutput :
 
     public void Clear()
     {
-        _frameSlot.Clear();
+        _frameSlot.ReleasePendingFrame();
         _failureTracker.Reset();
+        _presentationNotified = false;
         _clearRequested = true;
         RequestRender();
     }
@@ -184,6 +205,12 @@ internal sealed class LinuxOpenGlMediaOutput :
                     $"Unable to link the Linux DMA-BUF shader: {dmaBufLinkError}");
             }
 
+            _uTextureLocation = gl.GetUniformLocationString(_program, "uTexture");
+            _uSwapRedBlueLocation = gl.GetUniformLocationString(_program, "uSwapRedBlue");
+            _uTextureYLocation = gl.GetUniformLocationString(_dmaBufProgram, "uTextureY");
+            _uTextureUvLocation = gl.GetUniformLocationString(_dmaBufProgram, "uTextureUv");
+            _verticesUploaded = false;
+
             _vertexArray = gl.IsGenVertexArraysAvailable ? gl.GenVertexArray() : 0;
             if (_vertexArray != 0)
             {
@@ -218,11 +245,56 @@ internal sealed class LinuxOpenGlMediaOutput :
             }
             _texSubImage2D = Marshal.GetDelegateForFunctionPointer<TexSubImage2DDelegate>(
                 texSubImageAddress);
+            var pixelStoreAddress = gl.GetProcAddress("glPixelStorei");
+            if (pixelStoreAddress != IntPtr.Zero)
+            {
+                _pixelStorei = Marshal.GetDelegateForFunctionPointer<PixelStoreiDelegate>(
+                    pixelStoreAddress);
+            }
         }
         catch (Exception exception)
         {
             ReportFailure(exception);
             throw;
+        }
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        DetachTopLevel();
+        _topLevel = TopLevel.GetTopLevel(this);
+        if (_topLevel is not null)
+        {
+            _renderScaling = _topLevel.RenderScaling;
+            _topLevel.ScalingChanged += OnTopLevelScalingChanged;
+        }
+        else
+        {
+            _renderScaling = 1d;
+        }
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        DetachTopLevel();
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    private void DetachTopLevel()
+    {
+        if (_topLevel is not null)
+        {
+            _topLevel.ScalingChanged -= OnTopLevelScalingChanged;
+            _topLevel = null;
+        }
+    }
+
+    private void OnTopLevelScalingChanged(object? sender, EventArgs e)
+    {
+        if (_topLevel is not null)
+        {
+            _renderScaling = _topLevel.RenderScaling;
         }
     }
 
@@ -232,7 +304,7 @@ internal sealed class LinuxOpenGlMediaOutput :
         try
         {
             gl.BindFramebuffer(GlFramebuffer, framebuffer);
-            var scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1d;
+            var scaling = _renderScaling;
             var targetWidth = Math.Max(1, (int)Math.Ceiling(Bounds.Width * scaling));
             var targetHeight = Math.Max(1, (int)Math.Ceiling(Bounds.Height * scaling));
             gl.Viewport(0, 0, targetWidth, targetHeight);
@@ -254,7 +326,7 @@ internal sealed class LinuxOpenGlMediaOutput :
                 _sourceHeight = 0;
             }
 
-            frame = _frameSlot.Take();
+            frame = _frameSlot.TakeForPresentation();
             if (frame is not null)
             {
                 if (frame.StorageKind == MediaFrameStorageKind.DmaBuf)
@@ -287,21 +359,27 @@ internal sealed class LinuxOpenGlMediaOutput :
             DrawTexture(gl, targetWidth, targetHeight);
             gl.Flush();
             _failureTracker.ReportSuccess();
-            if (frame is not null)
+            if (frame is not null && !_presentationNotified)
             {
+                _presentationNotified = true;
                 Dispatcher.UIThread.Post(
-                    () => FramePresented?.Invoke(this, EventArgs.Empty),
+                    _notifyFramePresented,
                     DispatcherPriority.Render);
             }
         }
         catch (Exception exception)
         {
             _hasTexture = false;
+            _presentationNotified = false;
             ReportFailure(exception);
         }
         finally
         {
             frame?.Dispose();
+            if (_frameSlot.CompletePresentation())
+            {
+                RequestRender();
+            }
         }
     }
 
@@ -356,6 +434,20 @@ internal sealed class LinuxOpenGlMediaOutput :
         if (source.Plane0Stride == rowBytes)
         {
             UploadPixels(gl, frame.Width, frame.Height, externalFormat, source.Plane0);
+            return;
+        }
+
+        if (_pixelStorei is not null && (source.Plane0Stride & 3) == 0)
+        {
+            _pixelStorei(GlUnpackRowLength, source.Plane0Stride >> 2);
+            try
+            {
+                UploadPixels(gl, frame.Width, frame.Height, externalFormat, source.Plane0);
+            }
+            finally
+            {
+                _pixelStorei(GlUnpackRowLength, 0);
+            }
             return;
         }
 
@@ -423,30 +515,22 @@ internal sealed class LinuxOpenGlMediaOutput :
         int targetWidth,
         int targetHeight)
     {
-        var vertices = BuildVertices(
-            _sourceWidth,
-            _sourceHeight,
-            targetWidth,
-            targetHeight,
-            _stretch);
         gl.Disable(GlDepthTest);
         var program = _hasDmaBufTexture ? _dmaBufProgram : _program;
         gl.UseProgram(program);
         gl.ActiveTexture(GlTexture0);
         if (_hasDmaBufTexture)
         {
-            gl.Uniform1i(gl.GetUniformLocationString(program, "uTextureY"), 0);
+            gl.Uniform1i(_uTextureYLocation, 0);
             gl.BindTexture(GlTexture2D, _dmaBufInterop!.TextureY);
             gl.ActiveTexture(GlTexture0 + 1);
-            gl.Uniform1i(gl.GetUniformLocationString(program, "uTextureUv"), 1);
+            gl.Uniform1i(_uTextureUvLocation, 1);
             gl.BindTexture(GlTexture2D, _dmaBufInterop.TextureUv);
         }
         else
         {
-            gl.Uniform1i(gl.GetUniformLocationString(program, "uTexture"), 0);
-            gl.Uniform1i(
-                gl.GetUniformLocationString(program, "uSwapRedBlue"),
-                _isOpenGlEs ? 1 : 0);
+            gl.Uniform1i(_uTextureLocation, 0);
+            gl.Uniform1i(_uSwapRedBlueLocation, _isOpenGlEs ? 1 : 0);
             gl.BindTexture(GlTexture2D, _texture);
         }
         if (_vertexArray != 0)
@@ -454,13 +538,34 @@ internal sealed class LinuxOpenGlMediaOutput :
             gl.BindVertexArray(_vertexArray);
         }
         gl.BindBuffer(GlArrayBuffer, _vertexBuffer);
-        fixed (float* vertexPointer = vertices)
+        if (!_verticesUploaded ||
+            _cachedSourceWidth != _sourceWidth ||
+            _cachedSourceHeight != _sourceHeight ||
+            _cachedTargetWidth != targetWidth ||
+            _cachedTargetHeight != targetHeight ||
+            _cachedStretch != _stretch)
         {
-            gl.BufferData(
-                GlArrayBuffer,
-                (IntPtr)(vertices.Length * sizeof(float)),
-                (IntPtr)vertexPointer,
-                GlDynamicDraw);
+            FillVertices(
+                _vertices,
+                _sourceWidth,
+                _sourceHeight,
+                targetWidth,
+                targetHeight,
+                _stretch);
+            fixed (float* vertexPointer = _vertices)
+            {
+                gl.BufferData(
+                    GlArrayBuffer,
+                    (IntPtr)(_vertices.Length * sizeof(float)),
+                    (IntPtr)vertexPointer,
+                    GlDynamicDraw);
+            }
+            _cachedSourceWidth = _sourceWidth;
+            _cachedSourceHeight = _sourceHeight;
+            _cachedTargetWidth = targetWidth;
+            _cachedTargetHeight = targetHeight;
+            _cachedStretch = _stretch;
+            _verticesUploaded = true;
         }
         gl.VertexAttribPointer(0, 2, GlFloat, 0, sizeof(float) * 4, IntPtr.Zero);
         gl.EnableVertexAttribArray(0);
@@ -476,6 +581,19 @@ internal sealed class LinuxOpenGlMediaOutput :
     }
 
     internal static float[] BuildVertices(
+        int sourceWidth,
+        int sourceHeight,
+        int targetWidth,
+        int targetHeight,
+        Stretch stretch)
+    {
+        var vertices = new float[24];
+        FillVertices(vertices, sourceWidth, sourceHeight, targetWidth, targetHeight, stretch);
+        return vertices;
+    }
+
+    internal static void FillVertices(
+        Span<float> destination,
         int sourceWidth,
         int sourceHeight,
         int targetWidth,
@@ -527,15 +645,17 @@ internal sealed class LinuxOpenGlMediaOutput :
         var right = (float)positionScaleX;
         var bottom = (float)-positionScaleY;
         var top = (float)positionScaleY;
-        return
-        [
-            left, top, (float)u0, (float)v0,
-            left, bottom, (float)u0, (float)v1,
-            right, bottom, (float)u1, (float)v1,
-            left, top, (float)u0, (float)v0,
-            right, bottom, (float)u1, (float)v1,
-            right, top, (float)u1, (float)v0
-        ];
+        var fu0 = (float)u0;
+        var fu1 = (float)u1;
+        var fv0 = (float)v0;
+        var fv1 = (float)v1;
+
+        destination[0] = left; destination[1] = top; destination[2] = fu0; destination[3] = fv0;
+        destination[4] = left; destination[5] = bottom; destination[6] = fu0; destination[7] = fv1;
+        destination[8] = right; destination[9] = bottom; destination[10] = fu1; destination[11] = fv1;
+        destination[12] = left; destination[13] = top; destination[14] = fu0; destination[15] = fv0;
+        destination[16] = right; destination[17] = bottom; destination[18] = fu1; destination[19] = fv1;
+        destination[20] = right; destination[21] = top; destination[22] = fu1; destination[23] = fv0;
     }
 
     private void ReleaseOpenGlResources(GlInterface gl)
@@ -584,6 +704,12 @@ internal sealed class LinuxOpenGlMediaOutput :
         _dmaBufInterop = null;
         _dmaBufGl = null;
         _texSubImage2D = null;
+        _pixelStorei = null;
+        _uTextureLocation = -1;
+        _uSwapRedBlueLocation = -1;
+        _uTextureYLocation = -1;
+        _uTextureUvLocation = -1;
+        _verticesUploaded = false;
         _textureWidth = 0;
         _textureHeight = 0;
         _hasTexture = false;
@@ -600,7 +726,7 @@ internal sealed class LinuxOpenGlMediaOutput :
         try
         {
             Dispatcher.UIThread.Post(
-                RequestNextFrameRendering,
+                _requestNextFrameRendering,
                 DispatcherPriority.Render);
         }
         catch
@@ -672,4 +798,7 @@ internal sealed class LinuxOpenGlMediaOutput :
         int format,
         int type,
         IntPtr pixels);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void PixelStoreiDelegate(int pname, int param);
 }

@@ -9,9 +9,16 @@ namespace FrameFlux.Wpf;
 internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoOutput, IDisposable
 {
     private readonly LatestMediaFrameSlot _frameSlot = new();
+    private readonly Action _renderPendingFrame;
     private WriteableBitmap? _bitmap;
     private Stretch _stretch = Stretch.Uniform;
+    private bool _presentationNotified;
     private bool _disposed;
+
+    internal SoftwareBitmapMediaOutput()
+    {
+        _renderPendingFrame = RenderPendingFrame;
+    }
 
     public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.CpuMemory;
 
@@ -48,16 +55,7 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
 
         if (schedulePresentation)
         {
-            try
-            {
-                Dispatcher.BeginInvoke(
-                    DispatcherPriority.Render,
-                    new Action(RenderPendingFrame));
-            }
-            catch
-            {
-                ClearPendingFrame();
-            }
+            SchedulePresentation();
         }
 
         return true;
@@ -66,6 +64,7 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
     internal void Clear()
     {
         _frameSlot.ReleasePendingFrame();
+        _presentationNotified = false;
         _bitmap = null;
         InvalidateVisual();
     }
@@ -99,12 +98,30 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
                 _stretch));
     }
 
+    private void SchedulePresentation()
+    {
+        try
+        {
+            Dispatcher.BeginInvoke(
+                DispatcherPriority.Render,
+                _renderPendingFrame);
+        }
+        catch
+        {
+            ClearPendingFrame();
+        }
+    }
+
     private void RenderPendingFrame()
     {
-        var frame = _frameSlot.Take();
+        var frame = _frameSlot.TakeForPresentation();
 
         if (frame is null)
         {
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
             return;
         }
 
@@ -113,7 +130,11 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
             if (!_disposed && frame.TryGetCpuBuffer(out var source))
             {
                 RenderFrame(frame.Width, frame.Height, source);
-                FramePresented?.Invoke(this, EventArgs.Empty);
+                if (!_presentationNotified)
+                {
+                    _presentationNotified = true;
+                    FramePresented?.Invoke(this, EventArgs.Empty);
+                }
             }
         }
         catch (Exception exception)
@@ -125,6 +146,10 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
         finally
         {
             frame.Dispose();
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
         }
     }
 
@@ -133,6 +158,7 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
         int height,
         MediaCpuFrameBuffer frame)
     {
+        var createdNewBitmap = false;
         if (_bitmap is null ||
             _bitmap.PixelWidth != width ||
             _bitmap.PixelHeight != height)
@@ -144,6 +170,7 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
                 96,
                 PixelFormats.Bgra32,
                 null);
+            createdNewBitmap = true;
         }
 
         if (frame.Plane0 == IntPtr.Zero || frame.Plane0Stride <= 0)
@@ -162,15 +189,26 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
         _bitmap.Lock();
         try
         {
-            for (var row = 0; row < height; row++)
+            var dstStride = _bitmap.BackBufferStride;
+            var dstPtr = (byte*)_bitmap.BackBuffer;
+            var srcPtr = (byte*)frame.Plane0;
+            if (frame.Plane0Stride == dstStride && rowBytes == dstStride)
             {
-                new ReadOnlySpan<byte>(
-                    (byte*)frame.Plane0 + row * frame.Plane0Stride,
-                    rowBytes).CopyTo(
-                    new Span<byte>(
-                        (byte*)_bitmap.BackBuffer + row * _bitmap.BackBufferStride,
-                        rowBytes));
+                var totalBytes = (long)dstStride * height;
+                Buffer.MemoryCopy(srcPtr, dstPtr, totalBytes, totalBytes);
             }
+            else
+            {
+                for (var row = 0; row < height; row++)
+                {
+                    Buffer.MemoryCopy(
+                        srcPtr + (nint)row * frame.Plane0Stride,
+                        dstPtr + (nint)row * dstStride,
+                        rowBytes,
+                        rowBytes);
+                }
+            }
+
             _bitmap.AddDirtyRect(new Int32Rect(0, 0, width, height));
         }
         finally
@@ -178,7 +216,10 @@ internal sealed class SoftwareBitmapMediaOutput : FrameworkElement, IMediaVideoO
             _bitmap.Unlock();
         }
 
-        InvalidateVisual();
+        if (createdNewBitmap)
+        {
+            InvalidateVisual();
+        }
     }
 
     private void ClearPendingFrame()

@@ -1,4 +1,5 @@
 #if !ANDROID
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Platform;
@@ -15,8 +16,17 @@ internal sealed class WindowsD3D11MediaOutput :
     private readonly LatestMediaFrameSlot _frameSlot = new();
     private readonly WindowsD3D11Presenter _presenter = new();
     private readonly MediaPresentationFailureTracker _failureTracker = new();
+    private readonly Action _presentPendingFrame;
+    private TopLevel? _topLevel;
+    private double _renderScaling = 1d;
     private Stretch _stretch = Stretch.Uniform;
+    private bool _presentationNotified;
     private bool _disposed;
+
+    internal WindowsD3D11MediaOutput()
+    {
+        _presentPendingFrame = PresentPendingFrame;
+    }
 
     public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.D3D11Texture;
 
@@ -50,16 +60,7 @@ internal sealed class WindowsD3D11MediaOutput :
 
         if (schedulePresentation)
         {
-            try
-            {
-                global::Avalonia.Threading.Dispatcher.UIThread.Post(
-                    PresentPendingFrame,
-                    global::Avalonia.Threading.DispatcherPriority.Render);
-            }
-            catch
-            {
-                Clear();
-            }
+            SchedulePresentation();
         }
 
         return true;
@@ -73,6 +74,7 @@ internal sealed class WindowsD3D11MediaOutput :
 
     protected override void DestroyNativeControlCore(IPlatformHandle control)
     {
+        _presentationNotified = false;
         _presenter.DestroyWindow();
         base.DestroyNativeControlCore(control);
     }
@@ -97,8 +99,9 @@ internal sealed class WindowsD3D11MediaOutput :
 
     public void Clear()
     {
-        _frameSlot.Clear();
+        _frameSlot.ReleasePendingFrame();
         _failureTracker.Reset();
+        _presentationNotified = false;
         _presenter.Reset();
     }
 
@@ -108,12 +111,69 @@ internal sealed class WindowsD3D11MediaOutput :
         return ValueTask.CompletedTask;
     }
 
+    private void SchedulePresentation()
+    {
+        try
+        {
+            global::Avalonia.Threading.Dispatcher.UIThread.Post(
+                _presentPendingFrame,
+                global::Avalonia.Threading.DispatcherPriority.Render);
+        }
+        catch
+        {
+            Clear();
+        }
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        DetachTopLevel();
+        _topLevel = TopLevel.GetTopLevel(this);
+        if (_topLevel is not null)
+        {
+            _renderScaling = _topLevel.RenderScaling;
+            _topLevel.ScalingChanged += OnTopLevelScalingChanged;
+        }
+        else
+        {
+            _renderScaling = 1d;
+        }
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        DetachTopLevel();
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    private void DetachTopLevel()
+    {
+        if (_topLevel is not null)
+        {
+            _topLevel.ScalingChanged -= OnTopLevelScalingChanged;
+            _topLevel = null;
+        }
+    }
+
+    private void OnTopLevelScalingChanged(object? sender, EventArgs e)
+    {
+        if (_topLevel is not null)
+        {
+            _renderScaling = _topLevel.RenderScaling;
+        }
+    }
+
     private void PresentPendingFrame()
     {
-        var frame = _frameSlot.Take();
+        var frame = _frameSlot.TakeForPresentation();
 
         if (frame is null)
         {
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
             return;
         }
 
@@ -124,7 +184,7 @@ internal sealed class WindowsD3D11MediaOutput :
                 return;
             }
 
-            var scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1d;
+            var scaling = _renderScaling;
             _presenter.Present(
                 frame.Width,
                 frame.Height,
@@ -133,7 +193,11 @@ internal sealed class WindowsD3D11MediaOutput :
                 (int)Math.Ceiling(Bounds.Height * scaling),
                 ToMediaStretchMode(_stretch));
             _failureTracker.ReportSuccess();
-            FramePresented?.Invoke(this, EventArgs.Empty);
+            if (!_presentationNotified)
+            {
+                _presentationNotified = true;
+                FramePresented?.Invoke(this, EventArgs.Empty);
+            }
         }
         catch (Exception exception)
         {
@@ -141,11 +205,16 @@ internal sealed class WindowsD3D11MediaOutput :
                 "Avalonia D3D11 presentation failed: {0}",
                 exception);
             _presenter.Reset();
+            _presentationNotified = false;
             PresentationFailed?.Invoke(this, _failureTracker.Register(exception));
         }
         finally
         {
             frame.Dispose();
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
         }
     }
 

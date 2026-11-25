@@ -119,6 +119,13 @@ internal sealed class MediaPresentationCoordinator : IDisposable
     private void OnSoftwareFramePresented(object? sender, EventArgs args)
     {
         _framePresented();
+        if (_softwareOutput.Visibility == Visibility.Visible &&
+            _compositedOutput.Visibility == Visibility.Collapsed &&
+            _nativePresenter.Visibility == Visibility.Collapsed)
+        {
+            return;
+        }
+
         _compositedOutput.Visibility = Visibility.Collapsed;
         _nativePresenter.Visibility = Visibility.Collapsed;
         _softwareOutput.Visibility = Visibility.Visible;
@@ -144,6 +151,16 @@ internal sealed class MediaPresentationCoordinator : IDisposable
     private void OnNativeFramePresented(object? sender, EventArgs args)
     {
         _framePresented();
+        if (_nativePresenter.Visibility == Visibility.Visible &&
+            _softwareOutput.Visibility == Visibility.Collapsed &&
+            _compositedOutput.Visibility == Visibility.Collapsed)
+        {
+            return;
+        }
+
+        _compositedOutput.Visibility = Visibility.Collapsed;
+        _softwareOutput.Visibility = Visibility.Collapsed;
+        _nativePresenter.Visibility = Visibility.Visible;
         _modeChanged(MediaVideoPresentationMode.NativeSurface);
     }
 

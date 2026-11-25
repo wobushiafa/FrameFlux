@@ -34,6 +34,7 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
     private const int GlTriangles = 0x0004;
     private const int GlVertexShader = 0x8B31;
 
+    private readonly float[] _vertices = new float[24];
     private IntPtr _xDisplay;
     private IntPtr _window;
     private IntPtr _colormap;
@@ -47,6 +48,14 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
     private int _fragmentShader;
     private int _vertexBuffer;
     private int _vertexArray;
+    private int _uTextureYLocation = -1;
+    private int _uTextureUvLocation = -1;
+    private int _cachedSourceWidth;
+    private int _cachedSourceHeight;
+    private int _cachedTargetWidth;
+    private int _cachedTargetHeight;
+    private Stretch _cachedStretch;
+    private bool _verticesUploaded;
     private bool _disposed;
 
     internal IntPtr CreateWindow(IntPtr parent)
@@ -152,29 +161,44 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
         _dmaBufInterop!.Import(sourceWidth, sourceHeight, dmaBuf);
 
         var gl = _gl!;
-        gl.Viewport(0, 0, Math.Max(1, targetWidth), Math.Max(1, targetHeight));
+        var clampedTargetWidth = Math.Max(1, targetWidth);
+        var clampedTargetHeight = Math.Max(1, targetHeight);
+        gl.Viewport(0, 0, clampedTargetWidth, clampedTargetHeight);
         gl.ClearColor(0, 0, 0, 1);
         gl.Clear(GlColorBufferBit);
         gl.UseProgram(_program);
         gl.ActiveTexture(GlTexture0);
         gl.BindTexture(GlTexture2D, _dmaBufInterop.TextureY);
-        gl.Uniform1i(gl.GetUniformLocation(_program, "uTextureY"), 0);
+        gl.Uniform1i(_uTextureYLocation, 0);
         gl.ActiveTexture(GlTexture0 + 1);
         gl.BindTexture(GlTexture2D, _dmaBufInterop.TextureUv);
-        gl.Uniform1i(gl.GetUniformLocation(_program, "uTextureUv"), 1);
+        gl.Uniform1i(_uTextureUvLocation, 1);
 
-        var vertices = LinuxOpenGlMediaOutput.BuildVertices(
-            sourceWidth, sourceHeight, targetWidth, targetHeight, stretch);
         gl.BindVertexArray(_vertexArray);
         gl.BindBuffer(GlArrayBuffer, _vertexBuffer);
-        gl.BufferData(GlArrayBuffer, vertices, GlDynamicDraw);
+        if (!_verticesUploaded ||
+            _cachedSourceWidth != sourceWidth ||
+            _cachedSourceHeight != sourceHeight ||
+            _cachedTargetWidth != clampedTargetWidth ||
+            _cachedTargetHeight != clampedTargetHeight ||
+            _cachedStretch != stretch)
+        {
+            LinuxOpenGlMediaOutput.FillVertices(
+                _vertices, sourceWidth, sourceHeight, clampedTargetWidth, clampedTargetHeight, stretch);
+            gl.BufferData(GlArrayBuffer, _vertices, GlDynamicDraw);
+            _cachedSourceWidth = sourceWidth;
+            _cachedSourceHeight = sourceHeight;
+            _cachedTargetWidth = clampedTargetWidth;
+            _cachedTargetHeight = clampedTargetHeight;
+            _cachedStretch = stretch;
+            _verticesUploaded = true;
+        }
         gl.VertexAttribPointer(0, 2, GlFloat, false, sizeof(float) * 4, IntPtr.Zero);
         gl.EnableVertexAttribArray(0);
         gl.VertexAttribPointer(
             1, 2, GlFloat, false, sizeof(float) * 4, (IntPtr)(sizeof(float) * 2));
         gl.EnableVertexAttribArray(1);
         gl.DrawArrays(GlTriangles, 0, 6);
-        gl.Flush();
         if (EglSwapBuffers(_eglDisplay, _eglSurface) == 0)
         {
             throw new InvalidOperationException(
@@ -355,6 +379,9 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
             throw new InvalidOperationException(
                 $"Unable to link the X11 native video shader: {gl.GetProgramLog(_program)}");
         }
+        _uTextureYLocation = gl.GetUniformLocation(_program, "uTextureY");
+        _uTextureUvLocation = gl.GetUniformLocation(_program, "uTextureUv");
+        _verticesUploaded = false;
         _vertexArray = gl.GenVertexArray();
         _vertexBuffer = gl.GenBuffer();
     }
@@ -371,6 +398,9 @@ internal sealed class LinuxX11EglPresenter : ILinuxDmaBufGlApi, IDisposable
         if (_fragmentShader != 0) _gl.DeleteShader(_fragmentShader);
         if (_vertexShader != 0) _gl.DeleteShader(_vertexShader);
         _vertexBuffer = _vertexArray = _program = _fragmentShader = _vertexShader = 0;
+        _uTextureYLocation = -1;
+        _uTextureUvLocation = -1;
+        _verticesUploaded = false;
     }
 
     private void MakeCurrent()

@@ -188,6 +188,13 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
     private void OnSoftwareFramePresented(object? sender, EventArgs args)
     {
         _framePresented();
+        if (_softwareOutput.IsVisible &&
+            _gpuOutput?.Surface.IsVisible != true &&
+            _nativeOutput?.Surface.IsVisible != true)
+        {
+            return;
+        }
+
         if (_gpuOutput?.Surface.IsVisible == true)
         {
             _gpuOutput.Clear();
@@ -226,6 +233,13 @@ internal sealed class MediaPresentationCoordinator : IAsyncDisposable
     private void OnNativeFramePresented(object? sender, EventArgs args)
     {
         _framePresented();
+        if (_nativeOutput?.Surface.IsVisible == true &&
+            !_softwareOutput.IsVisible &&
+            _gpuOutput?.Surface.IsVisible != true)
+        {
+            return;
+        }
+
         if (_gpuOutput is not null)
         {
             _gpuOutput.Surface.IsVisible = false;

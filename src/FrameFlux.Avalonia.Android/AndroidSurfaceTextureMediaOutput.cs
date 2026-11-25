@@ -39,7 +39,11 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
     private readonly object _surfaceSync = new();
     private readonly ManualResetEventSlim _surfaceReady = new(false);
     private readonly MediaPresentationFailureTracker _failureTracker = new(maximumAttempts: 1);
+    private readonly Action _requestNextFrameRendering;
+    private readonly Action _notifyFramePresented;
     private readonly float[] _textureTransform = new float[16];
+    private TopLevel? _topLevel;
+    private double _renderScaling = 1d;
     private SurfaceTexture? _surfaceTexture;
     private global::Android.Views.Surface? _decoderSurface;
     private Exception? _surfaceFailure;
@@ -51,18 +55,29 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
     private int _fragmentShader;
     private int _vertexBuffer;
     private int _texture;
+    private int _uTextureLocation = -1;
+    private int _uTextureTransformLocation = -1;
     private int _sourceWidth;
     private int _sourceHeight;
+    private int _cachedSourceWidth;
+    private int _cachedSourceHeight;
+    private int _cachedTargetWidth;
+    private int _cachedTargetHeight;
+    private Stretch _cachedStretch;
+    private bool _verticesUploaded;
     private int _frameAvailable;
     private long _lastSurfaceFrameTime;
     private bool _surfaceRequested;
     private bool _releaseRequested;
     private bool _clearRequested;
     private bool _hasFrame;
+    private bool _presentationNotified;
     private bool _disposed;
 
     internal AndroidSurfaceTextureMediaOutput()
     {
+        _requestNextFrameRendering = RequestNextFrameRendering;
+        _notifyFramePresented = () => FramePresented?.Invoke(this, EventArgs.Empty);
         ClipToBounds = true;
         IsHitTestVisible = false;
         _textureTransform[0] = 1;
@@ -80,6 +95,7 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
         get => _stretch;
         set
         {
+            if (_stretch == value) return;
             _stretch = value;
             RequestRender();
         }
@@ -131,6 +147,10 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
         if (width <= 0 || height <= 0) return;
         lock (_surfaceSync)
         {
+            if (_sourceWidth == width && _sourceHeight == height)
+            {
+                return;
+            }
             _sourceWidth = width;
             _sourceHeight = height;
             _surfaceTexture?.SetDefaultBufferSize(width, height);
@@ -200,6 +220,9 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
             }
             _uniformMatrix4 = Marshal.GetDelegateForFunctionPointer<UniformMatrix4Delegate>(
                 matrixAddress);
+            _uTextureLocation = gl.GetUniformLocationString(_program, "uTexture");
+            _uTextureTransformLocation = gl.GetUniformLocationString(_program, "uTextureTransform");
+            _verticesUploaded = false;
             _vertexBuffer = gl.GenBuffer();
             RequestRender();
         }
@@ -211,13 +234,52 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
         }
     }
 
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        DetachTopLevel();
+        _topLevel = TopLevel.GetTopLevel(this);
+        if (_topLevel is not null)
+        {
+            _renderScaling = _topLevel.RenderScaling;
+            _topLevel.ScalingChanged += OnTopLevelScalingChanged;
+        }
+        else
+        {
+            _renderScaling = 1d;
+        }
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        DetachTopLevel();
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    private void DetachTopLevel()
+    {
+        if (_topLevel is not null)
+        {
+            _topLevel.ScalingChanged -= OnTopLevelScalingChanged;
+            _topLevel = null;
+        }
+    }
+
+    private void OnTopLevelScalingChanged(object? sender, EventArgs e)
+    {
+        if (_topLevel is not null)
+        {
+            _renderScaling = _topLevel.RenderScaling;
+        }
+    }
+
     protected override void OnOpenGlRender(GlInterface gl, int framebuffer)
     {
         try
         {
             ProcessSurfaceRequests(gl);
             gl.BindFramebuffer(GlFramebuffer, framebuffer);
-            var scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1d;
+            var scaling = _renderScaling;
             var targetWidth = Math.Max(1, (int)Math.Ceiling(Bounds.Width * scaling));
             var targetHeight = Math.Max(1, (int)Math.Ceiling(Bounds.Height * scaling));
             gl.Viewport(0, 0, targetWidth, targetHeight);
@@ -228,6 +290,7 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
             {
                 _clearRequested = false;
                 _hasFrame = false;
+                _presentationNotified = false;
             }
 
             var updated = false;
@@ -244,10 +307,11 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
                 DrawTexture(gl, targetWidth, targetHeight);
                 gl.Flush();
                 _failureTracker.ReportSuccess();
-                if (updated)
+                if (updated && !_presentationNotified)
                 {
+                    _presentationNotified = true;
                     Dispatcher.UIThread.Post(
-                        () => FramePresented?.Invoke(this, EventArgs.Empty),
+                        _notifyFramePresented,
                         DispatcherPriority.Render);
                 }
             }
@@ -255,6 +319,7 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
         catch (Exception exception)
         {
             _hasFrame = false;
+            _presentationNotified = false;
             SignalSurfaceFailure(exception);
             ReportFailure(exception);
         }
@@ -362,6 +427,7 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
             _texture = 0;
         }
         _hasFrame = false;
+        _presentationNotified = false;
         Interlocked.Exchange(ref _frameAvailable, 0);
     }
 
@@ -375,35 +441,51 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
         _program = 0;
         _vertexShader = 0;
         _fragmentShader = 0;
+        _uTextureLocation = -1;
+        _uTextureTransformLocation = -1;
+        _verticesUploaded = false;
         _uniformMatrix4 = null;
     }
 
     private unsafe void DrawTexture(GlInterface gl, int targetWidth, int targetHeight)
     {
-        var vertices = AndroidSurfaceTextureGeometry.BuildVertices(
-            _sourceWidth,
-            _sourceHeight,
-            targetWidth,
-            targetHeight,
-            _stretch);
         gl.Disable(GlDepthTest);
         gl.UseProgram(_program);
-        gl.Uniform1i(gl.GetUniformLocationString(_program, "uTexture"), 0);
-        var matrixLocation = gl.GetUniformLocationString(_program, "uTextureTransform");
+        gl.Uniform1i(_uTextureLocation, 0);
         fixed (float* matrix = _textureTransform)
         {
-            _uniformMatrix4!(matrixLocation, 1, 0, (IntPtr)matrix);
+            _uniformMatrix4!(_uTextureTransformLocation, 1, 0, (IntPtr)matrix);
         }
         gl.ActiveTexture(GlTexture0);
         gl.BindTexture(GlTextureExternalOes, _texture);
         gl.BindBuffer(GlArrayBuffer, _vertexBuffer);
-        fixed (float* vertexPointer = vertices)
+        if (!_verticesUploaded ||
+            _cachedSourceWidth != _sourceWidth ||
+            _cachedSourceHeight != _sourceHeight ||
+            _cachedTargetWidth != targetWidth ||
+            _cachedTargetHeight != targetHeight ||
+            _cachedStretch != _stretch)
         {
-            gl.BufferData(
-                GlArrayBuffer,
-                (IntPtr)(vertices.Length * sizeof(float)),
-                (IntPtr)vertexPointer,
-                GlDynamicDraw);
+            var vertices = AndroidSurfaceTextureGeometry.BuildVertices(
+                _sourceWidth,
+                _sourceHeight,
+                targetWidth,
+                targetHeight,
+                _stretch);
+            fixed (float* vertexPointer = vertices)
+            {
+                gl.BufferData(
+                    GlArrayBuffer,
+                    (IntPtr)(vertices.Length * sizeof(float)),
+                    (IntPtr)vertexPointer,
+                    GlDynamicDraw);
+            }
+            _cachedSourceWidth = _sourceWidth;
+            _cachedSourceHeight = _sourceHeight;
+            _cachedTargetWidth = targetWidth;
+            _cachedTargetHeight = targetHeight;
+            _cachedStretch = _stretch;
+            _verticesUploaded = true;
         }
         gl.VertexAttribPointer(0, 2, GlFloat, 0, sizeof(float) * 4, IntPtr.Zero);
         gl.EnableVertexAttribArray(0);
@@ -438,8 +520,10 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
             global::Android.Util.Log.Warn("FrameFluxTiming",
                 $"Surface frame gap {System.Diagnostics.Stopwatch.GetElapsedTime(previous, now).TotalMilliseconds:F0} ms");
         }
-        Interlocked.Exchange(ref _frameAvailable, 1);
-        RequestRender();
+        if (Interlocked.Exchange(ref _frameAvailable, 1) == 0)
+        {
+            RequestRender();
+        }
     }
 
     private void SignalSurfaceFailure(Exception exception)
@@ -458,7 +542,7 @@ internal sealed class AndroidSurfaceTextureMediaOutput :
         if (_disposed) return;
         try
         {
-            Dispatcher.UIThread.Post(RequestNextFrameRendering, DispatcherPriority.Render);
+            Dispatcher.UIThread.Post(_requestNextFrameRendering, DispatcherPriority.Render);
         }
         catch (Exception exception)
         {

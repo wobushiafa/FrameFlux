@@ -37,8 +37,7 @@ internal sealed class WindowsD3D11DirectVisualHandler : CompositionCustomVisualH
     private bool _notified;
     private bool _hasFrame;
     private bool _broken;
-    private bool _running;
-    private TimeSpan _lastFrameAt;
+    private bool _animationScheduled;
 
     internal WindowsD3D11DirectVisualHandler(CompositorMediaFrameQueue frames,
         Action presented, Action<Exception> failed, Action<TimeSpan> frameRendered)
@@ -53,7 +52,7 @@ internal sealed class WindowsD3D11DirectVisualHandler : CompositionCustomVisualH
     {
         if (message is TaskCompletionSource completed)
         {
-            _running = false;
+            _animationScheduled = false;
             try
             {
                 ReleaseResources();
@@ -67,18 +66,15 @@ internal sealed class WindowsD3D11DirectVisualHandler : CompositionCustomVisualH
         }
         if (ReferenceEquals(message, ClearMessage))
         {
-            _running = false;
+            _animationScheduled = false;
             _hasFrame = false;
             _notified = false;
         }
         else if (ReferenceEquals(message, RenderMessage))
         {
-            _lastFrameAt = CompositionNow;
-            if (!_running)
-            {
-                _running = true;
-                RegisterForNextAnimationFrameUpdate();
-            }
+            // Frame-driven invalidation avoids permanent 120/144Hz animation polling per view.
+            Invalidate();
+            return;
         }
         else if (message is Stretch stretch)
             _stretch = stretch;
@@ -88,20 +84,11 @@ internal sealed class WindowsD3D11DirectVisualHandler : CompositionCustomVisualH
     public override void OnAnimationFrameUpdate()
     {
         Interlocked.Increment(ref _animationTicks);
-        if (!_running || _broken)
+        _animationScheduled = false;
+        if (_broken)
             return;
-        if (_frames.HasPendingFrame)
+        if (_frames.HasPendingFrame || _frames.CompletePresentation())
             Invalidate();
-        else if (CompositionNow - _lastFrameAt > TimeSpan.FromMilliseconds(250))
-        {
-            // Complete under the slot lock: a racing producer either wakes us
-            // through the UI or leaves a pending frame reserved for this pump.
-            _running = _frames.CompletePresentation();
-            if (!_running)
-                return;
-            Invalidate();
-        }
-        RegisterForNextAnimationFrameUpdate();
     }
 
     public override void OnRender(ImmediateDrawingContext drawingContext)
@@ -110,51 +97,76 @@ internal sealed class WindowsD3D11DirectVisualHandler : CompositionCustomVisualH
         if (_broken)
             return;
         using var frame = _frames.TakeForPresentation(out var queuedFor);
-        if (frame is not null)
-            _lastFrameAt = CompositionNow;
-        if (frame is null && !_hasFrame)
-            return;
         try
         {
+            if (frame is null && !_hasFrame)
+                return;
             var feature = drawingContext.TryGetFeature<ISkiaSharpApiLeaseFeature>() ??
                 throw new PlatformNotSupportedException("Skia drawing leases are unavailable.");
             using var lease = feature.Lease();
             var gr = lease.GrContext ??
                 throw new PlatformNotSupportedException("A GPU Skia context is required.");
             var acquireKey = 0u;
-            using (var api = lease.TryLeasePlatformGraphicsApi())
+            var presentedNewFrame = false;
+            WindowsD3D11CompositionFrame output = default;
+            if (frame is not null)
             {
+                if (!frame.TryGetD3D11Texture(out var source))
+                    throw new InvalidOperationException("Expected a D3D11 frame.");
+                if (_texture.RequiresReset(frame.Width, frame.Height, frame.Width, frame.Height, source))
+                {
+                    if (_context is { IsLost: false })
+                    {
+                        using var api = lease.TryLeasePlatformGraphicsApi();
+                        ReleaseImportedImage();
+                    }
+                    else
+                    {
+                        ReleaseImportedImage();
+                    }
+                    _texture.Reset();
+                }
+                if (!_texture.TryPresent(frame.Width, frame.Height, frame.Width, frame.Height,
+                        source, out output))
+                    return;
+                acquireKey = 1;
+                presentedNewFrame = true;
+                _hasFrame = true;
+            }
+
+            if (_context is null || _context.IsLost || _imported is null ||
+                (presentedNewFrame && _generation != output.Generation))
+            {
+                using var api = lease.TryLeasePlatformGraphicsApi();
                 var context = api?.Context as IGlContext ??
                     throw new PlatformNotSupportedException("Direct D3D11 drawing requires ANGLE/OpenGL.");
                 if (!ReferenceEquals(context, _context))
                 {
-                    ReleaseResources();
+                    if (_context is not null)
+                    {
+                        ReleaseImportedImage();
+                        _paint?.Dispose();
+                        _paint = null;
+                    }
                     _context = context;
                 }
-                if (frame is not null)
+                if (presentedNewFrame && (_imported is null || _generation != output.Generation))
                 {
-                    if (!frame.TryGetD3D11Texture(out var source))
-                        throw new InvalidOperationException("Expected a D3D11 frame.");
-                    if (_texture.RequiresReset(frame.Width, frame.Height, frame.Width, frame.Height, source))
-                    {
-                        ReleaseImportedImage();
-                        _texture.Reset();
-                    }
-                    if (!_texture.TryPresent(frame.Width, frame.Height, frame.Width, frame.Height,
-                            source, out var output))
-                        return;
-                    acquireKey = 1;
-                    if (_imported is null || _generation != output.Generation)
-                    {
-                        ReleaseImportedImage();
-                        _imported = new WindowsD3D11EglImage(context, output);
-                        _generation = output.Generation;
-                    }
-                    _hasFrame = true;
+                    ReleaseImportedImage();
+                    _imported = new WindowsD3D11EglImage(context, output);
+                    _generation = output.Generation;
                 }
-                if (_imported is null)
-                    return;
-                _imported.AcquireKeyedMutex(acquireKey);
+            }
+
+            if (_imported is null)
+                return;
+
+            var mutexAcquired = _imported.TryAcquireKeyedMutex(acquireKey, 8);
+            if (!mutexAcquired)
+            {
+                // Transient GPU contention: defer to the next frame instead of permanently failing.
+                Invalidate();
+                return;
             }
             try
             {
@@ -202,6 +214,14 @@ internal sealed class WindowsD3D11DirectVisualHandler : CompositionCustomVisualH
         {
             _broken = true;
             _failed(error);
+        }
+        finally
+        {
+            if (!_broken && _frames.CompletePresentation() && !_animationScheduled)
+            {
+                _animationScheduled = true;
+                RegisterForNextAnimationFrameUpdate();
+            }
         }
     }
 

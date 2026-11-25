@@ -1,11 +1,12 @@
-using System.Collections.Concurrent;
 using Vortice.Direct3D11;
 
 namespace FrameFlux.Rendering.Windows;
 
 internal sealed class WindowsD3D11DeviceSynchronizer : IDisposable
 {
-    private static readonly ConcurrentDictionary<IntPtr, object> DeviceLocks = new();
+    private static readonly object RegistrySync = new();
+    private static readonly Dictionary<IntPtr, DeviceLockEntry> DeviceLocks = [];
+    private readonly IntPtr _devicePointer;
     private readonly object _managedLock;
     private ID3D11Multithread? _multithread;
     private bool _disposed;
@@ -15,10 +16,19 @@ internal sealed class WindowsD3D11DeviceSynchronizer : IDisposable
         ID3D11DeviceContext? immediateContext = null)
     {
         ArgumentNullException.ThrowIfNull(device);
-        _managedLock = DeviceLocks.GetOrAdd(device.NativePointer, static _ => new object());
-        _multithread = device.QueryInterfaceOrNull<ID3D11Multithread>() ??
-            immediateContext?.QueryInterfaceOrNull<ID3D11Multithread>();
-        _multithread?.SetMultithreadProtected(true);
+        _devicePointer = device.NativePointer;
+        _managedLock = AcquireDeviceLock(_devicePointer);
+        try
+        {
+            _multithread = device.QueryInterfaceOrNull<ID3D11Multithread>() ??
+                immediateContext?.QueryInterfaceOrNull<ID3D11Multithread>();
+            _multithread?.SetMultithreadProtected(true);
+        }
+        catch
+        {
+            ReleaseDeviceLock(_devicePointer);
+            throw;
+        }
     }
 
     internal Scope EnterScope()
@@ -37,6 +47,40 @@ internal sealed class WindowsD3D11DeviceSynchronizer : IDisposable
         _disposed = true;
         _multithread?.Dispose();
         _multithread = null;
+        ReleaseDeviceLock(_devicePointer);
+    }
+
+    private static object AcquireDeviceLock(IntPtr devicePointer)
+    {
+        lock (RegistrySync)
+        {
+            if (!DeviceLocks.TryGetValue(devicePointer, out var entry))
+            {
+                entry = new DeviceLockEntry();
+                DeviceLocks.Add(devicePointer, entry);
+            }
+
+            entry.ReferenceCount++;
+            return entry.SyncLock;
+        }
+    }
+
+    private static void ReleaseDeviceLock(IntPtr devicePointer)
+    {
+        lock (RegistrySync)
+        {
+            if (DeviceLocks.TryGetValue(devicePointer, out var entry) &&
+                --entry.ReferenceCount <= 0)
+            {
+                DeviceLocks.Remove(devicePointer);
+            }
+        }
+    }
+
+    private sealed class DeviceLockEntry
+    {
+        internal readonly object SyncLock = new();
+        internal int ReferenceCount;
     }
 
     internal readonly struct Scope : IDisposable

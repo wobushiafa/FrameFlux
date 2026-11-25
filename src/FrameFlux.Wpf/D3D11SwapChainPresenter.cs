@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using FrameFlux.Presentation;
 using FrameFlux.Rendering.Windows;
 
@@ -10,10 +11,17 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
     private readonly LatestMediaFrameSlot _frameSlot = new();
     private readonly WindowsD3D11Presenter _presenter = new();
     private readonly MediaPresentationFailureTracker _failureTracker = new();
+    private readonly Action _presentPendingFrame;
     private int _targetWidth = 1;
     private int _targetHeight = 1;
     private int _stretchMode = (int)MediaStretchMode.Uniform;
+    private bool _presentationNotified;
     private bool _disposed;
+
+    internal D3D11SwapChainPresenter()
+    {
+        _presentPendingFrame = PresentPendingFrame;
+    }
 
     internal void SetStretch(System.Windows.Media.Stretch stretch) =>
         Volatile.Write(ref _stretchMode, (int)ToMediaStretchMode(stretch));
@@ -42,16 +50,7 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
 
         if (schedulePresentation)
         {
-            try
-            {
-                Dispatcher.BeginInvoke(
-                    System.Windows.Threading.DispatcherPriority.Render,
-                    new Action(PresentPendingFrame));
-            }
-            catch
-            {
-                Clear();
-            }
+            SchedulePresentation();
         }
 
         return true;
@@ -59,8 +58,9 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
 
     internal void Clear()
     {
-        _frameSlot.Clear();
+        _frameSlot.ReleasePendingFrame();
         _failureTracker.Reset();
+        _presentationNotified = false;
         _presenter.Reset();
     }
 
@@ -82,6 +82,7 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
     protected override void DestroyWindowCore(HandleRef hwnd)
     {
         _frameSlot.Clear();
+        _presentationNotified = false;
         _presenter.DestroyWindow();
     }
 
@@ -100,12 +101,30 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
         base.Dispose(disposing);
     }
 
+    private void SchedulePresentation()
+    {
+        try
+        {
+            Dispatcher.BeginInvoke(
+                DispatcherPriority.Render,
+                _presentPendingFrame);
+        }
+        catch
+        {
+            Clear();
+        }
+    }
+
     private void PresentPendingFrame()
     {
-        var lease = _frameSlot.Take();
+        var lease = _frameSlot.TakeForPresentation();
 
         if (lease is null)
         {
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
             return;
         }
 
@@ -121,7 +140,11 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
                     Volatile.Read(ref _targetHeight),
                     (MediaStretchMode)Volatile.Read(ref _stretchMode));
                 _failureTracker.ReportSuccess();
-                FramePresented?.Invoke(this, EventArgs.Empty);
+                if (!_presentationNotified)
+                {
+                    _presentationNotified = true;
+                    FramePresented?.Invoke(this, EventArgs.Empty);
+                }
             }
         }
         catch (Exception exception)
@@ -130,11 +153,16 @@ internal sealed class D3D11SwapChainPresenter : HwndHost, IMediaVideoOutput
                 "WPF D3D11 presentation failed: {0}",
                 exception);
             _presenter.Reset();
+            _presentationNotified = false;
             PresentationFailed?.Invoke(this, _failureTracker.Register(exception));
         }
         finally
         {
             lease.Dispose();
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
         }
     }
 

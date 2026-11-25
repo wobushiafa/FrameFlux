@@ -65,12 +65,31 @@ internal sealed class WindowsD3D11EglImage : IDisposable
         }
     }
 
+    private const int WaitTimeout = 0x00000102;
+
+    internal bool TryAcquireKeyedMutex(uint key, uint timeoutMilliseconds = 8)
+    {
+        var result = _acquire!(_mutex!.NativePointer, key, timeoutMilliseconds);
+        if (result == 0)
+        {
+            return true;
+        }
+
+        if (result == WaitTimeout)
+        {
+            return false;
+        }
+
+        // WAIT_ABANDONED and error HRESULTs indicate unrecoverable mutex failure.
+        throw new InvalidOperationException($"GPU texture lock unavailable: 0x{result:X8}.");
+    }
+
     internal void AcquireKeyedMutex(uint key)
     {
-        var result = _acquire!(_mutex!.NativePointer, key, 0);
-        // WAIT_TIMEOUT and WAIT_ABANDONED are non-negative, not successful locks.
-        if (result != 0)
-            throw new InvalidOperationException($"GPU texture lock unavailable: 0x{result:X8}.");
+        if (!TryAcquireKeyedMutex(key, 8))
+        {
+            throw new InvalidOperationException($"GPU texture lock unavailable: 0x{WaitTimeout:X8}.");
+        }
     }
 
     internal void ReleaseKeyedMutex(uint key) => _mutex!.ReleaseSync(key);

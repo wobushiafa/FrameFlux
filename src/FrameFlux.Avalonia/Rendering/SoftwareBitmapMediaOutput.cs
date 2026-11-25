@@ -10,8 +10,15 @@ namespace FrameFlux.Avalonia;
 internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDisposable
 {
     private readonly LatestMediaFrameSlot _frameSlot = new();
+    private readonly Action _renderLatestFrame;
     private WriteableBitmap? _bitmap;
+    private bool _presentationNotified;
     private bool _disposed;
+
+    internal SoftwareBitmapMediaOutput()
+    {
+        _renderLatestFrame = RenderLatestFrame;
+    }
 
     public MediaFrameStorageKind PreferredFrameStorage => MediaFrameStorageKind.CpuMemory;
 
@@ -38,14 +45,7 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
 
         if (schedulePresentation)
         {
-            try
-            {
-                Dispatcher.UIThread.Post(RenderLatestFrame, DispatcherPriority.Render);
-            }
-            catch
-            {
-                ClearPendingFrame();
-            }
+            SchedulePresentation();
         }
 
         return true;
@@ -54,6 +54,7 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
     internal void Clear()
     {
         _frameSlot.ReleasePendingFrame();
+        _presentationNotified = false;
         var bitmap = _bitmap;
         _bitmap = null;
         Source = null;
@@ -72,12 +73,28 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
         Clear();
     }
 
+    private void SchedulePresentation()
+    {
+        try
+        {
+            Dispatcher.UIThread.Post(_renderLatestFrame, DispatcherPriority.Render);
+        }
+        catch
+        {
+            ClearPendingFrame();
+        }
+    }
+
     private unsafe void RenderLatestFrame()
     {
-        var frame = _frameSlot.Take();
+        var frame = _frameSlot.TakeForPresentation();
 
         if (frame is null)
         {
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
             return;
         }
 
@@ -100,7 +117,7 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
                     new PixelSize(frame.Width, frame.Height),
                     new Vector(96, 96),
                     PixelFormat.Bgra8888,
-                    AlphaFormat.Unpremul);
+                    AlphaFormat.Opaque);
                 Source = _bitmap;
             }
 
@@ -116,15 +133,23 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
                     return;
                 }
 
-                for (var row = 0; row < frame.Height; row++)
+                var srcPtr = (byte*)source.Plane0;
+                var dstPtr = (byte*)framebuffer.Address;
+                if (source.Plane0Stride == framebuffer.RowBytes && rowBytes == framebuffer.RowBytes)
                 {
-                    var sourceRow = new ReadOnlySpan<byte>(
-                        (byte*)source.Plane0 + row * source.Plane0Stride,
-                        rowBytes);
-                    var destinationRow = new Span<byte>(
-                        (byte*)framebuffer.Address + row * framebuffer.RowBytes,
-                        rowBytes);
-                    sourceRow.CopyTo(destinationRow);
+                    var totalBytes = (long)framebuffer.RowBytes * frame.Height;
+                    Buffer.MemoryCopy(srcPtr, dstPtr, totalBytes, totalBytes);
+                }
+                else
+                {
+                    for (var row = 0; row < frame.Height; row++)
+                    {
+                        Buffer.MemoryCopy(
+                            srcPtr + (nint)row * source.Plane0Stride,
+                            dstPtr + (nint)row * framebuffer.RowBytes,
+                            rowBytes,
+                            rowBytes);
+                    }
                 }
             }
 
@@ -132,7 +157,11 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
             // itself. Unlock first, then schedule a redraw for this video frame.
             InvalidateVisual();
 
-            FramePresented?.Invoke(this, EventArgs.Empty);
+            if (!_presentationNotified)
+            {
+                _presentationNotified = true;
+                FramePresented?.Invoke(this, EventArgs.Empty);
+            }
         }
         catch (Exception exception)
         {
@@ -143,6 +172,10 @@ internal sealed class SoftwareBitmapMediaOutput : Image, IMediaVideoOutput, IDis
         finally
         {
             frame.Dispose();
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
         }
     }
 

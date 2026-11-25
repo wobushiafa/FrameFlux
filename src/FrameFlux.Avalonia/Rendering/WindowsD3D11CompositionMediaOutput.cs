@@ -216,6 +216,11 @@ internal sealed class WindowsD3D11CompositionMediaOutput :
                 return;
             }
 
+            // Release the hardware decoder frame surface immediately after GPU blit,
+            // before awaiting compositor keyed-mutex vsync handoff.
+            frame.Dispose();
+            frame = null;
+
             if (_importedImage is null ||
                 _importedGeneration != compositionFrame.Generation)
             {

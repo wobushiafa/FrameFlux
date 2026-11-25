@@ -21,6 +21,7 @@ internal enum WindowsD3D11CompositionSynchronization
 
 internal sealed class WindowsD3D11CompositionTexture : IDisposable
 {
+    private const int WaitTimeout = 0x00000102;
     private readonly WindowsD3D11CompositionSynchronization _synchronization;
     private readonly Dictionary<int, ID3D11VideoProcessorInputView> _inputViews = [];
     private readonly VideoProcessorStream[] _streams = new VideoProcessorStream[1];
@@ -38,6 +39,7 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
     private ID3D11VideoProcessorOutputView? _outputView;
     private ID3D11Query? _completionQuery;
     private IDXGIKeyedMutex? _keyedMutex;
+    private AcquireSyncDelegate? _acquireSync;
     private IntPtr _sharedHandle;
     private IntPtr _sourceTexturePointer;
     private int _sourceWidth;
@@ -106,20 +108,37 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         }
 
         var sourceTexture = EnsureDevice(frame.Texture);
-        using (_deviceSynchronizer!.EnterScope())
+        if (_outputTexture is null ||
+            _sourceWidth != sourceWidth ||
+            _sourceHeight != sourceHeight ||
+            _width != outputWidth ||
+            _height != outputHeight)
         {
-            EnsureOutputResources(sourceWidth, sourceHeight, outputWidth, outputHeight);
+            using (_deviceSynchronizer!.EnterScope())
+            {
+                EnsureOutputResources(sourceWidth, sourceHeight, outputWidth, outputHeight);
+            }
         }
 
         if (_keyedMutex is not null)
         {
-            _keyedMutex.AcquireSync(0, 100);
+            var acquireResult = _acquireSync!(_keyedMutex.NativePointer, 0UL, 100U);
+            if (acquireResult != 0)
+            {
+                if (acquireResult == WaitTimeout)
+                {
+                    return false;
+                }
+
+                throw new InvalidOperationException(
+                    $"D3D11 composition keyed mutex acquisition failed: 0x{acquireResult:X8}.");
+            }
         }
 
         var rendered = false;
         try
         {
-            using (_deviceSynchronizer.EnterScope())
+            using (_deviceSynchronizer!.EnterScope())
             {
                 if (CanDirectCopy(
                         sourceWidth,
@@ -378,6 +397,8 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
             WindowsD3D11CompositionSynchronization.KeyedMutex)
         {
             _keyedMutex = _outputTexture.QueryInterface<IDXGIKeyedMutex>();
+            _acquireSync = Marshal.GetDelegateForFunctionPointer<AcquireSyncDelegate>(
+                Marshal.ReadIntPtr(Marshal.ReadIntPtr(_keyedMutex.NativePointer), 8 * IntPtr.Size));
         }
         using (var resource = _outputTexture.QueryInterface<IDXGIResource>())
         {
@@ -519,6 +540,7 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         DisposeInputViews();
         _completionQuery?.Dispose();
         _completionQuery = null;
+        _acquireSync = null;
         _keyedMutex?.Dispose();
         _keyedMutex = null;
         _outputView?.Dispose();
@@ -552,4 +574,7 @@ internal sealed class WindowsD3D11CompositionTexture : IDisposable
         _device?.Dispose();
         _device = null;
     }
+
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate int AcquireSyncDelegate(IntPtr mutex, ulong key, uint timeout);
 }

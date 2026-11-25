@@ -3,7 +3,6 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using FrameFlux.Presentation;
 using FrameFlux.Rendering.Windows;
@@ -21,7 +20,7 @@ internal sealed class D3D11ImageMediaOutput :
         WindowsD3D11CompositionSynchronization.Shared);
     private readonly MediaPresentationFailureTracker _failureTracker = new();
     private readonly D3DImage _image = new();
-    private IDirect3D9Ex? _direct3D;
+    private readonly Action _presentPendingFrame;
     private IDirect3DDevice9Ex? _device;
     private IDirect3DQuery9? _completionQuery;
     private IDirect3DTexture9? _sharedTexture;
@@ -32,10 +31,12 @@ internal sealed class D3D11ImageMediaOutput :
     private int _height;
     private bool _backBufferAttached;
     private bool _hadPresentationFailure;
+    private bool _presentationNotified;
     private bool _disposed;
 
     internal D3D11ImageMediaOutput()
     {
+        _presentPendingFrame = PresentPendingFrame;
         Source = _image;
         IsHitTestVisible = false;
         _image.IsFrontBufferAvailableChanged += OnFrontBufferAvailableChanged;
@@ -65,16 +66,7 @@ internal sealed class D3D11ImageMediaOutput :
 
         if (schedulePresentation)
         {
-            try
-            {
-                Dispatcher.BeginInvoke(
-                    DispatcherPriority.Render,
-                    new Action(PresentPendingFrame));
-            }
-            catch
-            {
-                _frameSlot.Clear();
-            }
+            SchedulePresentation();
         }
 
         return true;
@@ -83,11 +75,9 @@ internal sealed class D3D11ImageMediaOutput :
     internal void Clear()
     {
         _failureTracker.Reset();
-        _frameSlot.Clear();
+        _presentationNotified = false;
+        _frameSlot.ReleasePendingFrame();
         ResetPresentationResources();
-        DisposeDevice();
-        _direct3D?.Dispose();
-        _direct3D = null;
     }
 
     public void Dispose()
@@ -101,19 +91,36 @@ internal sealed class D3D11ImageMediaOutput :
         _image.IsFrontBufferAvailableChanged -= OnFrontBufferAvailableChanged;
         _frameSlot.Dispose();
         ResetPresentationResources();
-        DisposeDevice();
-        _direct3D?.Dispose();
-        _direct3D = null;
+        ReleaseCompletionQuery();
+        _device = null;
         _texture.Dispose();
         Source = null;
         GC.SuppressFinalize(this);
     }
 
+    private void SchedulePresentation()
+    {
+        try
+        {
+            Dispatcher.BeginInvoke(
+                DispatcherPriority.Render,
+                _presentPendingFrame);
+        }
+        catch
+        {
+            _frameSlot.Clear();
+        }
+    }
+
     private void PresentPendingFrame()
     {
-        var frame = _frameSlot.Take();
+        var frame = _frameSlot.TakeForPresentation();
         if (frame is null)
         {
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
             return;
         }
 
@@ -184,7 +191,11 @@ internal sealed class D3D11ImageMediaOutput :
                 _failureTracker.ReportSuccess();
                 _hadPresentationFailure = false;
             }
-            FramePresented?.Invoke(this, EventArgs.Empty);
+            if (!_presentationNotified)
+            {
+                _presentationNotified = true;
+                FramePresented?.Invoke(this, EventArgs.Empty);
+            }
         }
         catch (Exception exception)
         {
@@ -192,19 +203,25 @@ internal sealed class D3D11ImageMediaOutput :
                 "WPF D3D11 composition presentation failed: {0}",
                 exception);
             ResetPresentationResources();
+            ReleaseCompletionQuery();
+            _device = null;
+            _presentationNotified = false;
             _hadPresentationFailure = true;
             PresentationFailed?.Invoke(this, _failureTracker.Register(exception));
         }
         finally
         {
             frame.Dispose();
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
         }
     }
 
     private void OpenSharedSurface(
         WindowsD3D11CompositionFrame compositionFrame)
     {
-        _direct3D ??= D3D9.Direct3DCreate9Ex();
         if (_device is not null &&
             TryOpenSharedSurface(_device, compositionFrame))
         {
@@ -212,13 +229,15 @@ internal sealed class D3D11ImageMediaOutput :
             return;
         }
 
-        DisposeDevice();
-        for (uint adapter = 0; adapter < _direct3D.AdapterCount; adapter++)
+        ReleaseCompletionQuery();
+        _device = null;
+
+        var adapterCount = SharedD3D9DevicePool.GetAdapterCount();
+        for (uint adapter = 0; adapter < adapterCount; adapter++)
         {
-            IDirect3DDevice9Ex? candidate = null;
             try
             {
-                candidate = CreateDevice(adapter);
+                var candidate = SharedD3D9DevicePool.GetOrCreateDevice(adapter);
                 if (TryOpenSharedSurface(candidate, compositionFrame))
                 {
                     _device = candidate;
@@ -233,33 +252,11 @@ internal sealed class D3D11ImageMediaOutput :
                     adapter,
                     exception.Message);
             }
-
-            candidate?.Dispose();
         }
 
         throw new InvalidOperationException(
-            $"None of the {_direct3D.AdapterCount} D3D9Ex adapters could open the D3D11 shared texture. " +
+            $"None of the {adapterCount} D3D9Ex adapters could open the D3D11 shared texture. " +
             "The decoder and WPF renderer may be using incompatible graphics adapters.");
-    }
-
-    private IDirect3DDevice9Ex CreateDevice(uint adapter)
-    {
-        var window = GetDesktopWindow();
-        var parameters = new PresentParameters
-        {
-            Windowed = true,
-            SwapEffect = SwapEffect.Discard,
-            DeviceWindowHandle = window,
-            PresentationInterval = PresentInterval.Default
-        };
-        return _direct3D!.CreateDeviceEx(
-            adapter,
-            DeviceType.Hardware,
-            window,
-            CreateFlags.HardwareVertexProcessing |
-            CreateFlags.Multithreaded |
-            CreateFlags.FpuPreserve,
-            parameters);
     }
 
     private bool TryOpenSharedSurface(
@@ -393,7 +390,9 @@ internal sealed class D3D11ImageMediaOutput :
         var iteration = 0;
         while (true)
         {
-            if (query.GetData(out bool completed, true) && completed)
+            // Flush once on the initial query; subsequent polls avoid redundant D3D9 flushes.
+            var flush = iteration == 0;
+            if (query.GetData(out bool completed, flush) && completed)
             {
                 return;
             }
@@ -414,12 +413,10 @@ internal sealed class D3D11ImageMediaOutput :
         }
     }
 
-    private void DisposeDevice()
+    private void ReleaseCompletionQuery()
     {
         _completionQuery?.Dispose();
         _completionQuery = null;
-        _device?.Dispose();
-        _device = null;
     }
 
     private void ReleaseSharedSurface()
@@ -433,6 +430,53 @@ internal sealed class D3D11ImageMediaOutput :
         _generation = 0;
         _width = 0;
         _height = 0;
+    }
+
+    private static class SharedD3D9DevicePool
+    {
+        private static readonly object Sync = new();
+        private static IDirect3D9Ex? _direct3D;
+        private static readonly Dictionary<uint, IDirect3DDevice9Ex> Devices = [];
+
+        internal static uint GetAdapterCount()
+        {
+            lock (Sync)
+            {
+                _direct3D ??= D3D9.Direct3DCreate9Ex();
+                return _direct3D.AdapterCount;
+            }
+        }
+
+        internal static IDirect3DDevice9Ex GetOrCreateDevice(uint adapter)
+        {
+            lock (Sync)
+            {
+                _direct3D ??= D3D9.Direct3DCreate9Ex();
+                if (Devices.TryGetValue(adapter, out var existing))
+                {
+                    return existing;
+                }
+
+                var window = GetDesktopWindow();
+                var parameters = new PresentParameters
+                {
+                    Windowed = true,
+                    SwapEffect = SwapEffect.Discard,
+                    DeviceWindowHandle = window,
+                    PresentationInterval = PresentInterval.Default
+                };
+                var device = _direct3D.CreateDeviceEx(
+                    adapter,
+                    DeviceType.Hardware,
+                    window,
+                    CreateFlags.HardwareVertexProcessing |
+                    CreateFlags.Multithreaded |
+                    CreateFlags.FpuPreserve,
+                    parameters);
+                Devices[adapter] = device;
+                return device;
+            }
+        }
     }
 
     [DllImport("user32.dll")]

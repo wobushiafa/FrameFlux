@@ -22,6 +22,12 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
     private readonly AndroidNativeSurfaceLifecycle _lifecycle = new();
     private readonly MediaPresentationFailureTracker _failureTracker = new(maximumAttempts: 1);
     private readonly SurfaceCallback _surfaceCallback;
+    private readonly Action _updateNativeLayout;
+    private TopLevel? _topLevel;
+    private double _renderScaling = 1d;
+    private int _layoutUpdateScheduled;
+    private int _appliedLayoutWidth = -1;
+    private int _appliedLayoutHeight = -1;
     private FrameLayout? _nativeHost;
     private SurfaceView? _surfaceView;
     private global::Android.Views.Surface? _decoderSurface;
@@ -32,6 +38,7 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
     internal AndroidNativeSurfaceMediaOutput()
     {
         _surfaceCallback = new SurfaceCallback(this);
+        _updateNativeLayout = UpdateNativeLayout;
         ClipToBounds = true;
         IsHitTestVisible = false;
     }
@@ -45,6 +52,10 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
         get => _stretch;
         set
         {
+            if (_stretch == value)
+            {
+                return;
+            }
             _stretch = value;
             ScheduleLayoutUpdate();
         }
@@ -110,6 +121,10 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
 
         lock (_surfaceSync)
         {
+            if (_sourceWidth == width && _sourceHeight == height)
+            {
+                return;
+            }
             _sourceWidth = width;
             _sourceHeight = height;
         }
@@ -281,25 +296,68 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
         }
     }
 
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        DetachTopLevel();
+        _topLevel = TopLevel.GetTopLevel(this);
+        if (_topLevel is not null)
+        {
+            _renderScaling = _topLevel.RenderScaling;
+            _topLevel.ScalingChanged += OnTopLevelScalingChanged;
+        }
+        else
+        {
+            _renderScaling = 1d;
+        }
+        ScheduleLayoutUpdate();
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        DetachTopLevel();
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    private void DetachTopLevel()
+    {
+        if (_topLevel is not null)
+        {
+            _topLevel.ScalingChanged -= OnTopLevelScalingChanged;
+            _topLevel = null;
+        }
+    }
+
+    private void OnTopLevelScalingChanged(object? sender, EventArgs e)
+    {
+        if (_topLevel is not null)
+        {
+            _renderScaling = _topLevel.RenderScaling;
+            ScheduleLayoutUpdate();
+        }
+    }
+
     private void ScheduleLayoutUpdate()
     {
-        if (_lifecycle.IsDisposed)
+        if (_lifecycle.IsDisposed || Interlocked.Exchange(ref _layoutUpdateScheduled, 1) != 0)
         {
             return;
         }
 
         try
         {
-            Dispatcher.UIThread.Post(UpdateNativeLayout, DispatcherPriority.Render);
+            Dispatcher.UIThread.Post(_updateNativeLayout, DispatcherPriority.Render);
         }
         catch (Exception exception)
         {
+            Volatile.Write(ref _layoutUpdateScheduled, 0);
             ReportFailure(exception);
         }
     }
 
     private void UpdateNativeLayout()
     {
+        Volatile.Write(ref _layoutUpdateScheduled, 0);
         FrameLayout? host;
         SurfaceView? surfaceView;
         int sourceWidth;
@@ -317,7 +375,7 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
             return;
         }
 
-        var scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1d;
+        var scaling = _renderScaling;
         var targetWidth = Math.Max(1, (int)Math.Ceiling(Bounds.Width * scaling));
         var targetHeight = Math.Max(1, (int)Math.Ceiling(Bounds.Height * scaling));
         var layout = AndroidNativeSurfaceLayoutCalculator.Calculate(
@@ -326,12 +384,24 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
             targetWidth,
             targetHeight,
             _stretch);
+        if (surfaceView.LayoutParameters is FrameLayout.LayoutParams existing &&
+            existing.Width == layout.Width &&
+            existing.Height == layout.Height &&
+            existing.Gravity == GravityFlags.Center &&
+            _appliedLayoutWidth == layout.Width &&
+            _appliedLayoutHeight == layout.Height)
+        {
+            return;
+        }
+
         var parameters = surfaceView.LayoutParameters as FrameLayout.LayoutParams ??
             new FrameLayout.LayoutParams(layout.Width, layout.Height, GravityFlags.Center);
         parameters.Width = layout.Width;
         parameters.Height = layout.Height;
         parameters.Gravity = GravityFlags.Center;
         surfaceView.LayoutParameters = parameters;
+        _appliedLayoutWidth = layout.Width;
+        _appliedLayoutHeight = layout.Height;
         host.RequestLayout();
     }
 
@@ -345,6 +415,8 @@ internal sealed class AndroidNativeSurfaceMediaOutput :
             _nativeHost = null;
             _decoderSurface = null;
         }
+        _appliedLayoutWidth = -1;
+        _appliedLayoutHeight = -1;
         surfaceView?.Holder?.RemoveCallback(_surfaceCallback);
     }
 

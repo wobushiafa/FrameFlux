@@ -141,7 +141,7 @@ internal sealed class LinuxDmaBufEglInterop : IDisposable
         _disposed = true;
     }
 
-    private void ImportPlane(
+    private unsafe void ImportPlane(
         int texture,
         int width,
         int height,
@@ -155,15 +155,20 @@ internal sealed class LinuxDmaBufEglInterop : IDisposable
         }
 
         var item = objects[plane.ObjectIndex];
-        var attributes = new List<int>
-        {
-            EglWidth, width,
-            EglHeight, height,
-            EglLinuxDrmFourcc, unchecked((int)format),
-            EglDmaBufPlane0Fd, item.FileDescriptor,
-            EglDmaBufPlane0Offset, plane.Offset,
-            EglDmaBufPlane0Pitch, plane.Pitch
-        };
+        int* attributes = stackalloc int[18];
+        var index = 0;
+        attributes[index++] = EglWidth;
+        attributes[index++] = width;
+        attributes[index++] = EglHeight;
+        attributes[index++] = height;
+        attributes[index++] = EglLinuxDrmFourcc;
+        attributes[index++] = unchecked((int)format);
+        attributes[index++] = EglDmaBufPlane0Fd;
+        attributes[index++] = item.FileDescriptor;
+        attributes[index++] = EglDmaBufPlane0Offset;
+        attributes[index++] = plane.Offset;
+        attributes[index++] = EglDmaBufPlane0Pitch;
+        attributes[index++] = plane.Pitch;
         if (item.FormatModifier != DrmFormatModifierInvalid)
         {
             if (!_supportsModifiers && item.FormatModifier != 0)
@@ -173,15 +178,15 @@ internal sealed class LinuxDmaBufEglInterop : IDisposable
             }
             if (_supportsModifiers)
             {
-                attributes.Add(EglDmaBufPlane0ModifierLo);
-                attributes.Add(unchecked((int)item.FormatModifier));
-                attributes.Add(EglDmaBufPlane0ModifierHi);
-                attributes.Add(unchecked((int)(item.FormatModifier >> 32)));
+                attributes[index++] = EglDmaBufPlane0ModifierLo;
+                attributes[index++] = unchecked((int)item.FormatModifier);
+                attributes[index++] = EglDmaBufPlane0ModifierHi;
+                attributes[index++] = unchecked((int)(item.FormatModifier >> 32));
             }
         }
-        attributes.Add(EglNone);
+        attributes[index] = EglNone;
         var image = _createImage(
-            _display, IntPtr.Zero, EglLinuxDmaBuf, IntPtr.Zero, attributes.ToArray());
+            _display, IntPtr.Zero, EglLinuxDmaBuf, IntPtr.Zero, (IntPtr)attributes);
         if (image == IntPtr.Zero)
         {
             throw new InvalidOperationException(
@@ -261,7 +266,7 @@ internal sealed class LinuxDmaBufEglInterop : IDisposable
         IntPtr context,
         int target,
         IntPtr buffer,
-        int[] attributes);
+        IntPtr attributes);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int EglDestroyImageDelegate(IntPtr display, IntPtr image);

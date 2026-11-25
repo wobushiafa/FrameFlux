@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Platform;
@@ -14,11 +15,16 @@ internal sealed class LinuxNativeSurfaceMediaOutput :
     private readonly LatestMediaFrameSlot _frameSlot = new();
     private readonly LinuxX11EglPresenter _presenter = new();
     private readonly MediaPresentationFailureTracker _failureTracker = new();
+    private readonly Action _presentPendingFrame;
+    private TopLevel? _topLevel;
+    private double _renderScaling = 1d;
     private Stretch _stretch = Stretch.Uniform;
+    private bool _presentationNotified;
     private bool _disposed;
 
     internal LinuxNativeSurfaceMediaOutput()
     {
+        _presentPendingFrame = PresentPendingFrame;
         ClipToBounds = true;
         IsHitTestVisible = false;
     }
@@ -56,14 +62,7 @@ internal sealed class LinuxNativeSurfaceMediaOutput :
 
         if (schedulePresentation)
         {
-            try
-            {
-                Dispatcher.UIThread.Post(PresentPendingFrame, DispatcherPriority.Render);
-            }
-            catch
-            {
-                _frameSlot.Clear();
-            }
+            SchedulePresentation();
         }
         return true;
     }
@@ -81,14 +80,16 @@ internal sealed class LinuxNativeSurfaceMediaOutput :
 
     protected override void DestroyNativeControlCore(IPlatformHandle control)
     {
+        _presentationNotified = false;
         _presenter.DestroyWindow();
         base.DestroyNativeControlCore(control);
     }
 
     public void Clear()
     {
-        _frameSlot.Clear();
+        _frameSlot.ReleasePendingFrame();
         _failureTracker.Reset();
+        _presentationNotified = false;
         _presenter.Clear();
     }
 
@@ -117,11 +118,66 @@ internal sealed class LinuxNativeSurfaceMediaOutput :
         return ValueTask.CompletedTask;
     }
 
+    private void SchedulePresentation()
+    {
+        try
+        {
+            Dispatcher.UIThread.Post(_presentPendingFrame, DispatcherPriority.Render);
+        }
+        catch
+        {
+            _frameSlot.Clear();
+        }
+    }
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        DetachTopLevel();
+        _topLevel = TopLevel.GetTopLevel(this);
+        if (_topLevel is not null)
+        {
+            _renderScaling = _topLevel.RenderScaling;
+            _topLevel.ScalingChanged += OnTopLevelScalingChanged;
+        }
+        else
+        {
+            _renderScaling = 1d;
+        }
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        DetachTopLevel();
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    private void DetachTopLevel()
+    {
+        if (_topLevel is not null)
+        {
+            _topLevel.ScalingChanged -= OnTopLevelScalingChanged;
+            _topLevel = null;
+        }
+    }
+
+    private void OnTopLevelScalingChanged(object? sender, EventArgs e)
+    {
+        if (_topLevel is not null)
+        {
+            _renderScaling = _topLevel.RenderScaling;
+        }
+    }
+
     private void PresentPendingFrame()
     {
-        var frame = _frameSlot.Take();
+        var frame = _frameSlot.TakeForPresentation();
         if (frame is null)
         {
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
             return;
         }
 
@@ -132,7 +188,7 @@ internal sealed class LinuxNativeSurfaceMediaOutput :
                 return;
             }
 
-            var scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1d;
+            var scaling = _renderScaling;
             _presenter.Present(
                 dmaBuf,
                 frame.Width,
@@ -141,7 +197,11 @@ internal sealed class LinuxNativeSurfaceMediaOutput :
                 Math.Max(1, (int)Math.Ceiling(Bounds.Height * scaling)),
                 _stretch);
             _failureTracker.ReportSuccess();
-            FramePresented?.Invoke(this, EventArgs.Empty);
+            if (!_presentationNotified)
+            {
+                _presentationNotified = true;
+                FramePresented?.Invoke(this, EventArgs.Empty);
+            }
         }
         catch (Exception exception)
         {
@@ -149,11 +209,16 @@ internal sealed class LinuxNativeSurfaceMediaOutput :
                 $"[{DateTimeOffset.Now:O}] FrameFlux Linux NativeSurface presentation failed:\n{exception}");
             System.Diagnostics.Trace.TraceError(
                 "FrameFlux Linux NativeSurface presentation failed: {0}", exception);
+            _presentationNotified = false;
             PresentationFailed?.Invoke(this, _failureTracker.Register(exception));
         }
         finally
         {
             frame.Dispose();
+            if (_frameSlot.CompletePresentation())
+            {
+                SchedulePresentation();
+            }
         }
     }
 }
